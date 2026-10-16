@@ -9,7 +9,7 @@ struct UIModStatus: Decodable, Equatable {
     var canEnable = false
     var canDisable = false
     var blocksPlay = false
-    var message = "Choose the extracted UI mod folder (optional)."
+    var message = L10n.key("Choose the extracted UI mod folder (optional).")
 
     var check: Check {
         Check(level: blocksPlay ? .error : (folderValid ? .ok : .warning), message: message)
@@ -43,7 +43,7 @@ struct UIModHelper {
         if process.terminationStatus != 0 {
             let error = (try? JSONSerialization.jsonObject(with: output)) as? [String: String]
             throw NSError(domain: "UI Mod", code: Int(process.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: error?["error"] ?? "Could not check the UI files. Check folder access and try again."])
+                NSLocalizedDescriptionKey: error?["error"] ?? L10n.key("Could not check the UI files. Check folder access and try again.")])
         }
         return try JSONDecoder().decode(UIModStatus.self, from: output)
     }

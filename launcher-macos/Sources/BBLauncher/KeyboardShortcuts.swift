@@ -61,8 +61,8 @@ struct ShortcutKey: Equatable {
     }
     var reservedAction: String? {
         switch code {
-        case 41: return "Close the menu / cancel text entry"
-        case 66: return "Start / stop input recording (developer shortcut)"
+        case 41: return L10n.key("Close the menu / cancel text entry")
+        case 66: return L10n.key("Start / stop input recording (developer shortcut)")
         default: return nil
         }
     }
@@ -73,9 +73,9 @@ enum GameShortcut: String, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .save: return "Quicksave"
-        case .load: return "Quickload"
-        case .menu: return "Configuration menu"
+        case .save: return L10n.key("Quicksave")
+        case .load: return L10n.key("Quickload")
+        case .menu: return L10n.key("Configuration menu")
         }
     }
 }
@@ -92,19 +92,19 @@ struct KeyboardMap {
     init(ini: [String: String], prefs: LauncherPrefs) {
         self.prefs = prefs
         let defaults: [(String, String, [Int])] = [
-            ("move_up","Move forward",[26]),("move_down","Move backward",[22]),
-            ("move_left","Move left",[4]),("move_right","Move right",[7]),
-            ("look_up","Camera up",[82]),("look_down","Camera down",[81]),
-            ("look_left","Camera left",[80]),("look_right","Camera right",[79]),
-            ("cross","Cross / interact",[44]),("circle","Circle / dodge",[225]),
-            ("square","Square / use item",[8]),("triangle","Triangle / heal",[20]),
-            ("l1","L1 / transform weapon",[30]),("r1","R1 / attack",[32]),
-            ("l2","L2 / firearm",[21]),("r2","R2 / strong attack",[9]),
-            ("l3","L3",[29]),("r3","R3 / lock on",[6]),
-            ("options","Options / game menu",[40]),("touchpad","Touchpad left",[43]),
-            ("touchpad_right","Touchpad right",[42]),
-            ("up","D-pad up",[12]),("down","D-pad down",[14]),
-            ("left","D-pad left",[13]),("right","D-pad right",[15]),
+            ("move_up",L10n.key("Move forward"),[26]),("move_down",L10n.key("Move backward"),[22]),
+            ("move_left",L10n.key("Move left"),[4]),("move_right",L10n.key("Move right"),[7]),
+            ("look_up",L10n.key("Camera up"),[82]),("look_down",L10n.key("Camera down"),[81]),
+            ("look_left",L10n.key("Camera left"),[80]),("look_right",L10n.key("Camera right"),[79]),
+            ("cross",L10n.key("Cross / interact"),[44]),("circle",L10n.key("Circle / dodge"),[225]),
+            ("square",L10n.key("Square / use item"),[8]),("triangle",L10n.key("Triangle / heal"),[20]),
+            ("l1",L10n.key("L1 / transform weapon"),[30]),("r1",L10n.key("R1 / attack"),[32]),
+            ("l2",L10n.key("L2 / firearm"),[21]),("r2",L10n.key("R2 / strong attack"),[9]),
+            ("l3","L3",[29]),("r3",L10n.key("R3 / lock on"),[6]),
+            ("options",L10n.key("Options / game menu"),[40]),("touchpad",L10n.key("Touchpad left"),[43]),
+            ("touchpad_right",L10n.key("Touchpad right"),[42]),
+            ("up",L10n.key("D-pad up"),[12]),("down",L10n.key("D-pad down"),[14]),
+            ("left",L10n.key("D-pad left"),[13]),("right",L10n.key("D-pad right"),[15]),
         ]
         inputs = defaults.map { id, title, keys in
             let configured = ini["key.\(id)"].map { $0.split(separator: ",").compactMap { ShortcutKey.code(named: String($0)) } }
@@ -113,15 +113,15 @@ struct KeyboardMap {
     }
 
     func conflict(for key: ShortcutKey, assigning action: GameShortcut) -> String? {
-        if let reserved = key.reservedAction { return "\(key.label) is already mapped to \(reserved). Choose another key." }
+        if let reserved = key.reservedAction { return L10n.format("%@ is already mapped to %@. Choose another key.", String(describing: key.label), String(describing: reserved)) }
         let assignments: [(GameShortcut, ShortcutKey)] = [(.menu, prefs.menuKey), (.save, prefs.quicksaveKey), (.load, prefs.quickloadKey)]
         if let (owner, _) = assignments.first(where: { $0.0 != action && $0.1.code == key.code }) {
-            return "\(key.label) is already mapped to \(owner.title). Choose another key."
+            return L10n.format("%@ is already mapped to %@. Choose another key.", String(describing: key.label), String(describing: owner.title))
         }
         // Retain existing S/L choices; newly assigned shortcuts must not steal gameplay keys.
         if assignments.contains(where: { $0.0 == action && $0.1.code == key.code }) { return nil }
         if let input = inputs.first(where: { $0.keys.contains(key.code) }) {
-            return "\(key.label) is already mapped to \(input.title). Choose another key."
+            return L10n.format("%@ is already mapped to %@. Choose another key.", String(describing: key.label), String(describing: input.title))
         }
         return nil
     }
@@ -139,13 +139,13 @@ struct ShortcutRecorder: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Remap \(action.title.lowercased())").font(.title2.bold())
+            Text(L10n.format("Remap %@", String(describing: action.title.lowercased()))).font(.title2.bold())
             Image(systemName: "keyboard").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text("Press the key you want to use.").font(.headline)
-            Text("Use a single key. Hold Fn if your keyboard needs it for F-keys. Escape cancels.")
+            Text(L10n.key("Press the key you want to use.")).font(.headline)
+            Text(L10n.key("Use a single key. Hold Fn if your keyboard needs it for F-keys. Escape cancels."))
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let message { Text(message).foregroundStyle(.orange).multilineTextAlignment(.center) }
-            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button(L10n.key("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
         }
         .padding(28)
         .frame(width: 390)
@@ -154,8 +154,8 @@ struct ShortcutRecorder: View {
                 if event.keyCode == 53 { dismiss(); return nil }
                 guard !event.isARepeat else { return nil }
                 let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-                guard modifiers.isEmpty else { message = "Use a single key without Command, Control, Option or Shift."; return nil }
-                guard let key = ShortcutKey.from(event: event) else { message = "That key is unavailable. Try a letter, number or function key."; return nil }
+                guard modifiers.isEmpty else { message = L10n.key("Use a single key without Command, Control, Option or Shift."); return nil }
+                guard let key = ShortcutKey.from(event: event) else { message = L10n.key("That key is unavailable. Try a letter, number or function key."); return nil }
                 if let conflict = map.conflict(for: key, assigning: action) { message = conflict; return nil }
                 assign(key)
                 dismiss()
@@ -177,9 +177,9 @@ struct KeyLegend: View {
             shortcut(.save, key: model.prefs.quicksaveKey, active: model.prefs.quicksave)
             shortcut(.load, key: model.prefs.quickloadKey, active: model.prefs.quicksave)
         } header: {
-            Text("In-game shortcuts")
+            Text(L10n.key("In-game shortcuts"))
         } footer: {
-            Text("Click a key to remap it. Changes apply next time you press Play.")
+            Text(L10n.key("Click a key to remap it. Changes apply next time you press Play."))
                 .foregroundStyle(.secondary)
         }
         .sheet(item: $recording) { action in
@@ -196,9 +196,9 @@ struct KeyLegend: View {
     private func shortcut(_ action: GameShortcut, key: ShortcutKey, active: Bool) -> some View {
         LabeledContent {
             HStack(spacing: 8) {
-                if !active { Text("Disabled").font(.caption).foregroundStyle(.secondary) }
-                Button("\(key.label)  ·  Remap") { recording = action }
-                    .accessibilityLabel("Remap \(action.title)")
+                if !active { Text(L10n.key("Disabled")).font(.caption).foregroundStyle(.secondary) }
+                Button(L10n.format("%@  ·  Remap", String(describing: key.label))) { recording = action }
+                    .accessibilityLabel(L10n.format("Remap %@", String(describing: action.title)))
                     .accessibilityValue(key.label)
             }
         } label: {

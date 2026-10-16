@@ -120,12 +120,26 @@ enum Catalog {
 
     static let languages: [Choice<String>] = [
         Choice(value: "1", label: "English"),
+        Choice(value: "11", label: "简体中文"),
+        Choice(value: "10", label: "繁體中文"),
         Choice(value: "8", label: "Russian"),
         Choice(value: "0", label: "Japanese"),
         Choice(value: "2", label: "French"),
         Choice(value: "3", label: "Spanish"),
         Choice(value: "4", label: "German"),
         Choice(value: "5", label: "Italian"),
+        Choice(value: "6", label: "Dutch"),
+        Choice(value: "7", label: "Portuguese (Portugal)"),
+        Choice(value: "9", label: "Korean"),
+        Choice(value: "12", label: "Finnish"),
+        Choice(value: "13", label: "Swedish"),
+        Choice(value: "14", label: "Danish"),
+        Choice(value: "15", label: "Norwegian"),
+        Choice(value: "16", label: "Polish"),
+        Choice(value: "17", label: "Portuguese (Brazil)"),
+        Choice(value: "18", label: "English (United Kingdom)"),
+        Choice(value: "19", label: "Turkish"),
+        Choice(value: "20", label: "Spanish (Latin America)"),
     ]
 
     static func contains<Value: Hashable & Sendable>(_ choices: [Choice<Value>], _ value: Value) -> Bool {
@@ -145,6 +159,7 @@ struct LauncherPrefs: Equatable {
     var modsEnabled = true
     var patchesFolder = ""
     var language = "1"
+    var uiLanguage = "system"
     var fullscreen = false
     var ultrawide = false
     var uiModFolder = ""
@@ -182,6 +197,7 @@ struct LauncherPrefs: Equatable {
         static let modsEnabled = "modsEnabled"
         static let patchesFolder = "patchesFolder"
         static let language = "language"
+        static let uiLanguage = "uiLanguage"
         static let fullscreen = "fullscreen"
         static let ultrawide = "ultrawide"
         static let uiModFolder = "uiModFolder"
@@ -220,6 +236,8 @@ struct LauncherPrefs: Equatable {
         p.modsEnabled = flag(Key.modsEnabled, p.modsEnabled)
         p.patchesFolder = text(Key.patchesFolder, p.patchesFolder)
         p.language = text(Key.language, p.language)
+        p.uiLanguage = text(Key.uiLanguage, p.uiLanguage)
+        if !Catalog.contains(L10n.languages, p.uiLanguage) { p.uiLanguage = "system" }
         p.fullscreen = flag(Key.fullscreen, p.fullscreen)
         p.ultrawide = flag(Key.ultrawide, p.ultrawide)
         p.uiModFolder = text(Key.uiModFolder, p.uiModFolder)
@@ -275,6 +293,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(modsEnabled, forKey: Key.modsEnabled)
         defaults.set(patchesFolder, forKey: Key.patchesFolder)
         defaults.set(language, forKey: Key.language)
+        defaults.set(uiLanguage, forKey: Key.uiLanguage)
         defaults.set(fullscreen, forKey: Key.fullscreen)
         defaults.set(ultrawide, forKey: Key.ultrawide)
         defaults.set(uiModFolder, forKey: Key.uiModFolder)

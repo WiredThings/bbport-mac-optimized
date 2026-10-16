@@ -8,6 +8,13 @@ Demo (1920x1080): https://www.youtube.com/watch?v=hoHo8kN9e6E
 
 Ultrawide demo (3840x1080): https://youtu.be/ZWVT99gC3lE
 
+## Launcher localization
+
+This fork adds English, Simplified Chinese and Traditional Chinese launcher interfaces, with
+instant switching and an independent game-language menu. The game menu includes 简体中文
+(PS4 language 11) and 繁體中文 (10), preserving existing settings. Matching text/font assets
+must already exist in your own game dump. See [language setup](docs/USER_GUIDE.md#launcher-and-game-languages).
+
 ## What's included
 
 - **Native Apple Silicon launcher and renderer.** The original game's x86-64 code still runs through Rosetta 2; this is not a fully native ARM64 game port.

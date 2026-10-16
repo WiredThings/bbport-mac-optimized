@@ -16,6 +16,7 @@ struct ContentView: View {
                     RepositoryProblemSection()
                 }
                 GameSection()
+                LanguageSection()
                 BasicDisplaySection()
                 QuicksaveSection()
                 KeyLegend()
@@ -25,14 +26,14 @@ struct ContentView: View {
                     } label: {
                         HStack {
                             Image(systemName: advanced ? "chevron.down" : "chevron.right")
-                            Text("Advanced")
+                            Text(L10n.key("Advanced"))
                             Spacer()
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Advanced")
-                    .accessibilityValue(advanced ? "Expanded" : "Collapsed")
+                    .accessibilityLabel(L10n.key("Advanced"))
+                    .accessibilityValue(advanced ? L10n.key("Expanded") : L10n.key("Collapsed"))
                 }
                 if advanced {
                     AdvancedGameSection()
@@ -63,6 +64,29 @@ struct ContentView: View {
     }
 }
 
+struct LanguageSection: View {
+    @EnvironmentObject var model: LauncherModel
+
+    var body: some View {
+        Section {
+            Picker(L10n.key("Launcher language"), selection: $model.prefs.uiLanguage) {
+                ForEach(L10n.languages) { Text(L10n.key($0.label)).tag($0.value) }
+            }
+            Picker(L10n.key("Game language"), selection: $model.prefs.language) {
+                ForEach(Catalog.languages) { Text(L10n.key($0.label)).tag($0.value) }
+            }
+            if let warning = gameLanguageWarning(folder: model.prefs.gameFolder, language: model.prefs.language) {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        } header: {
+            Text(L10n.key("Language"))
+        } footer: {
+            Text(L10n.key("Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged."))
+        }
+    }
+}
+
 // MARK: - Play bar
 
 struct PlayBar: View {
@@ -87,14 +111,14 @@ struct PlayBar: View {
             }
             Spacer(minLength: 8)
             Button(action: showLog) {
-                Label("Log", systemImage: "text.alignleft")
+                Label(L10n.key("Log"), systemImage: "text.alignleft")
             }
             .controlSize(.large)
             if model.isRunning {
                 Button(role: .destructive) {
                     model.stop()
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label(L10n.key("Stop"), systemImage: "stop.fill")
                         .frame(minWidth: 70)
                 }
                 .buttonStyle(.borderedProminent)
@@ -106,7 +130,7 @@ struct PlayBar: View {
                 Button {
                     model.play()
                 } label: {
-                    Label("Play", systemImage: "play.fill")
+                    Label(L10n.key("Play"), systemImage: "play.fill")
                         .frame(minWidth: 70)
                 }
                 .buttonStyle(.borderedProminent)
@@ -123,19 +147,19 @@ struct PlayBar: View {
     private var detail: String {
         switch model.state {
         case .running where model.job == .update, .stopping where model.job == .update:
-            return "Fetching from GitHub and rebuilding what changed. A new graphics driver takes longest."
+            return L10n.key("Fetching from GitHub and rebuilding what changed. A new graphics driver takes longest.")
         case let .exited(status, bySignal) where model.job == .update:
             if status == 0 && !bySignal {
-                return "Up to date. If the log says the Mac app was rebuilt, quit and reopen it."
+                return L10n.key("Up to date. If the log says the Mac app was rebuilt, quit and reopen it.")
             }
-            return model.lastProblem ?? "Details are in the log."
+            return model.lastProblem ?? L10n.key("Details are in the log.")
         case .running, .stopping:
-            return "The first launch after a build or a shader-cache reset compiles shaders: "
-                + "a black window for a few minutes is expected."
+            return L10n.key("The first launch after a build or a shader-cache reset compiles shaders: ")
+                + L10n.key("a black window for a few minutes is expected.")
         case let .exited(status, bySignal) where status != 0 && !bySignal:
-            return model.lastProblem ?? "Details are in the log (Help ▸ Show the Last Run's Log)."
+            return model.lastProblem ?? L10n.key("Details are in the log (Help ▸ Show the Last Run's Log).")
         default:
-            return "Optimized Apple Silicon renderer · Settings apply when you press Play."
+            return L10n.key("Optimized Apple Silicon renderer · Settings apply when you press Play.")
         }
     }
 
@@ -191,7 +215,7 @@ struct CheckLabel: View {
 struct FolderRow: View {
     let title: String
     let path: String
-    var placeholder = "Not chosen"
+    var placeholder = L10n.key("Not chosen")
     let choose: () -> Void
     let reveal: () -> Void
     /// A custom folder that can go back to the default.
@@ -201,22 +225,22 @@ struct FolderRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: 6) {
-                Button("Choose…", action: choose)
+                Button(L10n.key("Choose…"), action: choose)
                 Button(action: reveal) {
                     Image(systemName: "folder")
                 }
-                .help("Show in Finder")
+                .help(L10n.key("Show in Finder"))
                 .disabled(path.isEmpty)
                 if canReset {
                     Button(action: reset) {
                         Image(systemName: "arrow.uturn.backward")
                     }
-                    .help("Back to the default folder")
+                    .help(L10n.key("Back to the default folder"))
                 }
             }
         } label: {
-            Text(title)
-            Text(path.isEmpty ? placeholder : path)
+            Text(L10n.key(title))
+            Text(path.isEmpty ? L10n.key(placeholder) : path)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
         }
@@ -233,12 +257,12 @@ struct RepositoryProblemSection: View {
             CheckLabel(check: model.repoCheck)
             HStack {
                 SettingsLink {
-                    Text(model.engineURL != nil ? "Settings…" : "Set the Repository…")
+                    Text(model.engineURL != nil ? L10n.key("Settings…") : L10n.key("Set the Repository…"))
                 }
-                Button("Check Again") { model.refreshChecks() }
+                Button(L10n.key("Check Again")) { model.refreshChecks() }
             }
         } header: {
-            Text(model.engineURL != nil ? "Before you play" : "bbport repository")
+            Text(model.engineURL != nil ? L10n.key("Before you play") : L10n.key("bbport repository"))
         }
     }
 }
@@ -248,15 +272,15 @@ struct GameSection: View {
 
     var body: some View {
         Section {
-            FolderRow(title: "Game folder", path: model.prefs.gameFolder,
+            FolderRow(title: L10n.key("Game folder"), path: model.prefs.gameFolder,
                       choose: { model.chooseGameFolder() },
                       reveal: { model.reveal(URL(fileURLWithPath: model.prefs.gameFolder, isDirectory: true)) })
             CheckLabel(check: model.gameCheck)
 
         } header: {
-            Text("Game")
+            Text(L10n.key("Game"))
         } footer: {
-            Text("Choose your game folder containing eboot.bin and update 1.09.")
+            Text(L10n.key("Choose your game folder containing eboot.bin and update 1.09."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -267,51 +291,51 @@ struct BasicDisplaySection: View {
 
     var body: some View {
         Section {
-            Toggle("Ultrawide", isOn: $model.prefs.ultrawide)
+            Toggle(L10n.key("Ultrawide"), isOn: $model.prefs.ultrawide)
             if model.prefs.ultrawide {
-                Picker("Resolution", selection: $model.prefs.wideResolution) {
-                    ForEach(Catalog.wideResolutions) { Text($0.label).tag($0.value) }
+                Picker(L10n.key("Resolution"), selection: $model.prefs.wideResolution) {
+                    ForEach(Catalog.wideResolutions) { Text(L10n.key($0.label)).tag($0.value) }
                 }
             } else {
-                Picker("Resolution", selection: $model.prefs.resolution) {
-                    ForEach(Catalog.outputResolutions) { Text($0.label).tag($0.value) }
+                Picker(L10n.key("Resolution"), selection: $model.prefs.resolution) {
+                    ForEach(Catalog.outputResolutions) { Text(L10n.key($0.label)).tag($0.value) }
                 }
             }
-            Toggle("Fullscreen", isOn: $model.prefs.fullscreen)
+            Toggle(L10n.key("Fullscreen"), isOn: $model.prefs.fullscreen)
             if model.prefs.ultrawide && model.gameCheck.level == .ok {
                 HStack(alignment: .center, spacing: 12) {
-                    Toggle("Enable UI fix", isOn: Binding(
+                    Toggle(L10n.key("Enable UI fix"), isOn: Binding(
                         get: { model.uiModStatus.enabled || model.uiModStatus.needsRecovery },
                         set: { model.setUIModEnabled($0) }))
                         .disabled(!model.uiModStatus.canEnable && !model.uiModStatus.canDisable)
                         .fixedSize()
-                    FolderRow(title: "UI mod folder", path: model.prefs.uiModFolder,
+                    FolderRow(title: L10n.key("UI mod folder"), path: model.prefs.uiModFolder,
                               choose: { model.chooseUIModFolder() },
                               reveal: { model.reveal(URL(fileURLWithPath: model.prefs.uiModFolder)) })
                         .disabled(model.uiModStatus.enabled || model.uiModStatus.needsRecovery)
                 }
                 CheckLabel(check: model.uiModStatus.check)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files.")
+                    Text(L10n.key("Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files."))
                     Link(destination: URL(string: "https://www.nexusmods.com/bloodborne/mods/202")!) {
-                        Text("Ultrawide UI Fixes on Nexus Mods ↗")
+                        Text(L10n.key("Ultrawide UI Fixes on Nexus Mods ↗"))
                             .underline()
                             .foregroundStyle(.blue)
                     }
                     .buttonStyle(.plain)
-                    Text("Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes.")
+                    Text(L10n.key("Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes."))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Display")
+            Text(L10n.key("Display"))
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text(model.prefs.ultrawide
-                     ? "Native ultrawide resolution. 3840 × 1080 is the tested M2 Max setting; higher resolutions cost more performance."
-                     : "Native resolution by default. Optional upscaling is in Advanced.")
-                Label("Graphical glitches after loading? Restarting the game often clears them.",
+                     ? L10n.key("Native ultrawide resolution. 3840 × 1080 is the tested M2 Max setting; higher resolutions cost more performance.")
+                     : L10n.key("Native resolution by default. Optional upscaling is in Advanced."))
+                Label(L10n.key("Graphical glitches after loading? Restarting the game often clears them."),
                       systemImage: "info.circle")
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -325,11 +349,11 @@ struct QuicksaveSection: View {
 
     var body: some View {
         Section {
-            Toggle("Enable quicksave / quickload", isOn: $model.prefs.quicksave)
+            Toggle(L10n.key("Enable quicksave / quickload"), isOn: $model.prefs.quicksave)
         } header: {
-            Text("Save & load")
+            Text(L10n.key("Save & load"))
         } footer: {
-            Text("Loading restores your latest checkpoint and restarts the game. Normal autosaving stays on.")
+            Text(L10n.key("Loading restores your latest checkpoint and restarts the game. Normal autosaving stays on."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -340,19 +364,16 @@ struct AdvancedGameSection: View {
 
     var body: some View {
         Section {
-            FolderRow(title: "Saves folder",
-                      path: model.prefs.userFolder.isEmpty ? "Default: \(model.userFolderURL.path)" : model.prefs.userFolder,
+            FolderRow(title: L10n.key("Saves folder"),
+                      path: model.prefs.userFolder.isEmpty ? L10n.format("Default: %@", String(describing: model.userFolderURL.path)) : model.prefs.userFolder,
                       choose: { model.chooseUserFolder() },
                       reveal: { model.reveal(model.userFolderURL) },
                       canReset: !model.prefs.userFolder.isEmpty,
                       reset: { model.prefs.userFolder = "" })
-            Picker("System language", selection: $model.prefs.language) {
-                ForEach(Catalog.languages) { Text($0.label).tag($0.value) }
-            }
         } header: {
-            Text("Saves & language")
+            Text(L10n.key("Saves"))
         } footer: {
-            Text("The default saves folder is shared with your existing bbport installation.")
+            Text(L10n.key("The default saves folder is shared with your existing bbport installation."))
         }
     }
 }
@@ -363,25 +384,25 @@ struct DisplaySection: View {
     var body: some View {
         Section {
             Picker(selection: $model.prefs.display) {
-                Text("Main display").tag("")
+                Text(L10n.key("Main display")).tag("")
                 ForEach(NSScreen.screens.map(\.localizedName), id: \.self) { Text($0).tag($0) }
                 if !model.prefs.display.isEmpty && !NSScreen.screens.contains(where: { $0.localizedName == model.prefs.display }) {
-                    Text("\(model.prefs.display) (not connected)").tag(model.prefs.display)
+                    Text(L10n.format("%@ (not connected)", String(describing: model.prefs.display))).tag(model.prefs.display)
                 }
             } label: {
-                Text("Display")
-                Text("Where the game's window opens")
+                Text(L10n.key("Display"))
+                Text(L10n.key("Where the game's window opens"))
             }
             Picker(selection: $model.prefs.presentMode) {
-                ForEach(Catalog.presentModes) { Text($0.label).tag($0.value) }
+                ForEach(Catalog.presentModes) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
-                Text("Present mode")
-                Text("KosmicKrisp has no Mailbox and uses FIFO instead")
+                Text(L10n.key("Present mode"))
+                Text(L10n.key("KosmicKrisp has no Mailbox and uses FIFO instead"))
             }
-            Toggle("Allow HDR", isOn: $model.prefs.hdr)
-            Toggle("Show FPS", isOn: $model.game.showFPS)
+            Toggle(L10n.key("Allow HDR"), isOn: $model.prefs.hdr)
+            Toggle(L10n.key("Show FPS"), isOn: $model.game.showFPS)
         } header: {
-            Text("Display")
+            Text(L10n.key("Display"))
         }
     }
 }
@@ -392,28 +413,28 @@ struct FrameRateSection: View {
     var body: some View {
         Section {
             Picker(selection: $model.prefs.fpsMode) {
-                ForEach(Catalog.fpsModes) { Text($0.label).tag($0.value) }
+                ForEach(Catalog.fpsModes) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
-                Text("Mode")
-                Text("Which frame rate patch to apply to the game (BB_FPS)")
+                Text(L10n.key("Mode"))
+                Text(L10n.key("Which frame rate patch to apply to the game (BB_FPS)"))
             }
             LabeledContent {
                 HStack(spacing: 4) {
-                    TextField("FPS limit", value: $model.prefs.fpsLimit, format: .number)
+                    TextField(L10n.key("FPS limit"), value: $model.prefs.fpsLimit, format: .number)
                         .labelsHidden()
                         .multilineTextAlignment(.trailing)
                         .frame(width: 56)
-                    Stepper("FPS limit", value: $model.prefs.fpsLimit, in: 0...480, step: 5)
+                    Stepper(L10n.key("FPS limit"), value: $model.prefs.fpsLimit, in: 0...480, step: 5)
                         .labelsHidden()
                 }
             } label: {
-                Text("FPS limit")
-                Text("0: the display refresh rate (up to 120 Hz); set a number for another limit")
+                Text(L10n.key("FPS limit"))
+                Text(L10n.key("0: the display refresh rate (up to 120 Hz); set a number for another limit"))
             }
         } header: {
-            Text("Frame rate")
+            Text(L10n.key("Frame rate"))
         } footer: {
-            Text("Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches.")
+            Text(L10n.key("Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -426,18 +447,18 @@ struct UpscalerSection: View {
         let upscaler = model.game.upscaler
         Section {
             Picker(selection: $model.game.upscaler) {
-                ForEach(Catalog.upscalers) { Text($0.label).tag($0.value) }
+                ForEach(Catalog.upscalers) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
-                Text("Upscaler")
+                Text(L10n.key("Upscaler"))
                 Text(hint(for: upscaler))
             }
-            Picker("Preset", selection: $model.game.preset) {
-                ForEach(Catalog.presets) { Text($0.label).tag($0.value) }
+            Picker(L10n.key("Preset"), selection: $model.game.preset) {
+                ForEach(Catalog.presets) { Text(L10n.key($0.label)).tag($0.value) }
             }
             .disabled(upscaler == "off" || upscaler == "taa")
-            Toggle("Sharpening (RCAS)", isOn: $model.game.sharpen)
+            Toggle(L10n.key("Sharpening (RCAS)"), isOn: $model.game.sharpen)
                 .disabled(upscaler == "off")
-            LabeledContent("Sharpness") {
+            LabeledContent(L10n.key("Sharpness")) {
                 HStack {
                     Slider(value: $model.game.sharpness, in: 0...2, step: 0.05)
                         .frame(minWidth: 140)
@@ -448,17 +469,17 @@ struct UpscalerSection: View {
             }
             .disabled(upscaler == "off" || !model.game.sharpen)
             Toggle(isOn: $model.game.objectMotion) {
-                Text("Object motion vectors")
-                Text("Less ghosting on characters; costs about 10% FPS")
+                Text(L10n.key("Object motion vectors"))
+                Text(L10n.key("Less ghosting on characters; costs about 10% FPS"))
             }
         } header: {
-            Text("Upscaler")
+            Text(L10n.key("Upscaler"))
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if let replaced = model.game.replacedUpscaler {
-                    Text("bbport.ini asked for \(replaced), which macOS cannot run; FSR 3.1 is selected instead.")
+                    Text(L10n.format("bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead.", String(describing: replaced)))
                 }
-                Text(model.prefs.ultrawide ? "Ultrawide uses native rendering; upscaling is disabled." : "Off renders every pixel at the selected resolution.")
+                Text(model.prefs.ultrawide ? L10n.key("Ultrawide uses native rendering; upscaling is disabled.") : L10n.key("Off renders every pixel at the selected resolution."))
             }
             .foregroundStyle(.secondary)
         }
@@ -466,10 +487,10 @@ struct UpscalerSection: View {
 
     private func hint(for upscaler: String) -> String {
         switch upscaler {
-        case "fsr3": return "AMD FSR 3.1 temporal upscaling"
-        case "taa": return "Anti-aliasing at the output resolution, no FSR model"
-        case "metalfx": return "Apple MetalFX temporal upscaling (experimental; no Native AA preset)"
-        default: return "No upscaling or temporal anti-aliasing"
+        case "fsr3": return L10n.key("AMD FSR 3.1 temporal upscaling")
+        case "taa": return L10n.key("Anti-aliasing at the output resolution, no FSR model")
+        case "metalfx": return L10n.key("Apple MetalFX temporal upscaling (experimental; no Native AA preset)")
+        default: return L10n.key("No upscaling or temporal anti-aliasing")
         }
     }
 }
@@ -479,29 +500,29 @@ struct EffectsSection: View {
 
     var body: some View {
         Section {
-            Picker("Model detail", selection: $model.game.modelLOD) {
-                ForEach(Catalog.modelDetail) { Text($0.label).tag($0.value) }
+            Picker(L10n.key("Model detail"), selection: $model.game.modelLOD) {
+                ForEach(Catalog.modelDetail) { Text(L10n.key($0.label)).tag($0.value) }
             }
             Toggle(isOn: $model.prefs.gameMenu) {
-                Text("Settings in the game's System menu")
-                Text("The port's display, effects and patch settings as pages after Screen/Sound")
+                Text(L10n.key("Settings in the game's System menu"))
+                Text(L10n.key("The port's display, effects and patch settings as pages after Screen/Sound"))
             }
             Toggle(isOn: $model.prefs.skipNetworkChoice) {
-                Text("Skip the online/offline screen")
-                Text("The game starts straight at its main menu, offline")
+                Text(L10n.key("Skip the online/offline screen"))
+                Text(L10n.key("The game starts straight at its main menu, offline"))
             }
             ForEach($model.game.effects) { $effect in
                 Toggle(isOn: $effect.isOn) {
-                    Text(effect.title)
+                    Text(L10n.key(effect.title))
                     if let note = effect.note {
-                        Text(note)
+                        Text(L10n.key(note))
                     }
                 }
             }
         } header: {
-            Text("Game effects")
+            Text(L10n.key("Game effects"))
         } footer: {
-            Text("Game patches, applied at start.")
+            Text(L10n.key("Game patches, applied at start."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -513,22 +534,22 @@ struct PerformanceSection: View {
     var body: some View {
         Section {
             Picker(selection: $model.prefs.drawPipe) {
-                ForEach(Catalog.drawPipe) { Text($0.label).tag($0.value) }
+                ForEach(Catalog.drawPipe) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
-                Text("Two-stage GPU pipeline")
-                Text("Leave on Auto for the optimized profile")
+                Text(L10n.key("Two-stage GPU pipeline"))
+                Text(L10n.key("Leave on Auto for the optimized profile"))
             }
             Picker(selection: $model.prefs.preupload) {
-                ForEach(Catalog.preupload) { Text($0.label).tag($0.value) }
+                ForEach(Catalog.preupload) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
-                Text("Background upload of game data")
-                Text("Full can mean fewer hitches when areas load")
+                Text(L10n.key("Background upload of game data"))
+                Text(L10n.key("Full can mean fewer hitches when areas load"))
             }
-            Picker("GPU data readbacks by the CPU", selection: $model.prefs.readbacks) {
-                ForEach(Catalog.readbacks) { Text($0.label).tag($0.value) }
+            Picker(L10n.key("GPU data readbacks by the CPU"), selection: $model.prefs.readbacks) {
+                ForEach(Catalog.readbacks) { Text(L10n.key($0.label)).tag($0.value) }
             }
         } header: {
-            Text("Performance")
+            Text(L10n.key("Performance"))
         }
     }
 }
@@ -538,14 +559,14 @@ struct ModsSection: View {
 
     var body: some View {
         Section {
-            Toggle("Load mods", isOn: $model.prefs.modsEnabled)
-            FolderRow(title: "Mods folder", path: model.modsFolderURL.path,
+            Toggle(L10n.key("Load mods"), isOn: $model.prefs.modsEnabled)
+            FolderRow(title: L10n.key("Mods folder"), path: model.modsFolderURL.path,
                       choose: { model.chooseModsFolder() },
                       reveal: { model.reveal(model.modsFolderURL) },
                       canReset: !model.prefs.modsFolder.isEmpty,
                       reset: { model.prefs.modsFolder = "" })
             if model.mods.isEmpty {
-                Text("No mods")
+                Text(L10n.key("No mods"))
                     .foregroundStyle(.secondary)
             }
             ForEach($model.mods) { $mod in
@@ -558,27 +579,27 @@ struct ModsSection: View {
                         Image(systemName: "chevron.up")
                     }
                     .buttonStyle(.borderless)
-                    .help("Load earlier")
+                    .help(L10n.key("Load earlier"))
                     Button {
                         model.moveMod(mod.name, by: 1)
                     } label: {
                         Image(systemName: "chevron.down")
                     }
                     .buttonStyle(.borderless)
-                    .help("Load later")
+                    .help(L10n.key("Load later"))
                     Toggle(mod.name, isOn: $mod.isOn)
                         .labelsHidden()
                 }
             }
             .disabled(!model.prefs.modsEnabled)
-            Button("Refresh the List") {
+            Button(L10n.key("Refresh the List")) {
                 model.saveModProfile()
                 model.refreshMods()
             }
         } header: {
-            Text("Mods")
+            Text(L10n.key("Mods"))
         } footer: {
-            Text("Extract each mod into its own folder (with dvdroot_ps4, or chr/, parts/, … directly). When files collide, the mod lower in the list wins. Applied at start.")
+            Text(L10n.key("Extract each mod into its own folder (with dvdroot_ps4, or chr/, parts/, … directly). When files collide, the mod lower in the list wins. Applied at start."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -589,13 +610,13 @@ struct PatchesSection: View {
 
     var body: some View {
         Section {
-            FolderRow(title: "Patches folder", path: model.patchesFolderURL.path,
+            FolderRow(title: L10n.key("Patches folder"), path: model.patchesFolderURL.path,
                       choose: { model.choosePatchesFolder() },
                       reveal: { model.reveal(model.patchesFolderURL) },
                       canReset: !model.prefs.patchesFolder.isEmpty,
                       reset: { model.prefs.patchesFolder = "" })
             if model.patches.isEmpty {
-                Text("No patches")
+                Text(L10n.key("No patches"))
                     .foregroundStyle(.secondary)
             }
             ForEach($model.patches) { $patch in
@@ -606,14 +627,14 @@ struct PatchesSection: View {
                 .help(patch.note ?? "")
                 .disabled(patch.title.hasPrefix("Resolution Patch "))
             }
-            Button("Refresh the List") {
+            Button(L10n.key("Refresh the List")) {
                 model.savePatchProfile()
                 model.refreshPatches()
             }
         } header: {
-            Text("Third-party patches")
+            Text(L10n.key("Third-party patches"))
         } footer: {
-            Text("shadPS4-format patches for version 01.09. Resolution patches are controlled by the Display section.")
+            Text(L10n.key("shadPS4-format patches for version 01.09. Resolution patches are controlled by the Display section."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -626,24 +647,24 @@ struct DeveloperSection: View {
         Section {
 
             Toggle(isOn: $model.prefs.frameStats) {
-                Text("Frame statistics in the log")
+                Text(L10n.key("Frame statistics in the log"))
                 Text("BB_FRAME_STATS")
             }
             Toggle(isOn: $model.prefs.gpuProfile) {
-                Text("GPU profile in the log")
+                Text(L10n.key("GPU profile in the log"))
                 Text("BB_GPU_PROFILE")
             }
             Toggle(isOn: $model.prefs.vkValidation) {
-                Text("Vulkan validation layers")
-                Text("Much slower; needs the validation layers installed")
+                Text(L10n.key("Vulkan validation layers"))
+                Text(L10n.key("Much slower; needs the validation layers installed"))
             }
             TextField(text: $model.prefs.extraEnv, prompt: Text("NAME=value NAME2=value")) {
-                Text("Extra variables")
+                Text(L10n.key("Extra variables"))
             }
         } header: {
-            Text("Developer")
+            Text(L10n.key("Developer"))
         } footer: {
-            Text("Extra variables are space-separated. The app manages resolution, renderer, saves and input settings.")
+            Text(L10n.key("Extra variables are space-separated. The app manages resolution, renderer, saves and input settings."))
                 .foregroundStyle(.secondary)
         }
     }

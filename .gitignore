@@ -34,6 +34,7 @@ patches.json
 # Local dependency prefixes and Swift build products
 /deps-arm64
 /deps-x86_64
+/.build/
 /launcher-macos/.build/
 /launcher-macos/.swiftpm/
 

@@ -28,6 +28,7 @@ struct OptimizedProfile {
 
     var environment: [String: String] {
         var env = [
+            "BB_LANGUAGE": prefs.language,
             "BB_NATIVE_GPU": "1", "BB_PREBUILT": "1",
             "BB_SKIP_EMPTY_DRAWS": "1", "BB_VK_RECORD_THREADS": "1",
             "BB_FRAMES_AHEAD": "2", "BB_GPU_QOS": "1",

@@ -71,31 +71,41 @@ func readSFO(_ url: URL) -> [String: String]? {
 /// The Linux launcher only requires eboot.bin; the title and version are reported as warnings.
 func checkGameFolder(_ path: String) -> Check {
     if path.isEmpty {
-        return Check(level: .error, message: "Not chosen: pick the folder with eboot.bin")
+        return Check(level: .error, message: L10n.key("Not chosen: pick the folder with eboot.bin"))
     }
     let folder = URL(fileURLWithPath: path, isDirectory: true)
     if !isDirectory(folder) {
-        return Check(level: .error, message: "The folder does not exist")
+        return Check(level: .error, message: L10n.key("The folder does not exist"))
     }
     if !isFile(folder.appendingPathComponent("eboot.bin")) {
-        return Check(level: .error, message: "No eboot.bin in the folder")
+        return Check(level: .error, message: L10n.key("No eboot.bin in the folder"))
     }
     guard let sfo = readSFO(folder.appendingPathComponent("sce_sys/param.sfo")) else {
-        return Check(level: .warning, message: "eboot.bin found; sce_sys/param.sfo is missing or unreadable")
+        return Check(level: .warning, message: L10n.key("eboot.bin found; sce_sys/param.sfo is missing or unreadable"))
     }
     let title = sfo["TITLE_ID"] ?? "?"
     let version = sfo["APP_VER"] ?? "?"
     if !bloodborneTitleIDs.contains(title) {
-        return Check(level: .warning, message: "eboot.bin found, but the title is \(title), not Bloodborne")
+        return Check(level: .warning, message: L10n.format("eboot.bin found, but the title is %@, not Bloodborne", String(describing: title)))
     }
     if version != "01.09" {
         return Check(level: .warning,
-                     message: "\(title) version \(version) found; the port expects 01.09 (the game merged with update 1.09)")
+                     message: L10n.format("%@ version %@ found; the port expects 01.09 (the game merged with update 1.09)", String(describing: title), String(describing: version)))
     }
-    return Check(level: .ok, message: "Bloodborne \(title), version \(version)")
+    return Check(level: .ok, message: L10n.format("Bloodborne %@, version %@", String(describing: title), String(describing: version)))
 }
 
 // MARK: - Repository
+
+/// The retail Chinese text and font assets are separate from the launcher translations.
+/// Warn without copying, renaming or modifying any game files.
+func gameLanguageWarning(folder: String, language: String) -> String? {
+    guard !folder.isEmpty, let code = ["10": "zhotw", "11": "zhocn"][language] else { return nil }
+    let root = URL(fileURLWithPath: folder).appendingPathComponent("dvdroot_ps4")
+    let required = ["msg/\(code)/menu.msgbnd.dcx", "msg/\(code)/item.msgbnd.dcx", "menu/\(code)/font.gfx"]
+    guard required.contains(where: { !isFile(root.appendingPathComponent($0)) }) else { return nil }
+    return L10n.key("The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language.")
+}
 
 /// The repository root: has tools/macos/run.sh.
 func isRepository(_ url: URL) -> Bool {
@@ -117,16 +127,16 @@ func findRepository(above start: URL) -> URL? {
 func checkRepository(_ url: URL?) -> Check {
     guard let url else {
         return Check(level: .error,
-                     message: "bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings")
+                     message: L10n.key("bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings"))
     }
     if !isRepository(url) {
-        return Check(level: .error, message: "\(url.path) has no tools/macos/run.sh: set the repository in Settings")
+        return Check(level: .error, message: L10n.format("%@ has no tools/macos/run.sh: set the repository in Settings", String(describing: url.path)))
     }
     if !FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("out/bb-probe").path) {
-        return Check(level: .error, message: "The port is not built yet: run bash tools/macos/build.sh in Terminal")
+        return Check(level: .error, message: L10n.key("The port is not built yet: run bash tools/macos/build.sh in Terminal"))
     }
     if !isFile(url.appendingPathComponent("deps-x86_64/env.sh")) {
-        return Check(level: .warning, message: "deps-x86_64/env.sh is missing: run bash tools/macos/setup_deps.sh")
+        return Check(level: .warning, message: L10n.key("deps-x86_64/env.sh is missing: run bash tools/macos/setup_deps.sh"))
     }
     return Check(level: .ok, message: url.path)
 }
@@ -134,37 +144,37 @@ func checkRepository(_ url: URL?) -> Check {
 /// The launcher must never silently fall back to the old in-process renderer.
 func checkOptimizedEngine(_ repo: URL?, packaged: Bool) -> Check {
     guard let repo, isRepository(repo), isFile(repo.appendingPathComponent("tools/macos/run_optimized.sh")) else {
-        return Check(level: .error, message: "Choose the optimized source checkout in Settings.")
+        return Check(level: .error, message: L10n.key("Choose the optimized source checkout in Settings."))
     }
     let native = packaged || isFile(repo.appendingPathComponent("src/runtime_quicksave_bindings.h"))
             ? repo : repo.appendingPathComponent("out/native-05-checkout").resolvingSymlinksInPath()
     let bin = native.appendingPathComponent(packaged ? "bin" : "out")
     for path in ["bb-probe", "gpu-arm64/bb-gpu"] {
         if !FileManager.default.isExecutableFile(atPath: bin.appendingPathComponent(path).path) {
-            return Check(level: .error, message: "The optimized native build is missing. See Settings for the source checkout.")
+            return Check(level: .error, message: L10n.key("The optimized native build is missing. See Settings for the source checkout."))
         }
     }
     for path in ["gpu/libbbgpu.dylib", "gpu-arm64/libbbgpu.dylib"] {
         if !isFile(bin.appendingPathComponent(path)) {
-            return Check(level: .error, message: "The optimized renderer libraries are missing.")
+            return Check(level: .error, message: L10n.key("The optimized renderer libraries are missing."))
         }
     }
     for path in ["lib/libvulkan.1.dylib", "lib/kosmickrisp/kosmickrisp_mesa_icd.json"] {
         if !isFile(native.appendingPathComponent("deps-arm64").appendingPathComponent(path)) {
-            return Check(level: .error, message: "The native graphics driver is missing.")
+            return Check(level: .error, message: L10n.key("The native graphics driver is missing."))
         }
     }
     if packaged {
         if !FileManager.default.isExecutableFile(atPath: repo.appendingPathComponent("python/bin/python3").path) {
-            return Check(level: .error, message: "The app is incomplete: its bundled runtime is missing.")
+            return Check(level: .error, message: L10n.key("The app is incomplete: its bundled runtime is missing."))
         }
         if !FileManager.default.fileExists(atPath: rosettaPath) {
-            return Check(level: .error, message: "Install Rosetta 2 to run the game. See Help → User Guide.")
+            return Check(level: .error, message: L10n.key("Install Rosetta 2 to run the game. See Help → User Guide."))
         }
     } else if findPython() == nil {
-        return Check(level: .error, message: "Python 3 is required to prepare the game.")
+        return Check(level: .error, message: L10n.key("Python 3 is required to prepare the game."))
     }
-    return Check(level: .ok, message: "Optimized native renderer ready")
+    return Check(level: .ok, message: L10n.key("Optimized native renderer ready"))
 }
 
 // MARK: - Release app
@@ -184,22 +194,22 @@ func findPython() -> String? {
 /// The game engine inside the release app (tools/macos/package.sh) and what it needs from macOS.
 func checkEngine(_ url: URL?, version: String) -> Check {
     guard let url, FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("bin/bb-probe").path) else {
-        return Check(level: .error, message: "The app is incomplete: download it again")
+        return Check(level: .error, message: L10n.key("The app is incomplete: download it again"))
     }
     // Opened straight from Downloads, macOS runs a read-only copy of the app from a random place.
     if Bundle.main.bundlePath.contains("/AppTranslocation/") {
         return Check(level: .error,
-                     message: "Move bbport into the Applications folder (drag it there in Finder), then open it again")
+                     message: L10n.key("Move bbport into the Applications folder (drag it there in Finder), then open it again"))
     }
     if !FileManager.default.fileExists(atPath: rosettaPath) {
         return Check(level: .warning,
-                     message: "Rosetta 2 seems to be missing. In Terminal: softwareupdate --install-rosetta --agree-to-license")
+                     message: L10n.key("Rosetta 2 seems to be missing. In Terminal: softwareupdate --install-rosetta --agree-to-license"))
     }
     if findPython() == nil {
         return Check(level: .warning,
-                     message: "Python 3 seems to be missing. In Terminal: xcode-select --install")
+                     message: L10n.key("Python 3 seems to be missing. In Terminal: xcode-select --install"))
     }
-    return Check(level: .ok, message: version.isEmpty ? "Built-in engine" : "Built-in engine, version \(version)")
+    return Check(level: .ok, message: version.isEmpty ? L10n.key("Built-in engine") : L10n.format("Built-in engine, version %@", String(describing: version)))
 }
 
 // MARK: - Mods (scripts/mods.py)

@@ -30,39 +30,39 @@ struct LogView: View {
             }
             .overlay {
                 if model.logLines.isEmpty {
-                    Text("Press Play: the game's output appears here.")
+                    Text(L10n.key("Press Play: the game's output appears here."))
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .frame(minWidth: 480, minHeight: 240)
-        .navigationTitle("Game Log")
+        .navigationTitle(L10n.key("Game Log"))
         .navigationSubtitle(model.statusText)
         .toolbar {
             ToolbarItemGroup {
                 Toggle(isOn: $model.followLog) {
-                    Label("Follow Output", systemImage: "arrow.down.to.line")
+                    Label(L10n.key("Follow Output"), systemImage: "arrow.down.to.line")
                 }
-                .help("Keep the newest output in view")
+                .help(L10n.key("Keep the newest output in view"))
                 Button {
                     model.copyLog()
                 } label: {
-                    Label("Copy Log", systemImage: "doc.on.doc")
+                    Label(L10n.key("Copy Log"), systemImage: "doc.on.doc")
                 }
-                .help("Copy the whole log")
+                .help(L10n.key("Copy the whole log"))
                 Button {
                     NSWorkspace.shared.open(model.lastRunLogURL)
                 } label: {
-                    Label("Open last-run.log", systemImage: "doc.text")
+                    Label(L10n.key("Open last-run.log"), systemImage: "doc.text")
                 }
-                .help("out/last-run.log: the full output of the last run (send this when reporting a problem)")
+                .help(L10n.key("out/last-run.log: the full output of the last run (send this when reporting a problem)"))
                 .disabled(!FileManager.default.fileExists(atPath: model.lastRunLogURL.path))
                 Button {
                     model.clearLog()
                 } label: {
-                    Label("Clear", systemImage: "trash")
+                    Label(L10n.key("Clear"), systemImage: "trash")
                 }
-                .help("Clear the log view")
+                .help(L10n.key("Clear the log view"))
                 .disabled(model.isRunning)
             }
         }

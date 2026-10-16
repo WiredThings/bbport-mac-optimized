@@ -40,6 +40,7 @@ class OptimizedLauncherTests(unittest.TestCase):
         for on in ['1', '0']:
             with self.subTest(quicksave=on):
                 self.env.update(BB_QUICKSAVE=on, BB_PATCHES='Resolution Patch 3840x1080 (32:9)',
+                                BB_LANGUAGE='11',
                                 BB_DMEM_MB='9152', BB_PAD_FILE='/bad-input', BB_QUICKLOAD_PENDING='1',
                                 BB_MENU_SCANCODE='61', BB_QUICKSAVE_SCANCODE='58', BB_QUICKLOAD_SCANCODE='60')
                 result = self.run_launcher()
@@ -50,6 +51,7 @@ class OptimizedLauncherTests(unittest.TestCase):
                 self.assertEqual(env['BB_GPU_PROCESS'], str(self.native / 'out/gpu-arm64/bb-gpu'))
                 self.assertEqual(env['BB_GPU_DEPS'], str(self.native / 'deps-arm64'))
                 self.assertEqual(env['BB_QUICKSAVE'], on)
+                self.assertEqual(env['BB_LANGUAGE'], '11')
                 for name in ['BB_MENU_SCANCODE', 'BB_QUICKSAVE_SCANCODE', 'BB_QUICKLOAD_SCANCODE']:
                     self.assertEqual(env[name], self.env[name])
                 self.assertEqual(env['BB_QUICKSAVE_PYTHON'], sys.executable)

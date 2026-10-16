@@ -170,32 +170,33 @@ final class LauncherModel: ObservableObject {
 
 
     var statusText: String {
-        if uiModBusy { return "Checking or updating UI files…" }
+        if uiModBusy { return L10n.key("Checking or updating UI files…") }
         if uiModStatus.blocksPlay { return uiModStatus.message }
         switch state {
         case .idle:
             if !repoCheck.allowsPlay { return repoCheck.message }
             if !gameCheck.allowsPlay {
-                return checkingGameFolder != nil ? "Checking game folder…" : "Choose the game folder"
+                return checkingGameFolder != nil ? L10n.key("Checking game folder…") : L10n.key("Choose the game folder")
             }
-            return "Ready"
+            return L10n.key("Ready")
         case .running:
-            return job == .update ? "Updating…" : "Running"
+            return job == .update ? L10n.key("Updating…") : L10n.key("Running")
         case .stopping:
-            return "Stopping…"
+            return L10n.key("Stopping…")
         case let .exited(status, bySignal):
-            if bySignal { return "Stopped (signal \(status))" }
+            if bySignal { return L10n.format("Stopped (signal %@)", String(describing: status)) }
             if job == .update {
-                return status == 0 ? "Updated" : "The update failed: see the log"
+                return status == 0 ? L10n.key("Updated") : L10n.key("The update failed: see the log")
             }
-            return status == 0 ? "The game exited" : "The game exited with code \(status): see the log"
+            return status == 0 ? L10n.key("The game exited") : L10n.format("The game exited with code %@: see the log", String(describing: status))
         case let .failed(message):
-            return "Could not start: \(message)"
+            return L10n.format("Could not start: %@", String(describing: message))
         }
     }
 
     private func prefsChanged(from old: LauncherPrefs) {
         prefs.save(to: UserDefaults.standard)
+        if prefs.uiLanguage != old.uiLanguage { refreshChecks() }
         if prefs.repoOverride != old.repoOverride {
             refreshChecks()
             if repoURL != loadedRepo { reloadRepositoryFiles() }
@@ -231,7 +232,7 @@ final class LauncherModel: ObservableObject {
         gameCheckToken = token
         checkingGameFolder = path
         if checkedGameFolder != path {
-            gameCheck = Check(level: .error, message: "Checking game folder…")
+            gameCheck = Check(level: .error, message: L10n.key("Checking game folder…"))
         }
         let loadIcon = path != iconFolder
         // A sleeping external/network drive can block even a tiny metadata read. Never
@@ -275,7 +276,7 @@ final class LauncherModel: ObservableObject {
     // MARK: - Folders
 
     func chooseGameFolder() {
-        if let path = chooseFolder(message: "Choose the game folder (with eboot.bin)", startingAt: prefs.gameFolder) {
+        if let path = chooseFolder(message: L10n.key("Choose the game folder (with eboot.bin)"), startingAt: prefs.gameFolder) {
             prefs.gameFolder = path
         }
     }
@@ -284,7 +285,7 @@ final class LauncherModel: ObservableObject {
     // restores a managed install; changing between wide aspect ratios never restricts it.
     func chooseUIModFolder() {
         guard !isRunning, !uiModBusy else { return }
-        if let path = chooseFolder(message: "Choose the extracted UI fix folder to back up and install its .gfx files",
+        if let path = chooseFolder(message: L10n.key("Choose the extracted UI fix folder to back up and install its .gfx files"),
                                    startingAt: prefs.uiModFolder) {
             requestUIMod("enable", candidate: path)
         }
@@ -341,27 +342,27 @@ final class LauncherModel: ObservableObject {
     }
 
     func chooseUserFolder() {
-        if let path = chooseFolder(message: "Choose the saves folder", startingAt: userFolderURL.path) {
+        if let path = chooseFolder(message: L10n.key("Choose the saves folder"), startingAt: userFolderURL.path) {
             prefs.userFolder = path
         }
     }
 
     func chooseModsFolder() {
         saveModProfile()
-        if let path = chooseFolder(message: "Choose the mods folder", startingAt: modsFolderURL.path) {
+        if let path = chooseFolder(message: L10n.key("Choose the mods folder"), startingAt: modsFolderURL.path) {
             prefs.modsFolder = path
         }
     }
 
     func choosePatchesFolder() {
         savePatchProfile()
-        if let path = chooseFolder(message: "Choose the patches folder", startingAt: patchesFolderURL.path) {
+        if let path = chooseFolder(message: L10n.key("Choose the patches folder"), startingAt: patchesFolderURL.path) {
             prefs.patchesFolder = path
         }
     }
 
     func chooseRepository() {
-        if let path = chooseFolder(message: "Choose the bbport repository (with tools/macos/run.sh)",
+        if let path = chooseFolder(message: L10n.key("Choose the bbport repository (with tools/macos/run.sh)"),
                                    startingAt: repoURL?.path) {
             prefs.repoOverride = path
         }
@@ -370,7 +371,7 @@ final class LauncherModel: ObservableObject {
     private func chooseFolder(message: String, startingAt path: String?) -> String? {
         let panel = NSOpenPanel()
         panel.message = message
-        panel.prompt = "Choose"
+        panel.prompt = L10n.key("Choose")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -496,7 +497,7 @@ final class LauncherModel: ObservableObject {
         env["BB_MODS_ENABLED"] = p.modsEnabled ? "1" : "0"
         env["BB_PATCHES_DIR"] = patchesFolderURL.path
         env["BB_PATCHES_CONFIG"] = patchesConfigURL.path
-        env["BB_LANGUAGE"] = p.language
+        env["BB_LANGUAGE"] = profile.environment["BB_LANGUAGE"]
         env["BB_FULLSCREEN"] = p.fullscreen ? "1" : "0"
         env["BB_GAME_MENU"] = p.gameMenu ? "1" : "0"
         env["BB_SKIP_NETWORK_CHOICE"] = p.skipNetworkChoice ? "1" : "0"
@@ -544,12 +545,12 @@ final class LauncherModel: ObservableObject {
         do {
             try saveIni()
         } catch {
-            state = .failed("cannot write \(iniURL.path): \(error.localizedDescription)")
+            state = .failed(L10n.format("cannot write %@: %@", String(describing: iniURL.path), String(describing: error.localizedDescription)))
             return
         }
 
         let env = environment()
-        let summary = ["BB_GAME_DIR", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
+        let summary = ["BB_GAME_DIR", "BB_LANGUAGE", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
             .map { "\($0)=\(env[$0] ?? "")" }.joined(separator: " ")
         start(.game, arguments: ["tools/macos/run_optimized.sh"], in: repo, env: env,
               echo: "$ \(summary) bash tools/macos/run_optimized.sh")
@@ -579,7 +580,7 @@ final class LauncherModel: ObservableObject {
         } catch {
             if readFD >= 0 { close(readFD) }
             state = .failed(error.localizedDescription)
-            appendLines(["Could not start: \(error.localizedDescription)"])
+            appendLines([L10n.format("Could not start: %@", String(describing: error.localizedDescription))])
             return
         }
         let collector = OutputCollector()

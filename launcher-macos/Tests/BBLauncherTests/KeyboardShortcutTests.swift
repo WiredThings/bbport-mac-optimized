@@ -15,16 +15,16 @@ final class KeyboardShortcutTests: XCTestCase {
 
     func testReservedAndGameplayKeysExplainTheirConflict() {
         let map = KeyboardMap(ini: [:], prefs: LauncherPrefs())
-        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 58, label: "F1"), assigning: .save)!.contains("Configuration menu"))
-        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 26, label: "W"), assigning: .save)!.contains("Move forward"))
-        XCTAssertTrue(map.conflict(for: .load, assigning: .save)!.contains("Quickload"))
+        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 58, label: "F1"), assigning: .save)!.contains(L10n.key("Configuration menu")))
+        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 26, label: "W"), assigning: .save)!.contains(L10n.key("Move forward")))
+        XCTAssertTrue(map.conflict(for: .load, assigning: .save)!.contains(L10n.key("Quickload")))
         XCTAssertNil(map.conflict(for: ShortcutKey(code: 59, label: "F2"), assigning: .save))
         XCTAssertNil(map.conflict(for: .save, assigning: .save)) // retain the current assignment
     }
 
     func testCustomGameBindingsAreChecked() {
         let map = KeyboardMap(ini: ["key.cross": "F4", "key.move_up": ""], prefs: LauncherPrefs())
-        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 61, label: "F4"), assigning: .load)!.contains("Cross"))
+        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 61, label: "F4"), assigning: .load)!.contains(L10n.key("Cross / interact")))
         XCTAssertNil(map.conflict(for: ShortcutKey(code: 26, label: "W"), assigning: .load))
     }
 
@@ -33,12 +33,12 @@ final class KeyboardShortcutTests: XCTestCase {
         prefs.menuKey = ShortcutKey(code: 61, label: "F4")
         var map = KeyboardMap(ini: [:], prefs: prefs)
         XCTAssertNil(map.conflict(for: .menu, assigning: .save)) // F1 is free
-        XCTAssertTrue(map.conflict(for: prefs.menuKey, assigning: .save)!.contains("Configuration menu"))
+        XCTAssertTrue(map.conflict(for: prefs.menuKey, assigning: .save)!.contains(L10n.key("Configuration menu")))
         prefs.quicksaveKey = .menu
         map = KeyboardMap(ini: [:], prefs: prefs)
-        XCTAssertTrue(map.conflict(for: .menu, assigning: .menu)!.contains("Quicksave"))
-        XCTAssertTrue(map.conflict(for: .load, assigning: .menu)!.contains("Quickload"))
-        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 66, label: "F9"), assigning: .menu)!.contains("input recording"))
+        XCTAssertTrue(map.conflict(for: .menu, assigning: .menu)!.contains(L10n.key("Quicksave")))
+        XCTAssertTrue(map.conflict(for: .load, assigning: .menu)!.contains(L10n.key("Quickload")))
+        XCTAssertTrue(map.conflict(for: ShortcutKey(code: 66, label: "F9"), assigning: .menu)!.contains(L10n.key("Start / stop input recording (developer shortcut)")))
         XCTAssertNil(map.conflict(for: ShortcutKey(code: 73, label: "Insert"), assigning: .menu))
     }
 

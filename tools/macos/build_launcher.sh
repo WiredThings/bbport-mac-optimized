@@ -22,17 +22,26 @@ command -v swift >/dev/null || { echo "STOP: swift missing: xcode-select --insta
 echo "=== swift build (release, $(uname -m))"
 swift --version 2>&1 | head -1
 # Plain `swift build` output goes to the terminal: send all of it back if this step fails.
-if ! swift build --package-path "$pkg" -c release; then
+build_args=(--package-path "$pkg" -c release)
+[[ -z ${BB_SWIFT_SCRATCH_PATH:-} ]] || build_args+=(--scratch-path "$BB_SWIFT_SCRATCH_PATH")
+[[ -z ${BB_SWIFT_BUILD_SYSTEM:-} ]] || build_args+=(--build-system "$BB_SWIFT_BUILD_SYSTEM")
+[[ -z ${BB_SWIFT_JOBS:-} ]] || build_args+=(--jobs "$BB_SWIFT_JOBS")
+if ! swift build "${build_args[@]}"; then
     echo "STOP: swift build failed. Send the whole output above." >&2
     exit 1
 fi
-bin=$(swift build --package-path "$pkg" -c release --show-bin-path)/BBLauncher
+bin=$(swift build "${build_args[@]}" --show-bin-path)/BBLauncher
 [[ -x $bin ]] || { echo "STOP: $bin missing after the build" >&2; exit 1; }
 
 echo "=== $app"
 rm -rf "$app" "$work"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$work"
 cp "$bin" "$app/Contents/MacOS/bbport"
+# SwiftPM keeps localized resources in a separate bundle. Bundle.module resolves it from
+# the app's Resources directory, including after the app leaves the build checkout.
+resources=$(dirname "$bin")/BBLauncher_BBLauncher.bundle
+[[ -d $resources ]] || { echo "STOP: launcher localization resources missing" >&2; exit 1; }
+cp -R "$resources" "$app/Contents/Resources/"
 version=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 # macOS wants numbers here: the upstream part (0.4 of 0.4-v1); the app shows the full version.
 short_version=${release%%-*}
@@ -47,6 +56,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
     <key>CFBundleDisplayName</key>
     <string>Bloodborne Optimized</string>
     <key>CFBundleExecutable</key>

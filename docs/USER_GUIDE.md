@@ -32,6 +32,29 @@ Backups are private to your Mac, under `optimized-launcher/ui-mod-backups`, sepa
 
 Reported performance is 30–40 FPS at 3840×1080 on M2 Max 64 GB. Higher resolutions cost more; 720p is available for speed at reduced image quality.
 
+## Launcher and game languages
+
+The **Language** section has two independent choices:
+
+- **Launcher language**: Follow system, English, 简体中文 or 繁體中文. This changes the
+  launcher immediately, including Advanced, shortcuts, folder checks, Help and the log window.
+- **Game language**: the PS4 system-language value sent to Bloodborne on its next launch.
+  简体中文 uses value **11**, and 繁體中文 uses **10**. Other retail language choices are
+  also available. Changing this does not translate the launcher or change voice audio.
+
+Existing game language, folder, controller and save settings are retained. A new launcher-language
+preference defaults to the system language. Chinese requires the matching text archives in
+`dvdroot_ps4/msg/zhocn` or `zhotw`, and `dvdroot_ps4/menu/<language>/font.gfx`. The launcher
+warns if these files are missing. No translation patch or game files are downloaded or replaced.
+Language availability and actual in-game rendering still depend on the player's game dump.
+
+Translations are standard `Localizable.strings` resources under
+`launcher-macos/Sources/BBLauncher/Resources/<language>.lproj`. English source strings are the
+keys; preserve `%@` placeholders and use positional arguments if reordering them. To add a
+launcher language, supply its resource folder, add its option/resolution in `Localization.swift`
+and add its code to the packaged app's `CFBundleLocalizations`. The Swift tests check Chinese
+preferences, runtime values, resource coverage, interpolation and missing-file warnings.
+
 ## Shortcuts and quicksave
 
 The basic view shows the three configurable in-game shortcuts:

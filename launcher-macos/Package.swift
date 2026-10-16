@@ -5,11 +5,13 @@ import PackageDescription
 
 let package = Package(
     name: "BBLauncher",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
             name: "BBLauncher",
-            path: "Sources/BBLauncher"
+            path: "Sources/BBLauncher",
+            resources: [.process("Resources")]
         ),
         .testTarget(name: "BBLauncherTests", dependencies: ["BBLauncher"]),
     ]
