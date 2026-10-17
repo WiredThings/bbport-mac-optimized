@@ -57,8 +57,9 @@ or creating a Vulkan device. Run `test_optimized_launcher.py` for cache-path iso
 to retain the baseline's ABI/file names and macOS 26 minimum, preserves the driver/runtime,
 relocates library paths, signs, audits and runs a usage-only dyld smoke test. Static miniz,
 Zydis/Zycore and minimal FFmpeg use the pinned versions in `setup_deps.sh`. It never starts
-the game, installs the app or changes user settings. The CPU runtime and launcher are reused
-byte-for-byte from the baseline; only the ARM64 renderer/host and launch scripts are replaced.
+the game, installs the app or changes user settings. The CPU runtime and launcher are not
+recompiled; only the ARM64 renderer/host and launch scripts are replaced. Signing metadata
+is refreshed when the new app is signed.
 
 Adapted portions retain the shadPS4 GPL-2.0-or-later notices. Source commits above are by
 Mark Hall and retain their upstream attribution. The resulting fork remains GPL-2.0-or-later.
