@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import subprocess
 
 from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loads, minimum, run, sha
@@ -76,7 +77,11 @@ def main():
     assert run('git', '-C', args.spirv_cross_source, 'rev-parse', 'HEAD') == 'f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7'
     for name, prefix in [('spirv-cross', args.spirv_cross_source)]:
         for p in prefix.glob('LICENSE*'):
-            copy(p, engine / 'licenses/metal' / name / p.name)
+            dest = engine / 'licenses/metal' / name / p.name
+            if p.is_dir():
+                shutil.copytree(p, dest, dirs_exist_ok=True)
+            else:
+                copy(p, dest)
     copy(args.launcher / 'Contents/MacOS/bbport', app / 'Contents/MacOS/bbport')
     resource = 'BBLauncher_BBLauncher.bundle'
     subprocess.run(['ditto', str(args.launcher / 'Contents/Resources' / resource),
