@@ -57,3 +57,11 @@ and is invalid with BB_MTL_HOLD=0. The invalid invocation log is retained separa
 There are also 33 benchmark checks and 18 Metal report/packaging/patch checks. The incremental
 23-patch series reconstructs and reapplies idempotently. These checks are correctness evidence,
 not a performance gain. Traces, shaders, caches and saves remain private.
+
+A subsequent offscreen compiler probe used four real hot fragment bodies, generated textures
+and varyings, two uniform datasets, and unchanged Safe arithmetic/sampling. All six RGBA32Float
+outputs were bit-identical and finite in each tested case. At 960x540 with the actual six MRT
+formats, 40 balanced samples per variant showed size-optimization medians equal or roughly
+0.1–1% slower in all eight cases. No shader compiler option was changed in the renderer. The
+synthetic workload does not reproduce the game's full texture working set or overdraw and is
+not a game FPS result. No code-size or shader-memory saving was measured.
