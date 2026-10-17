@@ -52,3 +52,52 @@ and tracked allocation counts. Preset tests cover stable IDs, exact even-rounded
 loading/saving/reloading preset 5. MetalFX temporal scaler creation at 1920x1080 -> 1920x1080
 and 1536x864 -> 1920x1080 succeeded on this M4. These are offscreen correctness and creation
 tests; real-game FPS, copy counts and memory behaviour still require the same-scene A/B.
+
+## Same-process gameplay ABBA (2026-10-17)
+
+Measured the installed 0.2.16 code (266cc69), Hunter's Dream at the Yharnam headstone,
+1920x1080 output / preset 3 (960x540 scene), normal motion debug off. Four 30-second phases
+used reference / fusion / fusion / reference in one process, with identical instrumentation
+(GPU stage sampling every eight encoders plus frame statistics). First ten seconds of FPS
+and first two GPU windows per phase were excluded. The user held the camera; recorded player
+position was identical in all phases and mean draws differed by 0.15%. No steady-state shader
+compiles occurred. Reference and fused use the same existing textures and pipeline cache.
+
+| Measurement | Reference | Fused |
+| --- | ---: | ---: |
+| Mean FPS (mean of two phases) | 50.08 | 49.56 |
+| Separate phase FPS means | 51.02 / 49.14 | 50.56 / 48.56 |
+| Host-copy sampled span, estimated ms/frame | 1.330 | 0.718 |
+| Upscale-merge sampled span, estimated ms/frame | 0.935 | 0.954 |
+| Main guest-render span, estimated ms/frame | 9.727 | 9.932 |
+| Mean process footprint, GiB | 5.572 | 5.562 |
+| Classified owned resource bytes | 1,540,885,264 | 1,540,885,264 |
+| Scene proxy allocations | 18 / 46,415,872 bytes | unchanged |
+
+The scene-colour `shader-write` resolve occurred every frame in both reference phases and
+was absent in both fused phases; the independent `transfer-read` resolve remained. This
+confirms elimination of the intended copy, with host-copy spans about 46% lower. It does
+not establish an FPS improvement: this run was about 1% slower on average with fusion, within
+the observed between-phase drift. Retain the change as a validated redundant-work reduction,
+not as a proven frame-rate gain. The roughly 10 MiB process-footprint difference is not a
+meaningful memory saving; every classified resource category had exactly the same bytes
+and object counts throughout the comparison. System memory pressure was warning level (2)
+in all four phases; this change did not solve overall system pressure.
+
+GPU counter invalid/missing/capacity/busy drops were all zero. No GPU command-buffer faults
+were logged. Two-level BDA, game velocity merge, both motion-blur bypasses, occlusion,
+direct proxy clear and lean usage markers were present. The user reported seeing this scene
+above 50 FPS, consistent with several measured intervals around 50-52 FPS. There was no
+separate instrumentation-off baseline for this version, so the user observation and the
+instrumented single-change comparison should remain separate evidence.
+
+Remaining measured GPU work is led by main guest rendering (about 9.9 ms/frame of sampled
+encoder span), with fragment-stage spans about 6.2 ms/frame on the fused phases. These spans
+include dependency and memory waits; they do not separate texture bandwidth/cache misses
+from fragment arithmetic and must not be summed as frame time. Other depth/stencil and
+post-processing copies still have genuine readers and were preserved.
+
+After the user exited, extraEnv was restored to its prior empty value, frameStats and
+GPU profile toggles were restored off, and the normal 0.2.16 launcher was reopened. No A/B
+control path remains in the launch environment. Alpha fusion stays on by default; preset 3,
+1080p output, effects and saves were preserved.
