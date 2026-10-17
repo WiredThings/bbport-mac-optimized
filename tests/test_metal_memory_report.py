@@ -32,3 +32,18 @@ Metal memory category staging: allocated=10000 bytes
     def test_old_log_is_explicitly_rejected(self):
         with self.assertRaisesRegex(ValueError,'No categorized memory'):
             m.analyze('Metal memory budget: 11000 MiB\n')
+
+    def test_internal_generations_are_attached_to_matching_snapshot(self):
+        report=m.analyze("""Metal memory category sampled-textures: allocated=100 bytes
+Metal guest association sampled-textures: live=20 bytes, released=30 bytes, reused=10 bytes, unknown=40 bytes
+Guest resource lifetime heap: allocations=7, releases=3, live-bytes=123, unknown-frees=2, dropped=0
+Guest resource reclaim: images=1, allocation-bytes=90, gpu-pending=4
+Metal memory totals: footprint=1000 bytes
+Guest memory categories: direct-live=500 bytes
+Metal guest association sampled-textures: live=9999 bytes
+""")
+        snapshot=report['latest']
+        self.assertEqual(snapshot['associations']['sampled-textures']['released'],30)
+        self.assertEqual(snapshot['internal_gpu_allocators']['heap']['unknown-frees'],2)
+        self.assertEqual(snapshot['internal_gpu_allocators']['reclaim']['allocation-bytes'],90)
+        self.assertEqual(report['process_footprint_gib'],1000/1024**3)

@@ -17,6 +17,7 @@ if [[ $renderer == metal ]]; then
     [[ -x $probe && -f $metal_lib ]] || die "The Metal renderer build is missing"
     export BB_PREBUILT=1 BB_NATIVE_GPU=0 BB_RENDERER=metal BB_PROBE=$probe
     export BB_PC_MODEL=1 BB_GUEST_IN_PLACE=1 BB_LAYER_MEMORY=1 BB_GUEST_MEMORY=host
+    export BB_GPU_LIFETIME=${BB_GPU_LIFETIME:-1}
     export BB_PREUPLOAD=${BB_PREUPLOAD:-1} BB_UFFD=0 BB_COPY_GPU_BUFFERS=1
     export BB_GPU_WRITE_TWINS=1 BB_GPU_WRITE_TWINS_MAX=65536
     export BB_AUTO_NOHIZ=0 BB_GPU_LABELS=0 ROSETTA_ADVERTISE_AVX=1

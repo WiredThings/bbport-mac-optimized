@@ -11,15 +11,23 @@ def fields(text):
 
 
 def analyze(text):
-    snapshots, categories = [], {}
+    snapshots, categories, associations, lifetime = [], {}, {}, {}
     for line in text.splitlines():
         if 'Metal memory category ' in line:
             tail = line.split('Metal memory category ', 1)[1]
             name, values = tail.split(': ', 1)
             categories[name] = fields(values)
+        elif 'Metal guest association ' in line:
+            name, values = line.split('Metal guest association ', 1)[1].split(': ', 1)
+            associations[name] = fields(values)
+        elif 'Guest resource lifetime ' in line:
+            name, values = line.split('Guest resource lifetime ', 1)[1].split(': ', 1)
+            lifetime[name] = fields(values)
+        elif 'Guest resource reclaim: ' in line:
+            lifetime['reclaim'] = fields(line.split('Guest resource reclaim: ', 1)[1])
         elif 'Metal memory totals: ' in line:
-            snapshots.append({'categories': categories, 'totals': fields(line.split('Metal memory totals: ', 1)[1])})
-            categories = {}
+            snapshots.append({'categories': categories, 'totals': fields(line.split('Metal memory totals: ', 1)[1]), 'associations': associations, 'internal_gpu_allocators': lifetime})
+            categories, associations, lifetime = {}, {}, {}
         elif 'Guest memory categories: ' in line and snapshots:
             snapshots[-1]['guest'] = fields(line.split('Guest memory categories: ', 1)[1])
     if not snapshots:
@@ -38,7 +46,9 @@ def analyze(text):
                       'Guest aliases, live guest allocations and graphics ledger overlap process footprint.',
                       'Released counts Metal object destruction; the driver may retain/reuse physical pages.',
                       'Unclassified Metal capacity includes opaque framework and driver allocations.',
-                      'Runtime direct liveness does not measure suballocations inside the game engine heap.']}
+                      'Runtime direct liveness does not measure suballocations inside the game engine heap.',
+                      'Internal GPU allocator coverage is partial; unassociated resources are unknown.',
+                      'Reclaimed allocation-bytes is cumulative cache retirement capacity, not measured RAM savings.']}
 
 
 def main():

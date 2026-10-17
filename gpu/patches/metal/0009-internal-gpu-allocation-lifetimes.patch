@@ -1,0 +1,1218 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -758,3 +758,20 @@
+ target_compile_options(sampler-memo-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(sampler-memo-test PRIVATE .. shadps4)
+ 
++
++# Internal GPU suballocator tracking; bounded histories and native detour ABI regressions.
++add_executable(guest-resource-lifetime-test EXCLUDE_FROM_ALL
++    ../tests/test_guest_resource_lifetime.cpp shim/bbport_resource_lifetime.cpp)
++target_compile_options(guest-resource-lifetime-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(guest-resource-lifetime-test PRIVATE shim)
++if(APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
++    enable_language(ASM)
++    add_executable(guest-resource-hooks-test EXCLUDE_FROM_ALL
++        ../tests/test_guest_resource_hooks.cpp ../tests/test_guest_resource_hook_state.S
++        ../tests/test_gpu_runtime_stubs.cpp)
++    target_compile_options(guest-resource-hooks-test PRIVATE
++        $<$<COMPILE_LANGUAGE:CXX>:-UNDEBUG;-include;${CMAKE_CURRENT_SOURCE_DIR}/shim/bbport_platform.h>)
++    target_include_directories(guest-resource-hooks-test PRIVATE shim shadps4)
++    target_link_options(guest-resource-hooks-test PRIVATE -Wl,-export_dynamic)
++    target_link_libraries(guest-resource-hooks-test PRIVATE bbgpu)
++endif()
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer.cpp b/gpu/shadps4/video_core/buffer_cache/buffer.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer.cpp
+@@ -59,6 +59,7 @@
+         .sharingMode = vk::SharingMode::eExclusive,
+     };
+     const BufferMemory memory = backend.CreateBuffer(buffer, buffer_ci, mem_type);
++    if (cpu_addr) backend.AssociateGuestBuffer(buffer,cpu_addr,size_bytes);
+ 
+     if (!debug_name.empty()) {
+         backend.SetBufferName(buffer, debug_name);
+diff --git a/gpu/shadps4/video_core/cache_backend.h b/gpu/shadps4/video_core/cache_backend.h
+--- a/gpu/shadps4/video_core/cache_backend.h
++++ b/gpu/shadps4/video_core/cache_backend.h
+@@ -250,6 +250,10 @@
+ class CacheBackend {
+ public:
+     virtual ~CacheBackend() = default;
++    // Optional diagnostics only. The default backend has no guest lifetime association.
++    virtual void AssociateGuestImage(const UniqueImage&, u64 address, u64 size) {}
++    virtual void AssociateGuestBuffer(const UniqueBuffer&, u64 address, u64 size) {}
++
+ 
+     /// Device limits and feature flags, filled once when the backend is created.
+     [[nodiscard]] const BackendLimits& Limits() const noexcept {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+@@ -12,6 +12,9 @@
+ // Released advances on the real Metal object's destruction, including references from views.
+ void Track(const void* resource, Kind kind);
+ void Reclassify(const void* resource, Kind kind);
++void Associate(const void* resource, std::uint64_t guest_address, std::uint64_t size);
++struct Association { std::uint64_t live{}, released{}, reused{}, unknown{}; };
++std::array<Association, static_cast<unsigned>(Kind::Count)> ReadAssociations();
+ void Retire(const void* resource);
+ bool IsDiscarded(const void* resource);
+ void Discarded(const void* resource, bool discarded);
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+@@ -7,11 +7,13 @@
+ #include <mach/mach.h>
+ #include <mutex>
+ #include <unordered_map>
++#include <vector>
++#include "bbport_resource_lifetime.h"
+ #include "video_core/renderer_metal/mtl_memory_stats.h"
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ namespace Metal::MemoryStats {
+ namespace {
+-struct Entry { std::uint64_t bytes; Kind kind; bool retired = false, discarded = false; };
++struct Entry { std::uint64_t bytes; Kind kind; bool retired = false, discarded = false; BbResourceLifetime::Tag guest{}; };
+ struct Ledger {
+     std::mutex mutex;
+     std::unordered_map<const void*, Entry> entries;
+@@ -60,6 +62,30 @@
+     if (e.discarded) { old.discarded -= e.bytes; now.discarded += e.bytes; }
+     now.peak = std::max(now.peak, now.bytes); e.kind = kind;
+ }
++void Associate(const void* pointer, std::uint64_t address, std::uint64_t size) {
++    if (!BbResourceLifetime::Enabled()) return;
++    const auto tag=BbResourceLifetime::Get().Owner(address,size);
++    auto& l=Get(); std::scoped_lock lock{l.mutex};
++    if(auto it=l.entries.find(pointer);it!=l.entries.end())it->second.guest=tag;
++}
++std::array<Association, static_cast<unsigned>(Kind::Count)> ReadAssociations() {
++    std::vector<Entry> entries;
++    {auto& l=Get();std::scoped_lock lock{l.mutex};entries.reserve(l.entries.size());
++     for(const auto& [key,e]:l.entries)entries.push_back(e);}
++    // Never acquire the guest allocation lock while holding the ledger lock: a cache
++    // retirement can enter this ledger while keeping the guest generation stable.
++    std::array<Association, static_cast<unsigned>(Kind::Count)> result{};
++    for(const auto& e:entries) {
++        auto& r=result[unsigned(e.kind)];
++        switch(BbResourceLifetime::Get().Status(e.guest)) {
++        case BbResourceLifetime::State::Live:r.live+=e.bytes;break;
++        case BbResourceLifetime::State::Released:r.released+=e.bytes;break;
++        case BbResourceLifetime::State::Reused:r.reused+=e.bytes;break;
++        default:r.unknown+=e.bytes;break;
++        }
++    }
++    return result;
++}
+ void Retire(const void* pointer) {
+     auto& l = Get(); std::scoped_lock lock{l.mutex};
+     auto it = l.entries.find(pointer); if (it == l.entries.end() || it->second.retired) return;
+@@ -90,6 +116,14 @@
+         const auto& c = snapshot[i]; owned += c.bytes;
+         std::printf("Metal memory category %s: allocated=%llu bytes, objects=%llu, retired=%llu bytes, discarded-capacity=%llu bytes, released=%llu bytes, peak=%llu bytes\n", names[i], (unsigned long long)c.bytes, (unsigned long long)c.objects, (unsigned long long)c.retired, (unsigned long long)c.discarded, (unsigned long long)c.released, (unsigned long long)c.peak);
+     }
++    if (BbResourceLifetime::Enabled()) {
++        const auto correlated=ReadAssociations();
++        for(unsigned i=0;i<correlated.size();++i) {
++            const auto& c=correlated[i];
++            std::printf("Metal guest association %s: live=%llu bytes, released=%llu bytes, reused=%llu bytes, unknown=%llu bytes; allocation capacity, not additional resident memory\n",names[i],(unsigned long long)c.live,(unsigned long long)c.released,(unsigned long long)c.reused,(unsigned long long)c.unknown);
++        }
++        BbResourceLifetime::Report();
++    }
+     task_vm_info_data_t vm{}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+     const bool valid = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count) == KERN_SUCCESS && count >= TASK_VM_INFO_REV3_COUNT;
+     id<MTLDevice> device = (__bridge id<MTLDevice>)pointer;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -234,6 +234,8 @@
+     void FlushBuffer(const VideoCore::UniqueBuffer& buffer, u64 offset, u64 size) override;
+     void InvalidateBuffer(const VideoCore::UniqueBuffer& buffer, u64 offset, u64 size) override;
+     void CreateImage(VideoCore::UniqueImage& out, const vk::ImageCreateInfo& info) override;
++    void AssociateGuestImage(const VideoCore::UniqueImage&, u64 address, u64 size) override;
++    void AssociateGuestBuffer(const VideoCore::UniqueBuffer&, u64 address, u64 size) override;
+     void DestroyImage(VideoCore::UniqueImage& image) override;
+     vk::SampleCountFlags ImageSampleCounts(const vk::ImageCreateInfo& info) const override;
+     void CreateImageView(VideoCore::ImageView& out, const vk::ImageViewCreateInfo& info) override;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1035,6 +1035,14 @@
+ }
+ 
+ void Runtime::InvalidateBuffer(const UniqueBuffer&, u64, u64) {}
++
++void Runtime::AssociateGuestBuffer(const UniqueBuffer& buffer, u64 address, u64 size) {
++    MemoryStats::Associate(buffer.native, address, size);
++}
++
++void Runtime::AssociateGuestImage(const UniqueImage& image, u64 address, u64 size) {
++    MemoryStats::Associate(image.native, address, size);
++}
+ 
+ void Runtime::CreateImage(UniqueImage& out, const vk::ImageCreateInfo& info) {
+     @autoreleasepool {
+@@ -2157,6 +2165,7 @@
+         new_backing = &backing_images.emplace_back();
+         new_backing->num_samples = num_samples;
+         CreateImage(new_backing->image, new_image_ci);
++        AssociateGuestImage(new_backing->image,image->info.guest_address,image->info.guest_size);
+ 
+         SetImageName(new_backing->image,
+                      fmt::format("Image {}x{}x{} {} {:#x}:{:#x} L:{} M:{} S:{} (backing)",
+@@ -2303,6 +2312,7 @@
+         Image::BackingImage& fresh = image->backing_images.emplace_back();
+         fresh.num_samples = old->num_samples;
+         CreateImage(fresh.image, ci);
++        AssociateGuestImage(fresh.image,image->info.guest_address,image->info.guest_size);
+         SetImageName(fresh.image, name);
+ 
+         // 2. The contents. Everything recorded so far writes the old texture, everything after
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -326,6 +326,7 @@
+     // (Views: the formats of the passes' pipelines, the stencil of a combined depth format.)
+     ci.flags = vk::ImageCreateFlagBits::eMutableFormat;
+     runtime.CreateImage(data->image, ci);
++    runtime.AssociateGuestImage(data->image,original.info.guest_address,original.info.guest_size);
+     data->base_format = ci.format;
+     runtime.SetImageName(data->image, fmt::format("Scene proxy {}x{} {}", size.width, size.height,
+                                                   vk::to_string(original.info.pixel_format)));
+diff --git a/gpu/shadps4/video_core/texture_cache/image.cpp b/gpu/shadps4/video_core/texture_cache/image.cpp
+--- a/gpu/shadps4/video_core/texture_cache/image.cpp
++++ b/gpu/shadps4/video_core/texture_cache/image.cpp
+@@ -84,6 +84,15 @@
+     // Note: StorageImage is intentionally ignored for now since it is always set, and can mess up
+     // compatibility checks.
+     return feature_flags;
++}
++
++bool Image::CanReleaseGuestBacking() const {
++    return True(flags & ImageFlagBits::Registered) &&
++        False(flags & (ImageFlagBits::GpuModified | ImageFlagBits::GpuDirty)) &&
++        !usage.render_target && !usage.depth_target && !usage.storage && !usage.vo_surface &&
++        !scene_proxy && !binding.is_bound && !binding.is_target && !binding.needs_rebind &&
++        backend->IsFreeKnown(tick_accessed_last) &&
++        (!gpu_write_tick || backend->IsFreeKnown(gpu_write_tick));
+ }
+ 
+ UniqueImage::~UniqueImage() {
+diff --git a/gpu/shadps4/video_core/texture_cache/image.h b/gpu/shadps4/video_core/texture_cache/image.h
+--- a/gpu/shadps4/video_core/texture_cache/image.h
++++ b/gpu/shadps4/video_core/texture_cache/image.h
+@@ -126,6 +126,8 @@
+     bool IsTracked() {
+         return track_addr != 0 && track_addr_end != 0;
+     }
++
++    bool CanReleaseGuestBacking() const;
+ 
+     bool SafeToDownload() const {
+         return True(flags & ImageFlagBits::GpuModified) && False(flags & (ImageFlagBits::Dirty));
+diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -617,7 +617,8 @@
+     // An exact match stays valid while that image is registered with the same description;
+     // resolved overlaps (views into other images) only until any image registration changes.
+     const auto still_exact = [&] {
+-        if (cached.view_mip >= 0 || cached.view_slice >= 0 || !cached.image_id) {
++        if (cached.view_mip >= 0 || cached.view_slice >= 0 || !cached.image_id ||
++            !slot_images.is_allocated(cached.image_id)) {
+             return false;
+         }
+         const Image& image = slot_images[cached.image_id];
+@@ -626,7 +627,8 @@
+                image.info.guest_size == info.guest_size && image.info.size == info.size &&
+                image.info.pixel_format == info.pixel_format;
+     };
+-    if ((cached.generation == registry_generation.load(std::memory_order_relaxed) || still_exact()) &&
++    if (cached.image_id && slot_images.is_allocated(cached.image_id) &&
++        (cached.generation == registry_generation.load(std::memory_order_relaxed) || still_exact()) &&
+         cached.address == info.guest_address &&
+         cached.size == info.guest_size && cached.extent == info.size &&
+         cached.format == info.pixel_format && cached.type == info.type &&
+@@ -1046,6 +1048,7 @@
+     BbStats::live_images.fetch_add(1, std::memory_order_relaxed);
+     image.lru_id = lru_cache.Insert(image_id, gc_tick);
+     image.lru_touched_tick = gc_tick;
++    AssociateGuestImage(image_id);
+     ForEachPage(image.info.guest_address, image.info.guest_size,
+                 [this, image_id](u64 page) { page_table[page].push_back(image_id); });
+ }
+@@ -1054,6 +1057,7 @@
+     Image& image = slot_images[image_id];
+     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
+                "Trying to unregister an already unregistered image");
++    guest_image_owners.erase(image_id.index);
+     image.flags &= ~ImageFlagBits::Registered;
+     ++registry_generation;
+     lru_cache.Free(image.lru_id);
+@@ -1398,11 +1402,64 @@
+     vram_short_until.store(now + 30, std::memory_order_relaxed);
+ }
+ 
++void TextureCache::AssociateGuestImage(ImageId image_id) {
++    if (!BbResourceLifetime::Enabled()) return;
++    const auto& image=slot_images[image_id];
++    const auto tag=BbResourceLifetime::Get().Owner(image.info.guest_address,image.info.guest_size);
++    guest_image_owners[image_id.index]=tag;
++    for (const auto& backing:image.backing_images)
++        backend.AssociateGuestImage(backing.image,image.info.guest_address,image.info.guest_size);
++}
++
++void TextureCache::CollectReleasedGuestImages() {
++    if (!BbResourceLifetime::Enabled()) return;
++    const auto now=std::chrono::steady_clock::now();
++    if (now-guest_collect_time<std::chrono::seconds(1)) return;
++    guest_collect_time=now;
++    backend.BeforeImageAccess(); // join helper texture bindings before examining/removing slots
++    std::scoped_lock lock{mutex};
++    auto& lifetimes=BbResourceLifetime::Get();
++    std::vector<std::pair<ImageId,BbResourceLifetime::Tag>> candidates;
++    std::vector<ImageId> reassociate;
++    u64 waiting=0, protected_images=0;
++    for (const auto& [index,tag]:guest_image_owners) {
++        const ImageId id{index};
++        const auto& image=slot_images[id];
++        const auto owner=lifetimes.Owner(image.info.guest_address,image.info.guest_size);
++        if (owner && owner!=tag) { reassociate.push_back(id);continue; }
++        if (lifetimes.Status(tag)!=BbResourceLifetime::State::Released) continue;
++        // No writeback, no guest page decommit, no query/depth/velocity/proxy deletion.
++        // An image ever used as a target/storage stays on the existing safe lifetime path.
++        if (!backend.IsFreeKnown(image.tick_accessed_last) ||
++            (image.gpu_write_tick && !backend.IsFreeKnown(image.gpu_write_tick))) {
++            ++waiting;continue;
++        }
++        if (!image.CanReleaseGuestBacking()) { ++protected_images;continue; }
++        if (candidates.size()<16) candidates.emplace_back(id,tag);
++    }
++    for(const auto id:reassociate) AssociateGuestImage(id);
++    lifetimes.NoteScan(waiting,protected_images);
++    if (!BbResourceLifetime::ReclaimReady() || candidates.empty()) return;
++    backend.EndRendering(); // release held pass references through the existing backend path
++    for(const auto& [id,tag]:candidates) {
++        const auto& image=slot_images[id];
++        const u64 address=image.info.guest_address, size=image.info.guest_size;
++        // Both allocator domains must have no replacement overlap. A dropped record disables
++        // reclamation. Keep the generation locked through unregistration; never wait for GPU.
++        lifetimes.WithReleased(tag,address,size,2000,[&]() -> BbResourceLifetime::u64 {
++            u64 bytes=0;for(const auto& backing:image.backing_images)bytes+=backing.image.size_bytes;
++            FreeImage(id); // normal unwatch/unregister/deferred destruction; same GPU safety rules
++            return bytes;
++        });
++    }
++}
++
+ void TextureCache::RunGarbageCollector() {
+     SCOPE_EXIT {
+         ++gc_tick;
+     };
+ 
++    CollectReleasedGuestImages();
+     GarbageCollectImages();
+     GarbageCollectSamplers();
+ }
+diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.h b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.h
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+@@ -10,6 +10,7 @@
+ 
+ #include <condition_variable>
+ #include <mutex>
++#include "bbport_resource_lifetime.h"
+ #include <thread>
+ #include <unordered_set>
+ #include <boost/container/small_vector.hpp>
+@@ -399,6 +400,8 @@
+         DeleteImage(image_id);
+     }
+ 
++    void CollectReleasedGuestImages();
++    void AssociateGuestImage(ImageId image_id);
+     void GarbageCollectImages();
+     void GarbageCollectSamplers();
+ 
+@@ -414,6 +417,8 @@
+     u64 sampler_generation = 0;
+     std::unordered_set<ImageId> download_images;
+     u64 total_used_memory = 0;
++    std::unordered_map<u32, BbResourceLifetime::Tag> guest_image_owners;
++    std::chrono::steady_clock::time_point guest_collect_time{};
+     u64 gc_evictions = 0, gc_downloads = 0; ///< bbport: pressure report
+     std::chrono::steady_clock::time_point gc_report_time{};
+     /// bbport: gc_tick at each of the last 64 seconds (GarbageCollectImages).
+diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
+--- a/gpu/shim/bbport_guest_hooks.cpp
++++ b/gpu/shim/bbport_guest_hooks.cpp
+@@ -1,15 +1,18 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "bbport_guest_hooks.h"
+ #include "bbport_heap_sites.h"
++#include "bbport_resource_lifetime.h"
+ #include "bbport_toggles.h"
+ 
+ #include <array>
++#include <algorithm>
+ #include <atomic>
+ #include <csignal>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstdio>
+ #include <cstring>
++#include <span>
+ #include <sys/mman.h>
+ #include <sys/uio.h>
+ #include <ucontext.h>
+@@ -78,8 +81,13 @@
+     u64 offset;
+     std::atomic<u64> stub{0};
+ };
+-std::array<NativeSite, 4> native_sites{{{AllocReturn}, {HeapAllocReturns[0]}, {HeapAllocReturns[1]},
+-                                        {HeapAllocReturns[2]}}};
++constexpr u64 RangeFree = 0x26aa986, HeapFree = 0x20858a0;
++constexpr u8 RangeFreeCode[] = {0x48,0x8b,0x4c,0x24,0x28,0x48,0xff,0x89,0xc8,0,0,0};
++constexpr u8 HeapFreeCode[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56};
++using HeapFreeFn = void (*)(u64, u64);
++HeapFreeFn original_heap_free{};
++std::array<NativeSite, 6> native_sites{{{AllocReturn}, {HeapAllocReturns[0]}, {HeapAllocReturns[1]},
++                                        {HeapAllocReturns[2]}, {RangeFree}, {HeapFree}}};
+ u8* stub_page = nullptr;
+ std::size_t stub_used = 0;
+ constexpr std::size_t StubPageSize = 4096;
+@@ -98,7 +106,7 @@
+ }
+ 
+ struct Emitter {
+-    std::array<u8, 256> code{};
++    std::array<u8, 1024> code{};
+     std::size_t size = 0;
+     void Bytes(std::initializer_list<u8> bytes) {
+         for (const u8 b : bytes) {
+@@ -119,6 +127,26 @@
+         Bytes({0x41, 0x54});             // push r12 (holds the unaligned stack pointer)
+         Bytes({0x49, 0x89, 0xe4});       // mov r12, rsp
+         Bytes({0x48, 0x83, 0xe4, 0xf0}); // and rsp, -16
++    }
++    // Inline collector branch: unlike a function-call boundary, every vector register,
++    // flags, x87 state and MXCSR can be live. Keep the guest red zone untouched too.
++    void SaveFull() {
++        Bytes({0x48,0x8d,0xa4,0x24,0x80,0xff,0xff,0xff,0x9c});
++        SaveVolatile();
++        Bytes({0x48,0x81,0xec}); U32(1056);
++        Bytes({0x48,0x0f,0xae,0x04,0x24}); // fxsave64 [rsp] (16-byte aligned)
++        for (unsigned i=0;i<16;++i) {
++            Bytes({0xc5, u8(i<8?0xfe:0x7e),0x7f,u8(0x84+8*(i&7)),0x24});
++            U32(512+32*i); // vmovdqu [rsp+offset], ymmN (preserve upper AVX lanes)
++        }
++    }
++    void RestoreFull() {
++        Bytes({0x48,0x0f,0xae,0x0c,0x24}); // fxrstor64 [rsp]
++        for (unsigned i=0;i<16;++i) {
++            Bytes({0xc5, u8(i<8?0xfe:0x7e),0x6f,u8(0x84+8*(i&7)),0x24}); U32(512+32*i);
++        }
++        RestoreVolatile();
++        Bytes({0x9d,0x48,0x8d,0xa4,0x24,0x80,0,0,0});
+     }
+     void CallAbs(const void* fn) {
+         Bytes({0x48, 0xb8}); // movabs rax, fn
+@@ -174,14 +202,38 @@
+     const u64 next = *reinterpret_cast<const u64*>(node + 0x18);
+     const u64 end = next ? *reinterpret_cast<const u64*>(next + 8) : start;
+     if (end > start && end - start < (u64(1) << 32)) {
++        if (BbResourceLifetime::Enabled())
++            BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Range, start, end-start);
+         on_range_allocated(start, end - start);
+     }
+ }
+ 
+ void HeapHook(u64 address, u64 size) {
+     if (address != 0 && size != 0 && size < (u64(1) << 32)) {
++        if (BbResourceLifetime::Enabled())
++            BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap, address, size);
+         on_range_allocated(address, size);
+     }
++}
++
++// The collector has already accepted this node as free; capture before coalescing
++// destroys its boundaries. It still holds the game's allocator lock at this branch.
++void RangeFreeHook(u64 node) {
++    const u64 start=*reinterpret_cast<const u64*>(node+8);
++    const u64 next=*reinterpret_cast<const u64*>(node+0x18);
++    const u64 end=next ? *reinterpret_cast<const u64*>(next+8) : start;
++    auto tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Range,start);
++    if (!tag || end<=start || tag.size!=end-start)
++        tag={start,0,0,BbResourceLifetime::Domain::Range};
++    BbResourceLifetime::Get().Release(tag);
++}
++void HeapFreeHook(u64 allocator,u64 address) {
++    auto tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,address);
++    if (!tag) tag={address,0,0,BbResourceLifetime::Domain::Heap};
++    original_heap_free(allocator,address);
++    // Another thread may already have reused the address. Generation matching prevents
++    // this return from releasing the replacement allocation.
++    if (address) BbResourceLifetime::Get().Release(tag);
+ }
+ 
+ /// The detour of a site whose int3 is in place (Patch). False: left as a trap.
+@@ -291,24 +343,13 @@
+         if (rip != ImageBase + site) {
+             continue;
+         }
+-        const u64 address = u64(g[REG_RAX]);
+-        const u64 size = *reinterpret_cast<const u64*>(u64(g[REG_RBP]) - 0x50);
+-        if (address != 0 && size != 0 && size < (u64(1) << 32)) {
+-            on_range_allocated(address, size);
+-        }
++        HeapHook(u64(g[REG_RAX]), *reinterpret_cast<const u64*>(u64(g[REG_RBP])-0x50));
+         g[REG_RBX] = g[REG_RAX];
+         g[REG_RIP] = greg_t(ImageBase + site + sizeof(HeapAllocReturnCode));
+         return;
+     }
+     if (rip == ImageBase + AllocReturn) {
+-        if (const u64 node = u64(g[REG_RAX])) {
+-            const u64 start = *reinterpret_cast<const u64*>(node + 8);
+-            const u64 next = *reinterpret_cast<const u64*>(node + 0x18);
+-            const u64 end = next ? *reinterpret_cast<const u64*>(next + 8) : start;
+-            if (end > start && end - start < (u64(1) << 32)) {
+-                on_range_allocated(start, end - start);
+-            }
+-        }
++        AllocHook(u64(g[REG_RAX]));
+         g[REG_RSP] += 0x18;
+         g[REG_RIP] = greg_t(ImageBase + AllocReturn + sizeof(AllocReturnCode));
+         return;
+@@ -357,6 +398,34 @@
+                      __ATOMIC_SEQ_CST);
+     mprotect(page, span, PROT_READ | PROT_EXEC);
+     return true;
++}
++bool InstallLifetimeFree(NativeSite& site) {
++    const u64 address=ImageBase+site.offset;
++    Emitter e;
++    if (site.offset==HeapFree) {
++        // Original prologue has no relative operands. The wrapper calls this trampoline,
++        // rather than calling the patched entry recursively.
++        e.Bytes({0x55,0x48,0x89,0xe5,0x41,0x57});
++        const u64 from=reinterpret_cast<u64>(stub_page+stub_used)+e.size;
++        std::uint32_t rel{}; if(!Rel32To(from+5,address+6,rel))return false;
++        e.Bytes({0xe9}); e.U32(rel);
++        original_heap_free=reinterpret_cast<HeapFreeFn>(PlaceStub(e));
++        if(!original_heap_free)return false;
++        e=Emitter{};e.Bytes({0xff,0x25,0,0,0,0});e.U64(reinterpret_cast<u64>(&HeapFreeHook));
++    } else {
++        e.SaveFull();e.Bytes({0x4c,0x89,0xf7}); // mov rdi,r14 (node)
++        e.CallAbs(reinterpret_cast<const void*>(&RangeFreeHook));e.RestoreFull();
++        e.Bytes({0x48,0x8b,0x4c,0x24,0x28});
++        const u64 from=reinterpret_cast<u64>(stub_page+stub_used)+e.size;
++        std::uint32_t rel{};if(!Rel32To(from+5,address+5,rel))return false;
++        e.Bytes({0xe9});e.U32(rel);
++    }
++    const u64 stub=PlaceStub(e);std::uint32_t rel{};
++    if(!stub || !Rel32To(address+5,stub,rel))return false;
++    site.stub.store(stub,std::memory_order_release);
++    const bool valid=site.offset==HeapFree ? Patch(address,HeapFreeCode,sizeof(HeapFreeCode)) : Patch(address,RangeFreeCode,sizeof(RangeFreeCode));
++    if(!valid)return false;
++    WriteJumpOverTrap(address,0xe9,rel);return true;
+ }
+ } // namespace
+ 
+@@ -403,11 +472,23 @@
+                 detours += InstallCallDetour(site.offset);
+             }
+         }
+-        for (auto& site : native_sites) {
++        for (auto& site : std::span(native_sites).first(4)) {
+             if (reinterpret_cast<const u8*>(ImageBase + site.offset)[0] == 0xcc) {
+                 detours += InstallDetour(site);
+             }
+         }
++        if (BbResourceLifetime::Enabled()) {
++            const auto active=[](const char* key) {const char* e=std::getenv(key);return e && e[0]=='1';};
++            // These optional diagnostics patch the collector too; never stack native hooks.
++            const bool conflict=active("BB_FREE_CHECK") || active("BB_LABEL_TRAP");
++            const bool range_free=!conflict && allocator && InstallLifetimeFree(native_sites[4]);
++            const bool heap_free=heap_sites==3 && InstallLifetimeFree(native_sites[5]);
++            const bool alloc_native=std::all_of(native_sites.begin(),native_sites.begin()+4,
++                [](const auto& s){return s.stub.load(std::memory_order_acquire)!=0;});
++            const bool complete=allocator && heap_sites==3 && range_free && heap_free && alloc_native;
++            BbResourceLifetime::SetReclaimReady(complete);
++            std::printf("Guest resource lifetime hooks: range-alloc=%d/1 heap-alloc=%d/3 range-free=%d/1 heap-free=%d/1 diagnostic-conflict=%d reclaim-ready=%d\n",allocator,heap_sites,range_free,heap_free,conflict,complete);
++        }
+         mprotect(stub_page, StubPageSize, PROT_READ | PROT_EXEC);
+         std::printf("Guest hooks: %d native detours (no traps; BB_GUEST_HOOK_TRAPS=1: int3)\n",
+                     detours);
+diff --git a/gpu/shim/bbport_resource_lifetime.cpp b/gpu/shim/bbport_resource_lifetime.cpp
+new file mode 100644
+--- /dev/null
++++ b/gpu/shim/bbport_resource_lifetime.cpp
+@@ -0,0 +1,239 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "bbport_resource_lifetime.h"
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <limits>
++namespace BbResourceLifetime {
++namespace {
++u64 NowMs() {
++  return std::chrono::duration_cast<std::chrono::milliseconds>(
++             std::chrono::steady_clock::now().time_since_epoch())
++      .count();
++}
++bool Valid(u64 a, u64 n) {
++  return a && n && n <= (u64{1} << 32) && a < (u64{1} << 40) &&
++         n <= (u64{1} << 40) - a;
++}
++bool Overlap(u64 a, u64 n, u64 b, u64 m) { return a < b + m && b < a + n; }
++} // namespace
++void Tracker::Remember(Record r) {
++  if (!capacity)
++    return;
++  while (retired.size() >= capacity && !order.empty()) {
++    retired.erase(order.front());
++    order.pop_front();
++  }
++  retired.emplace(r.tag.generation, r);
++  order.push_back(r.tag.generation);
++}
++Tag Tracker::Allocate(Domain d, u64 address, u64 size) {
++  if (unsigned(d) >= unsigned(Domain::Count) || !Valid(address, size))
++    return {};
++  std::scoped_lock lock{mutex};
++  auto &c = counters.domains[unsigned(d)];
++  ++c.allocations;
++  auto &entries = live[unsigned(d)];
++  auto it = entries.lower_bound(address);
++  if (it != entries.begin()) {
++    auto prev = std::prev(it);
++    if (Overlap(address, size, prev->second.address, prev->second.size))
++      it = prev;
++  }
++  while (it != entries.end() && it->first < address + size) {
++    Tag old = it->second;
++    if (!Overlap(address, size, old.address, old.size)) {
++      ++it;
++      continue;
++    }
++    ++c.overlaps;
++    Remember({old, State::Reused, NowMs()});
++    c.live_bytes -= old.size;
++    --c.live_ranges;
++    it = entries.erase(it);
++  }
++  auto &seen = previous[unsigned(d)];
++  if (seen.contains(address))
++    ++c.reuses;
++  if (entries.size() >= capacity ||
++      counters.generation == std::numeric_limits<u64>::max()) {
++    ++c.dropped;
++    return {};
++  }
++  Tag tag{address, size, ++counters.generation, d};
++  entries.emplace(address, tag);
++  if (seen.size() >= capacity && !seen.contains(address))
++    seen.erase(seen.begin());
++  seen[address] = tag.generation;
++  ++c.live_ranges;
++  c.live_bytes += size;
++  c.peak_bytes = std::max(c.peak_bytes, c.live_bytes);
++  return tag;
++}
++Tag Tracker::Find(Domain d, u64 address) const {
++  if (unsigned(d) >= unsigned(Domain::Count))
++    return {};
++  std::scoped_lock lock{mutex};
++  const auto &entries = live[unsigned(d)];
++  auto it = entries.find(address);
++  return it == entries.end() ? Tag{} : it->second;
++}
++Tag Tracker::Owner(u64 address, u64 size) const {
++  if (!Valid(address, size))
++    return {};
++  std::scoped_lock lock{mutex};
++  Tag result{};
++  for (const auto &entries : live) {
++    auto it = entries.upper_bound(address);
++    if (it == entries.begin())
++      continue;
++    --it;
++    const Tag t = it->second;
++    if (t.address <= address && size <= t.size &&
++        address - t.address <= t.size - size &&
++        (!result || t.size < result.size))
++      result = t;
++  }
++  return result;
++}
++bool Tracker::Release(Tag tag) {
++  if (unsigned(tag.domain) >= unsigned(Domain::Count))
++    return false;
++  std::scoped_lock lock{mutex};
++  auto &c = counters.domains[unsigned(tag.domain)];
++  auto &entries = live[unsigned(tag.domain)];
++  auto it = entries.find(tag.address);
++  if (!tag || it == entries.end() || it->second != tag) {
++    ++c.unknown_frees;
++    return false;
++  }
++  entries.erase(it);
++  --c.live_ranges;
++  c.live_bytes -= tag.size;
++  ++c.releases;
++  Remember({tag, State::Released, NowMs()});
++  return true;
++}
++State Tracker::StatusLocked(Tag tag) const {
++  if (!tag || unsigned(tag.domain) >= unsigned(Domain::Count))
++    return State::Unknown;
++  const auto &entries = live[unsigned(tag.domain)];
++  auto it = entries.find(tag.address);
++  if (it != entries.end() && it->second == tag)
++    return State::Live;
++  auto old = retired.find(tag.generation);
++  if (old == retired.end() || old->second.tag != tag)
++    return State::Unknown;
++  if (old->second.state == State::Released) {
++    for (const auto &domain : live) {
++      auto p = domain.lower_bound(tag.address);
++      if (p != domain.begin()) {
++        auto before = std::prev(p);
++        if (before->second.generation > tag.generation &&
++            Overlap(tag.address, tag.size, before->second.address,
++                    before->second.size))
++          return State::Reused;
++      }
++      for (; p != domain.end() && p->first < tag.address + tag.size; ++p)
++        if (p->second.generation > tag.generation)
++          return State::Reused;
++    }
++  }
++  return old->second.state;
++}
++State Tracker::Status(Tag tag) const {
++  std::scoped_lock lock{mutex};
++  return StatusLocked(tag);
++}
++bool Tracker::WithReleased(Tag tag, u64 address, u64 size, u64 age,
++                           const std::function<u64()> &reclaim) {
++  if (!Valid(address, size))
++    return false;
++  std::scoped_lock lock{mutex};
++  for (const auto &c : counters.domains)
++    if (c.dropped)
++      return false;
++  if (StatusLocked(tag) != State::Released || address < tag.address ||
++      size > tag.size || address - tag.address > tag.size - size)
++    return false;
++  const auto &record = retired.at(tag.generation);
++  if (NowMs() - record.released_ms < age)
++    return false;
++  for (const auto &entries : live) {
++    auto it = entries.lower_bound(address);
++    if (it != entries.begin()) {
++      auto p = std::prev(it);
++      if (Overlap(address, size, p->second.address, p->second.size))
++        return false;
++    }
++    if (it != entries.end() &&
++        Overlap(address, size, it->second.address, it->second.size))
++      return false;
++  }
++  const u64 bytes = reclaim();
++  if (bytes) {
++    ++counters.reclaimed_images;
++    counters.reclaimed_bytes += bytes;
++    return true;
++  }
++  return false;
++}
++Snapshot Tracker::Read() const {
++  std::scoped_lock lock{mutex};
++  return counters;
++}
++void Tracker::NoteScan(u64 waiting, u64 protected_images) {
++  std::scoped_lock lock{mutex};
++  ++counters.gc_scans;
++  counters.gc_waiting += waiting;
++  counters.gc_protected += protected_images;
++}
++namespace {
++std::atomic<bool> reclaim_ready{false};
++}
++bool ReclaimReady() {
++  return Enabled() && reclaim_ready.load(std::memory_order_acquire);
++}
++void SetReclaimReady(bool ready) {
++  reclaim_ready.store(ready, std::memory_order_release);
++}
++bool Enabled() {
++  static const bool on = [] {
++    const char *e = std::getenv("BB_GPU_LIFETIME");
++    const char *traps = std::getenv("BB_GUEST_HOOK_TRAPS");
++    return e && e[0] == '1' && !(traps && traps[0] == '1');
++  }();
++  return on;
++}
++Tracker &Get() {
++  static auto *tracker = new Tracker;
++  return *tracker;
++}
++void Report() {
++  if (!Enabled())
++    return;
++  const auto s = Get().Read();
++  constexpr const char *names[] = {"range", "heap"};
++  for (unsigned i = 0; i < unsigned(Domain::Count); ++i) {
++    const auto &c = s.domains[i];
++    std::printf(
++        "Guest resource lifetime %s: allocations=%llu, releases=%llu, "
++        "live-ranges=%llu, live-bytes=%llu, address-reuses=%llu, "
++        "overlapping-replacements=%llu, unknown-frees=%llu, dropped=%llu\n",
++        names[i], (unsigned long long)c.allocations,
++        (unsigned long long)c.releases, (unsigned long long)c.live_ranges,
++        (unsigned long long)c.live_bytes, (unsigned long long)c.reuses,
++        (unsigned long long)c.overlaps, (unsigned long long)c.unknown_frees,
++        (unsigned long long)c.dropped);
++  }
++  std::printf("Guest resource reclaim: images=%llu, allocation-bytes=%llu, "
++              "scans=%llu, gpu-pending=%llu, protected=%llu; explicit releases "
++              "only, no cache budget change\n",
++              (unsigned long long)s.reclaimed_images,
++              (unsigned long long)s.reclaimed_bytes,
++              (unsigned long long)s.gc_scans, (unsigned long long)s.gc_waiting,
++              (unsigned long long)s.gc_protected);
++}
++} // namespace BbResourceLifetime
+diff --git a/gpu/shim/bbport_resource_lifetime.h b/gpu/shim/bbport_resource_lifetime.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shim/bbport_resource_lifetime.h
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <array>
++#include <cstdint>
++#include <deque>
++#include <functional>
++#include <map>
++#include <mutex>
++#include <unordered_map>
++namespace BbResourceLifetime {
++using u64 = std::uint64_t;
++enum class Domain : unsigned { Range, Heap, Count };
++enum class State { Unknown, Live, Released, Reused };
++struct Tag {
++  u64 address{}, size{}, generation{};
++  Domain domain{};
++  explicit operator bool() const { return generation != 0; }
++  bool operator==(const Tag &) const = default;
++};
++struct Counts {
++  u64 allocations{}, releases{}, unknown_frees{}, reuses{}, overlaps{},
++      live_ranges{}, live_bytes{}, peak_bytes{}, dropped{};
++};
++struct Snapshot {
++  std::array<Counts, unsigned(Domain::Count)> domains{};
++  u64 generation{}, reclaimed_images{}, reclaimed_bytes{}, gc_scans{},
++      gc_waiting{}, gc_protected{};
++};
++// Bounded diagnostics: never tracks general malloc or unbounded call stacks.
++// Unknown/missing/overlapping histories cannot authorize reclamation.
++class Tracker {
++public:
++  explicit Tracker(std::size_t capacity = 32768) : capacity(capacity) {}
++  Tag Allocate(Domain, u64 address, u64 size);
++  Tag Find(Domain, u64 address) const;
++  Tag Owner(u64 address, u64 size) const;
++  bool Release(Tag);
++  State Status(Tag) const;
++  // Holds the allocation lock through metadata removal. A replacement
++  // allocation cannot publish the same address halfway through removal of the
++  // old cache entry.
++  bool WithReleased(Tag, u64 address, u64 size, u64 min_age_ms,
++                    const std::function<u64()> &reclaim);
++  Snapshot Read() const;
++  void NoteScan(u64 waiting, u64 protected_images);
++
++private:
++  struct Record {
++    Tag tag;
++    State state;
++    u64 released_ms{};
++  };
++  void Remember(Record);
++  State StatusLocked(Tag) const;
++  mutable std::mutex mutex;
++  const std::size_t capacity;
++  std::array<std::map<u64, Tag>, unsigned(Domain::Count)> live;
++  std::unordered_map<u64, Record> retired;
++  std::deque<u64> order;
++  std::array<std::unordered_map<u64, u64>, unsigned(Domain::Count)> previous;
++  Snapshot counters{};
++};
++bool Enabled();
++bool ReclaimReady();
++void SetReclaimReady(bool ready);
++Tracker &Get();
++void Report();
++} // namespace BbResourceLifetime
+diff --git a/tests/test_guest_resource_hook_state.S b/tests/test_guest_resource_hook_state.S
+new file mode 100644
+--- /dev/null
++++ b/tests/test_guest_resource_hook_state.S
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++.text
++.globl _CheckGuestHookState
++_CheckGuestHookState:
++push %rbp
++push %rbx
++push %r12
++push %r13
++push %r14
++push %r15
++sub $24,%rsp
++mov %rdi,%r15
++mov %rsi,%r12
++mov %rdx,%r13
++vmovdqu 0(%r12),%ymm0
++vmovdqu 32(%r12),%ymm1
++vmovdqu 64(%r12),%ymm2
++vmovdqu 96(%r12),%ymm3
++vmovdqu 128(%r12),%ymm4
++vmovdqu 160(%r12),%ymm5
++vmovdqu 192(%r12),%ymm6
++vmovdqu 224(%r12),%ymm7
++vmovdqu 256(%r12),%ymm8
++vmovdqu 288(%r12),%ymm9
++vmovdqu 320(%r12),%ymm10
++vmovdqu 352(%r12),%ymm11
++vmovdqu 384(%r12),%ymm12
++vmovdqu 416(%r12),%ymm13
++vmovdqu 448(%r12),%ymm14
++vmovdqu 480(%r12),%ymm15
++mov $0x13579,%rax
++mov $0x13579,%rcx
++mov $0x13579,%rdx
++mov $0x13579,%rdi
++mov $0x13579,%rsi
++mov $0x13579,%r8
++mov $0x13579,%r9
++mov $0x13579,%r10
++mov $0x13579,%r11
++stmxcsr (%rsp)
++stc
++pushfq
++pop %r14
++call *%r15
++pushfq
++pop %rbx
++cmp %r14,%rbx
++jne 1f
++cmp $0x13579,%rax
++jne 1f
++cmp $0x13579,%rcx
++jne 1f
++cmp $0x13579,%rdx
++jne 1f
++cmp $0x13579,%rdi
++jne 1f
++cmp $0x13579,%rsi
++jne 1f
++cmp $0x13579,%r8
++jne 1f
++cmp $0x13579,%r9
++jne 1f
++cmp $0x13579,%r10
++jne 1f
++cmp $0x13579,%r11
++jne 1f
++vmovdqu %ymm0,0(%r13)
++vmovdqu %ymm1,32(%r13)
++vmovdqu %ymm2,64(%r13)
++vmovdqu %ymm3,96(%r13)
++vmovdqu %ymm4,128(%r13)
++vmovdqu %ymm5,160(%r13)
++vmovdqu %ymm6,192(%r13)
++vmovdqu %ymm7,224(%r13)
++vmovdqu %ymm8,256(%r13)
++vmovdqu %ymm9,288(%r13)
++vmovdqu %ymm10,320(%r13)
++vmovdqu %ymm11,352(%r13)
++vmovdqu %ymm12,384(%r13)
++vmovdqu %ymm13,416(%r13)
++vmovdqu %ymm14,448(%r13)
++vmovdqu %ymm15,480(%r13)
++stmxcsr 4(%rsp)
++mov (%rsp),%eax
++cmp 4(%rsp),%eax
++jne 1f
++mov $1,%eax
++jmp 2f
++1:
++xor %eax,%eax
++2:
++vzeroupper
++add $24,%rsp
++pop %r15
++pop %r14
++pop %r13
++pop %r12
++pop %rbx
++pop %rbp
++ret
++.globl _ClobberGuestHookState
++_ClobberGuestHookState:
++vzeroall
++sub $8,%rsp
++stmxcsr (%rsp)
++xorl $0x2000,(%rsp)
++ldmxcsr (%rsp)
++add $8,%rsp
++xor %rax,%rax
++xor %rcx,%rcx
++xor %rdx,%rdx
++xor %rdi,%rdi
++xor %rsi,%rsi
++xor %r8,%r8
++xor %r9,%r9
++xor %r10,%r10
++xor %r11,%r11
++clc
++ret
+diff --git a/tests/test_guest_resource_hooks.cpp b/tests/test_guest_resource_hooks.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_guest_resource_hooks.cpp
+@@ -0,0 +1,79 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "../gpu/shim/bbport_guest_hooks.cpp"
++#include <cassert>
++extern "C" int CheckGuestHookState(void (*)(), const void *, void *);
++extern "C" void ClobberGuestHookState();
++int main() {
++  using namespace BbGuestHooks;
++  setenv("BB_GPU_LIFETIME", "1", 1);
++  stub_page = MapStubPage();
++  assert(stub_page);
++  Emitter e;
++  e.SaveFull();
++  e.CallAbs(reinterpret_cast<const void *>(&ClobberGuestHookState));
++  e.RestoreFull();
++  e.Bytes({0xc3});
++  const auto stub = PlaceStub(e);
++  assert(stub);
++  alignas(32) unsigned char input[512], output[512]{};
++  for (unsigned i = 0; i < 512; ++i)
++    input[i] = i * 17 + 3;
++  assert(CheckGuestHookState(reinterpret_cast<void (*)()>(stub), input,
++                             output) == 1);
++  assert(!std::memcmp(input, output, 512));
++  // Install against a tiny synthetic function with the verified game's
++  // prologue. No game.
++  const u64 entry = ImageBase + HeapFree;
++  const auto page = entry & ~u64(4095);
++  assert(mmap(reinterpret_cast<void *>(page), 4096,
++              PROT_READ | PROT_WRITE | PROT_EXEC,
++              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1,
++              0) != MAP_FAILED);
++  auto *code = reinterpret_cast<u8 *>(entry);
++  const u8 function[] = {
++      0x55, 0x48, 0x89, 0xe5, 0x41, 0x57,
++      0x41, 0x56, 0x48, 0xff, 0x07, // inc qword [rdi] -- prove original body
++                                    // executes
++      0x41, 0x5e, 0x41, 0x5f, 0x5d, 0xc3};
++  std::memcpy(code, function, sizeof(function));
++  assert(InstallLifetimeFree(native_sites[5]));
++  auto tag = BbResourceLifetime::Get().Allocate(
++      BbResourceLifetime::Domain::Heap, 0x100000, 4096);
++  u64 called = 0;
++  reinterpret_cast<HeapFreeFn>(entry)(reinterpret_cast<u64>(&called), 0x100000);
++  assert(called == 1 && BbResourceLifetime::Get().Status(tag) ==
++                            BbResourceLifetime::State::Released);
++  assert(mprotect(reinterpret_cast<void *>(page), 4096,
++                  PROT_READ | PROT_WRITE | PROT_EXEC) == 0);
++  std::memcpy(code, function, sizeof(function));
++  code[7] = 0x90; // unsupported version
++  assert(!InstallLifetimeFree(native_sites[5]) && code[0] == 0x55);
++  const u64 range_entry = ImageBase + RangeFree;
++  const auto range_page = range_entry & ~u64(4095);
++  assert(mmap(reinterpret_cast<void *>(range_page), 4096,
++              PROT_READ | PROT_WRITE | PROT_EXEC,
++              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1,
++              0) != MAP_FAILED);
++  const u8 setup[] = {0x41, 0x56, 0x49, 0x89, 0xfe, 0x48, 0x83,
++                      0xec, 0x30, 0x48, 0x89, 0x74, 0x24, 0x28};
++  const u8 finish[] = {0x48, 0x83, 0xc4, 0x30, 0x41, 0x5e, 0xc3};
++  auto *range_code = reinterpret_cast<u8 *>(range_entry);
++  std::memcpy(range_code - sizeof(setup), setup, sizeof(setup));
++  std::memcpy(range_code, RangeFreeCode, sizeof(RangeFreeCode));
++  std::memcpy(range_code + sizeof(RangeFreeCode), finish, sizeof(finish));
++  assert(InstallLifetimeFree(native_sites[4]));
++  u64 node[6]{}, next[2]{}, allocator[32]{};
++  node[1] = 0x200000;
++  node[3] = reinterpret_cast<u64>(next);
++  next[1] = node[1] + 8192;
++  allocator[0xc8 / 8] = 3;
++  auto range_tag = BbResourceLifetime::Get().Allocate(
++      BbResourceLifetime::Domain::Range, node[1], 8192);
++  reinterpret_cast<HeapFreeFn>(range_entry - sizeof(setup))(
++      reinterpret_cast<u64>(node), reinterpret_cast<u64>(allocator));
++  assert(allocator[0xc8 / 8] == 2 &&
++         BbResourceLifetime::Get().Status(range_tag) ==
++             BbResourceLifetime::State::Released);
++  std::puts("PASS: real inline emitter preserves AVX/GPR/flags, free "
++            "trampoline calls original, version mismatch unchanged");
++}
+diff --git a/tests/test_guest_resource_lifetime.cpp b/tests/test_guest_resource_lifetime.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_guest_resource_lifetime.cpp
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "bbport_resource_lifetime.h"
++#include <atomic>
++#include <cassert>
++#include <chrono>
++#include <cstdio>
++#include <thread>
++using namespace BbResourceLifetime;
++int main() {
++  Tracker t;
++  auto a = t.Allocate(Domain::Range, 0x10000, 0x1000);
++  assert(a && t.Owner(0x10100, 128) == a && !t.Owner(0x10fff, 2));
++  assert(!t.Release({0x10000, 0x1000, 0, Domain::Range}));
++  assert(t.Status(a) == State::Live &&
++         !t.WithReleased(a, 0x10000, 16, 0, [] { return 16; }));
++  assert(t.Release(a) && !t.Release(a));
++  bool called = false;
++  assert(!t.WithReleased(a, 0x10000, 16, 60000, [&] {
++    called = true;
++    return 16;
++  }));
++  assert(!called && !t.WithReleased(a, 0xffff, 16, 0, [] { return 16; }));
++  assert(t.WithReleased(a, 0x10100, 128, 0, [] { return 128; }));
++  auto b = t.Allocate(Domain::Range, 0x10000, 0x1000);
++  assert(b.generation != a.generation && !t.Release(a));
++  assert(!t.WithReleased(a, 0x10100, 128, 0, [] { return 128; }));
++  assert(t.Status(b) == State::Live);
++  auto c = t.Allocate(Domain::Range, 0x10800, 0x1000);
++  assert(t.Status(b) == State::Reused && !t.Release(b));
++  assert(t.Release(c));
++  auto parent = t.Allocate(Domain::Heap, 0x10000, 0x10000);
++  assert(!t.WithReleased(c, 0x10800, 128, 0, [] { return 128; }));
++  assert(t.Release(parent));
++  assert(t.WithReleased(c, 0x10800, 128, 0, [] { return 128; }));
++  Tracker limited(2);
++  auto x = limited.Allocate(Domain::Range, 0x1000, 16);
++  assert(limited.Release(x));
++  for (unsigned i = 0; i < 3; ++i) {
++    auto q = limited.Allocate(Domain::Range, 0x2000 + 32 * i, 16);
++    assert(limited.Release(q));
++  }
++  assert(limited.Status(x) ==
++         State::Unknown); // bounded tombstone history fails closed
++  auto y = limited.Allocate(Domain::Heap, 0x1000, 16);
++  assert(limited.Release(y));
++  limited.Allocate(Domain::Range, 0x4000, 16);
++  limited.Allocate(Domain::Range, 0x5000, 16);
++  assert(
++      !limited.Allocate(Domain::Range, 0x1000, 16)); // unobserved replacement
++  assert(!limited.WithReleased(y, 0x1000, 16, 0, [] { return 16; }));
++  assert(limited.Read().domains[0].dropped == 1);
++  Tracker concurrent;
++  auto z = concurrent.Allocate(Domain::Heap, 0x1000, 1024);
++  assert(concurrent.Release(z));
++  std::atomic<bool> started = false, finished = false;
++  std::thread worker;
++  assert(concurrent.WithReleased(z, 0x1000, 16, 0, [&] {
++    worker = std::thread([&] {
++      started = true;
++      concurrent.Allocate(Domain::Heap, 0x1000, 1024);
++      finished = true;
++    });
++    while (!started.load())
++      std::this_thread::yield();
++    std::this_thread::sleep_for(std::chrono::milliseconds(20));
++    assert(!finished.load());
++    return 16;
++  }));
++  worker.join();
++  assert(finished && concurrent.Owner(0x1000, 16));
++  assert(t.Read().reclaimed_images == 2 && t.Read().reclaimed_bytes == 256);
++  std::puts("PASS: explicit frees, generations, overlapping domains, bounded "
++            "history/overflow, atomic reuse protection");
++}
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -30,6 +30,7 @@
+ #include <vector>
+ 
+ #include "common/slot_vector.h"
++#include "bbport_resource_lifetime.h"
+ #include "video_core/texture_cache/sampler_memo.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+@@ -1114,11 +1115,41 @@
+     namespace Stats = Metal::MemoryStats;
+     std::printf("memory categories: real allocation lifetime, views, retired bytes and idle staging backing\n");
+     Settle(f);
++    {
++        Img sampled{f.runtime,MakeInfo(vk::Format::eR8G8B8A8Unorm,8,8)};
++        auto& image=*sampled.image;
++        image.flags=ImageFlagBits::Registered;
++        image.tick_accessed_last=f.runtime.CurrentTick();
++        CHECK(!image.CanReleaseGuestBacking()); // pending recording/submission cannot retire
++        Settle(f);
++        CHECK(image.CanReleaseGuestBacking());
++        image.usage.render_target=1;CHECK(!image.CanReleaseGuestBacking());image.usage.render_target=0;
++        image.usage.depth_target=1;CHECK(!image.CanReleaseGuestBacking());image.usage.depth_target=0;
++        image.usage.storage=1;CHECK(!image.CanReleaseGuestBacking());image.usage.storage=0;
++        image.usage.vo_surface=1;CHECK(!image.CanReleaseGuestBacking());image.usage.vo_surface=0;
++        image.scene_proxy=true;CHECK(!image.CanReleaseGuestBacking());image.scene_proxy=false;
++        image.binding.is_bound=1;CHECK(!image.CanReleaseGuestBacking());image.binding.is_bound=0;
++        image.binding.is_target=1;CHECK(!image.CanReleaseGuestBacking());image.binding.is_target=0;
++        image.binding.needs_rebind=1;CHECK(!image.CanReleaseGuestBacking());image.binding.needs_rebind=0;
++        image.flags|=ImageFlagBits::GpuModified;CHECK(!image.CanReleaseGuestBacking());
++        image.flags=ImageFlagBits::Registered|ImageFlagBits::GpuDirty;CHECK(!image.CanReleaseGuestBacking());
++        image.flags=ImageFlagBits::Registered;image.gpu_write_tick=f.runtime.CurrentTick();
++        CHECK(!image.CanReleaseGuestBacking());Settle(f);CHECK(image.CanReleaseGuestBacking());
++        image.flags=ImageFlagBits::Empty;CHECK(!image.CanReleaseGuestBacking());
++    }
++    Settle(f);
+     const auto initial = Stats::Read();
+     const auto bi = unsigned(Stats::Kind::Buffer), ti = unsigned(Stats::Kind::Target);
+     __weak id<MTLBuffer> weak;
+     @autoreleasepool {
+         auto buffer = std::make_unique<Buffer>(f.runtime, 0, 1 << 20, MemoryType::DeviceLocal, "ledger test");
++        if (BbResourceLifetime::Enabled()) {
++            const auto tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Range,0x34560000,1<<20);
++            f.runtime.AssociateGuestBuffer(buffer->buffer,0x34560000,1<<20);
++            CHECK(Stats::ReadAssociations()[bi].live>=1<<20);
++            CHECK(BbResourceLifetime::Get().Release(tag));
++            CHECK(Stats::ReadAssociations()[bi].released>=1<<20);
++        }
+         weak = (__bridge id<MTLBuffer>)buffer->buffer.native;
+         CHECK(Stats::Read()[bi].bytes >= initial[bi].bytes + (1 << 20));
+         buffer.reset();
+@@ -1141,6 +1172,13 @@
+         ci.flags = vk::ImageCreateFlagBits::eMutableFormat;
+         ci.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment;
+         f.runtime.CreateImage(image,ci);
++        const auto guest_tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,0x12340000,1<<20);
++        f.runtime.AssociateGuestImage(image,0x12340000,64*64*4);
++        if (BbResourceLifetime::Enabled()) {
++            CHECK(Stats::ReadAssociations()[ti].live >= image.size_bytes);
++            CHECK(BbResourceLifetime::Get().Release(guest_tag));
++            CHECK(Stats::ReadAssociations()[ti].released >= image.size_bytes);
++        }
+         parent = (__bridge id<MTLTexture>)image.native;
+         view = [parent newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+         CHECK(view != nil);
