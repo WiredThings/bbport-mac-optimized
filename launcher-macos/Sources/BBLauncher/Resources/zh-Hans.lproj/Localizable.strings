@@ -286,3 +286,6 @@
 "Vulkan (compatibility)" = "Vulkan（兼容模式）";
 "Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable." = "Metal 使用 MetalFX 和相机运动矢量，暂不支持物体运动矢量、RCAS 锐化及 HDR。";
 "Metal presentation mode" = "Metal 显示同步模式";
+
+"Occlusion culling (experimental)" = "遮挡剔除（实验）";
+"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "使用保守的可见性查询。若物体或灯光闪烁，请关闭；下次启动游戏生效。";

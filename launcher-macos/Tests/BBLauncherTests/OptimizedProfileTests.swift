@@ -2,6 +2,21 @@ import XCTest
 @testable import BBLauncher
 
 final class OptimizedProfileTests: XCTestCase {
+
+    func testMetalOcclusionToggleAndBackendIsolation() {
+        let suite = "bbport.occlusion.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var prefs = LauncherPrefs.load(from: defaults)
+        XCTAssertTrue(prefs.metalOcclusion)
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: GameSettings()).environment["BB_METAL_OCCLUSION"], "1")
+        prefs.metalOcclusion = false
+        prefs.save(to: defaults)
+        XCTAssertFalse(LauncherPrefs.load(from: defaults).metalOcclusion)
+        prefs.metalOcclusion = true
+        prefs.renderer = "vulkan"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: GameSettings()).environment["BB_METAL_OCCLUSION"], "0")
+    }
     func testNativeWidePatchAndReturnToStandardResolution() {
         var prefs = LauncherPrefs()
         prefs.renderer = "vulkan"

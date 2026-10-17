@@ -1,0 +1,567 @@
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -12,6 +12,8 @@
+ #import <Metal/Metal.h>
+ 
+ #include <setjmp.h>
++#include "video_core/renderer_metal/mtl_occlusion.h"
++#include "video_core/render_state.h"
+ #include <sys/mman.h>
+ 
+ #include <algorithm>
+@@ -1123,10 +1125,155 @@
+     CHECK(ran);
+ }
+ 
++
++static void TestOcclusion(Fixture& f) {
++    std::printf("native Metal occlusion queries\n");
++    NSString* shaders = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++vertex float4 occlusion_vertex(uint vid [[vertex_id]], constant float& z [[buffer(0)]]) {
++    const float2 xy[3] = {float2(-1,-1), float2(3,-1), float2(-1,3)};
++    return float4(xy[vid], z, 1);
++}
++fragment float4 occlusion_fragment() { return float4(1,0,0,1); }
++)MSL";
++    NSError* error = nil;
++    auto library = [f.mtl newLibraryWithSource:shaders options:nil error:&error];
++    CHECK(library != nil);
++    auto* desc = [MTLRenderPipelineDescriptor new];
++    desc.vertexFunction = [library newFunctionWithName:@"occlusion_vertex"];
++    desc.fragmentFunction = [library newFunctionWithName:@"occlusion_fragment"];
++    desc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
++    desc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
++    auto pipeline = [f.mtl newRenderPipelineStateWithDescriptor:desc error:&error];
++    CHECK(pipeline != nil);
++    auto* zdesc = [MTLDepthStencilDescriptor new];
++    zdesc.depthCompareFunction = MTLCompareFunctionLessEqual;
++    zdesc.depthWriteEnabled = YES;
++    auto depth_state = [f.mtl newDepthStencilStateWithDescriptor:zdesc];
++    auto* texdesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
++                            width:16 height:16 mipmapped:NO];
++    texdesc.usage = MTLTextureUsageRenderTarget;
++    auto color = [f.mtl newTextureWithDescriptor:texdesc];
++    texdesc.pixelFormat = MTLPixelFormatDepth32Float;
++    auto depth = [f.mtl newTextureWithDescriptor:texdesc];
++    auto* pass = [MTLRenderPassDescriptor renderPassDescriptor];
++    pass.colorAttachments[0].texture = color;
++    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
++    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
++    pass.depthAttachment.texture = depth;
++    pass.depthAttachment.loadAction = MTLLoadActionClear;
++    pass.depthAttachment.storeAction = MTLStoreActionStore;
++    pass.depthAttachment.clearDepth = 0.5;
++    Buffer output{f.runtime, 0, 4096, MemoryType::HostCached, "Occlusion test counters"};
++    std::memset(output.mapped_data.data(), 0, output.SizeBytes());
++    Metal::OcclusionQueries queries{f.device, f.scheduler, f.runtime};
++    RenderState state;
++    state.width = state.height = 16;
++    const auto draw = [&](bool visible, bool guest = true, unsigned draws = 1) {
++        if (guest) f.scheduler.RenderEncoder((__bridge const void*)pass, state);
++        else f.scheduler.RenderEncoder((__bridge const void*)pass);
++        const float z = visible ? 0.2f : 0.8f;
++        if (guest) {
++            auto& commands = f.scheduler.Commands();
++            commands.SetRenderPipelineState((__bridge void*)pipeline);
++            commands.SetDepthStencilState((__bridge void*)depth_state);
++            commands.SetBytes(Metal::RenderList::Stage::Vertex, &z, sizeof(z), 0);
++            const Metal::RenderList::Viewport viewport{0,0,16,16,0,1};
++            commands.SetViewports(&viewport, 1);
++            for (unsigned i = 0; i < draws; ++i) commands.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        } else {
++            auto encoder = f.scheduler.GetImpl().render;
++            [encoder setRenderPipelineState:pipeline];
++            [encoder setDepthStencilState:depth_state];
++            [encoder setVertexBytes:&z length:sizeof(z) atIndex:0];
++            [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++        }
++    };
++    constexpr u64 Valid = 1ull << 63;
++    const auto measured = [&](u64 offset, unsigned pairs) {
++        Settle(f);
++        const auto* words = reinterpret_cast<const u64*>(output.mapped_data.data() + offset);
++        u64 samples = 0;
++        for (unsigned k = 0; k < pairs; ++k) {
++            CHECK((words[2*k] & Valid) && (words[2*k+1] & Valid));
++            samples += (words[2*k+1] & ~Valid) - (words[2*k] & ~Valid);
++        }
++        return samples;
++    };
++    const auto interval = [&](bool visible) {
++        queries.Snapshot(&output, 0, 0x1000, 4);
++        draw(visible);
++        queries.Snapshot(&output, 8, 0x1008, 4);
++        return measured(0, 4);
++    };
++    CHECK(interval(true) == 1920ull * 1080); // exact sample density restored from 16x16
++    CHECK(interval(false) == 1920ull * 1080); // max-of-three history suppresses jitter flicker
++    CHECK(interval(false) == 1920ull * 1080);
++    CHECK(interval(false) == 0); // truly hidden after three empty results
++    CHECK(interval(true) == 1920ull * 1080); // immediately visible again
++    queries.Snapshot(&output, 128, 0x2000, 16);
++    draw(true); draw(true); // held passes handed to replay; both must be counted in order
++    queries.Snapshot(&output, 136, 0x2008, 16);
++    CHECK(measured(128, 16) == 2 * 1920ull * 1080);
++    queries.Snapshot(&output, 512, 0x3000, 1);
++    draw(true, true, 2); // a single native query accumulates multiple draws in the same pass
++    queries.Snapshot(&output, 520, 0x3008, 1);
++    CHECK(measured(512, 1) == 2 * 1920ull * 1080);
++    // Query buffers reused within one unsubmitted batch: no CPU writes can reset GPU results.
++    for (unsigned i = 0; i < 8; ++i) {
++        queries.Snapshot(&output, 768 + i*32, 0x4000 + i*16, 1);
++        draw(true);
++        queries.Snapshot(&output, 776 + i*32, 0x4008 + i*16, 1);
++    }
++    for (unsigned i = 0; i < 8; ++i) CHECK(measured(768 + i*32,1) == 1920ull * 1080);
++    // A host-side image copy/presenter draw must not contaminate a guest's hidden interval.
++    for (unsigned i = 0; i < 3; ++i) {
++        queries.Snapshot(&output, 1104, 0x5000, 1);
++        draw(false); draw(true, false);
++        queries.Snapshot(&output, 1112, 0x5008, 1);
++        CHECK(measured(1104,1) == (i == 2 ? 0 : 1));
++    }
++    queries.Snapshot(&output, 1200, 0x6000, 1);
++    queries.MarkUnmeasured();
++    queries.Snapshot(&output, 1208, 0x6008, 1);
++    CHECK(measured(1200,1) >= 0x2ffffff);
++    // Overlapping history-table entries must lose culling opportunities, never hide a block.
++    const auto history_slot = [](u64 key) {
++        const u64 h = (key >> 4) * 0x9e3779b97f4a7c15ull;
++        return (h ^ (h >> 32)) & 4095ull;
++    };
++    u64 colliding = 0x9010;
++    while (history_slot(colliding) != history_slot(0x9000)) colliding += 16;
++    queries.Snapshot(&output, 1400, 0x9000, 1);
++    queries.Snapshot(&output, 1416, colliding, 1);
++    queries.Snapshot(&output, 1408, 0x9008, 1);
++    CHECK(measured(1400,1) >= 0x2ffffff);
++    if (std::getenv("BB_TEST_OCCLUSION_OVERFLOW")) {
++        queries.Snapshot(&output, 1504, 0xa000, 1);
++        for (unsigned i = 0; i < 4097; ++i) {
++            f.scheduler.RenderEncoder((__bridge const void*)pass, state);
++        }
++        queries.Snapshot(&output, 1512, 0xa008, 1);
++        CHECK(measured(1504,1) >= 0x2ffffff); // full ring is visible; no overwrite or wait
++    }
++    // Destruction while this last snapshot is unsubmitted must preserve unretained objects.
++    queries.Snapshot(&output, 1280, 0x7000, 1);
++    draw(true);
++    queries.Snapshot(&output, 1288, 0x7008, 1);
++    // The fixture's raw render objects obey the same unretained-buffer retirement contract.
++    f.scheduler.DeferOperation([color, depth, pipeline, depth_state] {
++        (void)color; (void)depth; (void)pipeline; (void)depth_state;
++    });
++    CHECK(queries.Events() > 20);
++    CHECK(!f.scheduler.HasFailed());
++}
++
+ int main() {
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        TestOcclusion(f);
+         TestLimitsAndFormats(f);
+         TestBuffers(f);
+         TestGuestChunk(f);
+diff --git a/gpu/shadps4/video_core/rasterizer_api.cpp b/gpu/shadps4/video_core/rasterizer_api.cpp
+--- a/gpu/shadps4/video_core/rasterizer_api.cpp
++++ b/gpu/shadps4/video_core/rasterizer_api.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <cstdio>
+ #include <cstdlib>
++#include <string_view>
+ #include "bbport_toggles.h"
+ #include "video_core/buffer_cache/buffer.h"
+ #include "video_core/rasterizer_api.h"
+@@ -31,7 +32,11 @@
+     static const bool enabled = [] {
+         const char* env = std::getenv("BB_OCCLUSION_QUERIES");
+         const char* selftest = std::getenv("BB_PM4_SELFTEST");
+-        return (env && env[0] == '1') || (selftest && selftest[0] == '1');
++        const char* metal = std::getenv("BB_METAL_OCCLUSION");
++        const char* renderer = std::getenv("BB_RENDERER");
++        const bool metal_enabled = metal && metal[0] == '1' && renderer &&
++                                   std::string_view(renderer) == "metal";
++        return (env && env[0] == '1') || (selftest && selftest[0] == '1') || metal_enabled;
+     }();
+     // Experiment bit 4 of BB_TOGGLE_FILE: the fixed sequence while the game runs (A/B).
+     return enabled && GuestInPlace() && !BbToggle::Experiment(4);
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
+@@ -69,6 +69,7 @@
+     struct Impl; ///< Objective-C state of the recording (mtl_rasterizer.mm)
+ 
+ private:
++    std::unique_ptr<VideoCore::OcclusionApi> CreateOcclusion() override;
+     // Recording hooks of VideoCore::RasterizerCore.
+     RenderState BuildRenderState(const RenderTargets& targets) override;
+     void RecordDraw(const VideoCore::PipelineBase* pipeline, const RenderState& state,
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1,3 +1,4 @@
++#include "video_core/renderer_metal/mtl_occlusion.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #import <Metal/Metal.h>
+@@ -193,6 +194,12 @@
+     ShutdownThreads();
+     draw_prep.reset();
+     scheduler.SetSubmitCallback({});
++    occlusion.reset(); // detach the replay hook and retire query buffers before Metal members die
++}
++
++std::unique_ptr<VideoCore::OcclusionApi> Rasterizer::CreateOcclusion() {
++    auto queries = std::make_unique<OcclusionQueries>(device, scheduler, runtime, &buffer_cache);
++    return queries;
+ }
+ 
+ // ---- RasterizerApi: pipeline selection, then the core's record paths (as Vulkan's) ----
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -219,25 +219,39 @@
+     return impl->cmdbuf != nil;
+ }
+ 
+-void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor) {
++void Scheduler::SetVisibilityQuery(VisibilityQuery query) {
++    EndEncoder(); // joins replay before the callback or its buffers can change
++    visibility_query = std::move(query);
++}
++
++void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest) {
+     EndEncoder();
+     if (kind == EncoderKind::None) {
+         return;
+     }
+-    OpenPhysical(kind, pass_descriptor, std::exchange(need_fence_wait, false));
++    OpenPhysical(kind, pass_descriptor, std::exchange(need_fence_wait, false), guest);
+     open_encoder = kind;
+ }
+ 
+-void Scheduler::OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all) {
++void Scheduler::OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest) {
+     id<MTLCommandBuffer> cmdbuf = impl->EnsureCommandBuffer();
+     // Encoders are autoreleased: the pool drains them once the scheduler holds its reference.
+     @autoreleasepool {
+     switch (kind) {
+-    case EncoderKind::Render:
+-        impl->render = [cmdbuf renderCommandEncoderWithDescriptor:(__bridge MTLRenderPassDescriptor*)
+-                                                                        pass_descriptor];
++    case EncoderKind::Render: {
++        MTLRenderPassDescriptor* descriptor = (__bridge MTLRenderPassDescriptor*)pass_descriptor;
++        std::pair<void*, u64> query{};
++        if (guest && visibility_query) {
++            query = visibility_query(pass_descriptor);
++            descriptor.visibilityResultBuffer = (__bridge id<MTLBuffer>)query.first;
++        }
++        impl->render = [cmdbuf renderCommandEncoderWithDescriptor:descriptor];
+         ASSERT_MSG(impl->render, "Could not create a Metal render encoder");
+-        break;
++        if (query.first) {
++            [impl->render setVisibilityResultMode:MTLVisibilityResultModeCounting offset:query.second];
++        }
++        break;
++    }
+     case EncoderKind::Compute:
+         impl->compute = [cmdbuf computeCommandEncoder];
+         break;
+@@ -289,7 +303,7 @@
+     // Experiment bit MtlNoHold switches holding off while the game runs (taken at a pass begin).
+     hold_passes = hold_env && !BbToggle::Experiment(BbToggle::MtlNoHold);
+     if (!hold_passes) {
+-        RenderEncoder(pass_descriptor);
++        BeginEncoder(EncoderKind::Render, pass_descriptor, true);
+         render_state = state;
+         commands.BeginDirect((__bridge void*)impl->render);
+         commands_active = true;
+@@ -332,7 +346,7 @@
+     }
+     hoisted = false;
+     OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->held_pass,
+-                 std::exchange(need_fence_wait, false));
++                 std::exchange(need_fence_wait, false), true);
+     impl->held_pass = nil;
+     if (pass_labels && !held_label.empty()) {
+         impl->render.label = @(held_label.c_str());
+@@ -413,7 +427,7 @@
+             CloseNative(EncoderKind::Compute);
+         }
+         OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->replay_passes[slot],
+-                     job.wait_all);
++                     job.wait_all, true);
+         impl->replay_passes[slot] = nil;
+         if (!job.label.empty()) {
+             impl->render.label = @(job.label.c_str());
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -74,6 +74,11 @@
+         return *impl;
+     }
+ 
++    // A physical guest render pass (also on the replay thread) may count its samples.
++    // Host copies, resolves and postprocessing are excluded. Replacing the hook joins replay.
++    using VisibilityQuery = std::function<std::pair<void*, u64>(const void*)>;
++    void SetVisibilityQuery(VisibilityQuery query);
++
+     // Encoders. At most one is open; asking for another kind (or a new render pass) ends the
+     // open one. The Objective-C encoder is Impl::render/compute/blit.
+ 
+@@ -97,6 +102,8 @@
+     void EndEncoder();
+     /// Ends the open encoder when it is a render pass.
+     void EndRendering();
++    /// Close all encoded work (join replay too); the next encoder waits for its fences.
++    void EndWithBarrier() { EndEncoder(); need_fence_wait = true; }
+     [[nodiscard]] bool IsRendering() const noexcept {
+         return open_encoder == EncoderKind::Render;
+     }
+@@ -226,10 +233,10 @@
+         u64 gpu_tick;
+     };
+ 
+-    void BeginEncoder(EncoderKind kind, const void* pass_descriptor);
++    void BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest = false);
+     /// Creates the encoder of `kind` (none may be open): fence waits, guest chunk use, groups.
+     /// `wait_all`: wait for the fences of every earlier encoder still outstanding first.
+-    void OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all);
++    void OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest = false);
+     /// Ends the physical encoder of `kind` (fence update, groups).
+     void ClosePhysical(EncoderKind kind);
+     void PriorityPendingOpsThread(std::stop_token stoken);
+@@ -258,6 +265,7 @@
+     bool hoisted = false;         ///< the held pass has a compute encoder before it
+     std::string held_label;       ///< BB_PASS_LABELS: the held pass's encoder label
+     VideoCore::SubmitFunc on_submit;
++    VisibilityQuery visibility_query;
+     bool in_submit_callback = false; ///< the callback may record or flush again
+     bool need_fence_wait = false; ///< a barrier came while no encoder was open
+     bool labels_enabled = false;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.h b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.h
+@@ -0,0 +1,29 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++#include <memory>
++#include "video_core/gpu_services.h"
++namespace VideoCore { class BufferCache; struct Buffer; }
++namespace Metal {
++class Device;
++class Scheduler;
++class Runtime;
++// Native visibility counters with GPU-ordered PS4 DB-counter snapshots. No CPU readback,
++// polling, background guest-memory writes or extra wait/flush on the event path.
++class OcclusionQueries final : public VideoCore::OcclusionApi {
++public:
++    OcclusionQueries(Device& device, Scheduler& scheduler, Runtime& runtime,
++                     VideoCore::BufferCache* cache = nullptr);
++    ~OcclusionQueries() override;
++    void Event(VAddr address, u32 pairs) override;
++    void WriteBeforeLabel() override {} // each Event already encoded its snapshot in stream order
++    u64 Events() const noexcept override { return events; }
++    bool OnAccess(VAddr, u64, bool, bool) override { return false; }
++    // Same resolve path, with an explicit destination for offscreen tests (no guest mappings).
++    void Snapshot(const VideoCore::Buffer* destination, u64 offset, VAddr address, u32 pairs);
++    void MarkUnmeasured();
++private:
++    struct Impl;
++    std::unique_ptr<Impl> impl;
++    u64 events = 0;
++};
++} // namespace Metal
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -0,0 +1,182 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// The scale, counter sharing and max-of-three history follow Awakenchan's OcclusionModel
++// (BloodBorneButPc 4f93643e); Metal counting, GPU snapshots and retirement are implemented here.
++#import <Metal/Metal.h>
++#include <algorithm>
++#include <array>
++#include <cstring>
++#include "bbport_toggles.h"
++#include "common/assert.h"
++#include "video_core/buffer_cache/buffer_cache.h"
++#include "video_core/renderer_metal/mtl_occlusion.h"
++#include "video_core/renderer_metal/mtl_runtime_impl.h"
++
++namespace Metal {
++namespace {
++constexpr u32 Slots = 4096;
++constexpr u32 Histories = 4096;
++// Each history is {key, begin, previous[2], has_begin, initialized}: 6 ulongs.
++constexpr u64 HistoryBytes = Histories * 6 * sizeof(u64);
++struct Push { u32 count, poison, pairs, end; u64 key; };
++static_assert(sizeof(Push) == 24);
++NSString* const source = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct Push { uint count, poison, pairs, end; ulong key; };
++struct History { ulong key, begin, p0, p1, has_begin, initialized; };
++kernel void snapshot(device ulong* counts [[buffer(0)]],
++                     device ulong* total [[buffer(1)]],
++                     device History* history [[buffer(2)]],
++                     device ulong* destination [[buffer(3)]],
++                     constant Push& p [[buffer(4)]],
++                     device const uint* scales [[buffer(5)]]) {
++    const ulong unmeasured = 0x2fffffful;
++    const ulong valid = 1ul << 63;
++    ulong sum = total[0];
++    for (uint i = 0; i < p.count; ++i) {
++        const ulong n = counts[i];
++        // Fixed point scale back to PS4 sample density; zero stays zero, positive rounds up.
++        sum += max(n, (n * ulong(scales[i]) + 65535ul) >> 16);
++        counts[i] = 0; // no reuse until this dispatch and its fence precede the next pass
++    }
++    if (p.poison) sum += unmeasured;
++    ulong hash = (p.key >> 4) * 0x9e3779b97f4a7c15ul;
++    device History& h = history[(hash ^ (hash >> 32)) & 4095ul];
++    if (!h.initialized || h.key != p.key) {
++        h.key = p.key; h.p0 = 1; h.p1 = 1; h.has_begin = 0; h.initialized = 1;
++    }
++    if (p.end) {
++        if (h.has_begin) {
++            const ulong measured = sum - h.begin;
++            const ulong report = max(measured, max(h.p0, h.p1));
++            sum += report - measured;
++            h.p1 = h.p0; h.p0 = measured;
++            h.has_begin = 0;
++        } else {
++            sum += unmeasured; // a collision or unmatched end is never an occluded result
++        }
++    } else {
++        h.begin = sum; h.has_begin = 1;
++    }
++    for (uint i = 0; i < p.pairs; ++i) {
++        destination[2 * i] = (sum / p.pairs + (i < sum % p.pairs ? 1ul : 0ul)) | valid;
++    }
++    total[0] = sum;
++}
++)MSL";
++}
++
++struct OcclusionQueries::Impl {
++    Device& device;
++    Scheduler& scheduler;
++    Runtime& runtime;
++    VideoCore::BufferCache* cache;
++    id<MTLBuffer> results, total, history;
++    id<MTLComputePipelineState> pipeline;
++    std::array<u32, Slots> scales{};
++    u32 count = 0;
++    bool poison = false;
++    u64 drop_count = 0;
++    std::pair<void*, u64> Begin(const void* descriptor) {
++        if (count == Slots) {
++            poison = true; // do not overwrite unresolved results or block to find a free slot
++            return {};
++        }
++        auto* pass = (__bridge MTLRenderPassDescriptor*)descriptor;
++        id<MTLTexture> target = pass.depthAttachment.texture ?: pass.colorAttachments[0].texture;
++        const u64 pixels = target ? target.width * target.height : 0;
++        const u64 native = 1920ull * 1080;
++        scales[count] = pixels && pixels < native ? u32(std::min<u64>((native << 16) / pixels, 0xffffffff)) : 65536;
++        if (!target) poison = true;
++        return {(__bridge void*)results, u64(count++) * sizeof(u64)};
++    }
++    static u64 Drops() {
++        u64 n = 0;
++        for (const auto& drop : BbStats::draw_drops) n += drop.load(std::memory_order_relaxed);
++        return n;
++    }
++};
++
++OcclusionQueries::OcclusionQueries(Device& device, Scheduler& scheduler, Runtime& runtime,
++                                   VideoCore::BufferCache* cache)
++    : impl{std::make_unique<Impl>(device, scheduler, runtime, cache)} {
++    auto& d = device.GetImpl();
++    NSError* error = nil;
++    MTLCompileOptions* options = [MTLCompileOptions new];
++    options.mathMode = MTLMathModeSafe;
++    id<MTLLibrary> library = [d.device newLibraryWithSource:source options:options error:&error];
++    ASSERT_MSG(library, "Metal occlusion resolve compile: {}", error.localizedDescription.UTF8String);
++    impl->pipeline = [d.device newComputePipelineStateWithFunction:[library newFunctionWithName:@"snapshot"] error:&error];
++    ASSERT_MSG(impl->pipeline, "Metal occlusion pipeline: {}", error.localizedDescription.UTF8String);
++    impl->results = [d.device newBufferWithLength:Slots * sizeof(u64) options:MTLResourceStorageModeShared];
++    impl->total = [d.device newBufferWithLength:sizeof(u64) options:MTLResourceStorageModeShared];
++    impl->history = [d.device newBufferWithLength:HistoryBytes options:MTLResourceStorageModeShared];
++    ASSERT_MSG(impl->results && impl->total && impl->history, "Metal occlusion buffer allocation failed");
++    for (id<MTLBuffer> buffer in @[impl->results, impl->total, impl->history]) {
++        std::memset(buffer.contents, 0, buffer.length);
++        d.AddResident(buffer);
++    }
++    impl->drop_count = Impl::Drops();
++    scheduler.SetVisibilityQuery([this](const void* descriptor) { return impl->Begin(descriptor); });
++    std::printf("Metal occlusion: counting visibility results, GPU-ordered snapshots, max-of-3 history; 224 KiB fixed buffers\n");
++}
++
++OcclusionQueries::~OcclusionQueries() {
++    impl->scheduler.SetVisibilityQuery({});
++    auto* device = &impl->device.GetImpl();
++    NSArray* buffers = @[impl->results, impl->total, impl->history];
++    id<MTLComputePipelineState> pipeline = impl->pipeline;
++    impl->scheduler.DeferOperation([device, buffers, pipeline] {
++        for (id<MTLBuffer> buffer in buffers) device->RemoveResident(buffer);
++        (void)pipeline; // keep it alive until the command buffer's completed handler, too
++    });
++    impl->scheduler.Finish();
++}
++
++void OcclusionQueries::MarkUnmeasured() {
++    impl->scheduler.EndWithBarrier(); // also joins the replay thread, which owns count/poison
++    impl->poison = true;
++}
++
++void OcclusionQueries::Event(VAddr address, u32 pairs) {
++    ASSERT_MSG(impl->cache && pairs > 0 && pairs <= 16 && (address & 7) == 0,
++               "Invalid Metal occlusion event");
++    auto& cache = *impl->cache;
++    const bool previous = cache.force_writes_in_place;
++    cache.force_writes_in_place = true;
++    const auto [buffer, offset] = cache.ObtainBuffer(address, (pairs - 1) * 16 + 8, true);
++    cache.force_writes_in_place = previous;
++    Snapshot(buffer, offset, address, pairs);
++}
++
++void OcclusionQueries::Snapshot(const VideoCore::Buffer* destination, u64 offset,
++                                VAddr address, u32 pairs) {
++    ASSERT_MSG(pairs > 0 && pairs <= 16 && (offset & 7) == 0 && (address & 7) == 0,
++               "Unaligned or oversized Metal occlusion snapshot");
++    auto& s = impl->scheduler;
++    s.EndWithBarrier(); // releases held commands and joins replay before reading count/scales
++    const u64 dropped = Impl::Drops();
++    const Push push{impl->count, u32(impl->poison || dropped != impl->drop_count), pairs,
++                    u32((address & 15) == 8), address & ~15ull};
++    impl->drop_count = dropped;
++    const u64 bytes = std::max<u64>(sizeof(u32), impl->count * sizeof(u32));
++    auto scales = impl->runtime.StagingRequest(bytes, VideoCore::MemoryType::HostUncached, 16);
++    std::memcpy(scales.mapped, impl->scales.data(), bytes);
++    s.MemoryBarrier();
++    s.ComputeEncoder("Occlusion snapshot");
++    id<MTLComputeCommandEncoder> encoder = s.GetImpl().compute;
++    [encoder setComputePipelineState:impl->pipeline];
++    [encoder setBuffer:impl->results offset:0 atIndex:0];
++    [encoder setBuffer:impl->total offset:0 atIndex:1];
++    [encoder setBuffer:impl->history offset:0 atIndex:2];
++    [encoder setBuffer:NativeBuffer(*destination) offset:offset atIndex:3];
++    [encoder setBytes:&push length:sizeof(push) atIndex:4];
++    [encoder setBuffer:NativeBuffer(*scales.buffer) offset:scales.offset atIndex:5];
++    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
++    // End the compute encoder and force the next pass to wait for counter reset/guest writes.
++    s.EndWithBarrier();
++    impl->count = 0;
++    impl->poison = false;
++    ++events;
++}
++} // namespace Metal

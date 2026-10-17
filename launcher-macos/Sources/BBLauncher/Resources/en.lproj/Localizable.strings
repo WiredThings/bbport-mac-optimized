@@ -286,3 +286,6 @@
 "Vulkan (compatibility)" = "Vulkan (compatibility)";
 "Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable." = "Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable.";
 "Metal presentation mode" = "Metal presentation mode";
+
+"Occlusion culling (experimental)" = "Occlusion culling (experimental)";
+"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "Conservative visibility queries. Disable if objects or lights flicker; applies on next launch.";

@@ -388,6 +388,11 @@ struct DisplaySection: View {
                 ForEach(Catalog.renderers) { Text(L10n.key($0.label)).tag($0.value) }
             }
             .onChange(of: model.prefs.renderer) { _ in model.normalizeRendererSettings() }
+            if model.prefs.renderer == "metal" {
+                Toggle(L10n.key("Occlusion culling (experimental)"), isOn: $model.prefs.metalOcclusion)
+                Text(L10n.key("Conservative visibility queries. Disable if objects or lights flicker; applies on next launch."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Picker(selection: $model.prefs.display) {
                 Text(L10n.key("Main display")).tag("")
                 ForEach(NSScreen.screens.map(\.localizedName), id: \.self) { Text($0).tag($0) }
