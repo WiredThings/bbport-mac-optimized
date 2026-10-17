@@ -251,7 +251,7 @@ diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp b/gpu/shadps
      image.flags &= ~ImageFlagBits::Registered;
      ++registry_generation;
      lru_cache.Free(image.lru_id);
-@@ -1398,11 +1402,64 @@
+@@ -1398,11 +1402,68 @@
      vram_short_until.store(now + 30, std::memory_order_relaxed);
  }
  
@@ -287,7 +287,11 @@ diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp b/gpu/shadps
 +            (image.gpu_write_tick && !backend.IsFreeKnown(image.gpu_write_tick))) {
 +            ++waiting;continue;
 +        }
-+        if (!image.CanReleaseGuestBacking()) { ++protected_images;continue; }
++        // Range-family unknown frees show additional allocation paths; keep it diagnostic
++        // until those are paired too. Only the fully wrapped TLSF heap authorizes removal.
++        if (tag.domain!=BbResourceLifetime::Domain::Heap || !image.CanReleaseGuestBacking()) {
++            ++protected_images;continue;
++        }
 +        if (candidates.size()<16) candidates.emplace_back(id,tag);
 +    }
 +    for(const auto id:reassociate) AssociateGuestImage(id);
@@ -348,7 +352,7 @@ diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.h b/gpu/shadps4/
 diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
 --- a/gpu/shim/bbport_guest_hooks.cpp
 +++ b/gpu/shim/bbport_guest_hooks.cpp
-@@ -1,15 +1,18 @@
+@@ -1,21 +1,26 @@
  // SPDX-License-Identifier: GPL-2.0-or-later
  #include "bbport_guest_hooks.h"
  #include "bbport_heap_sites.h"
@@ -367,23 +371,67 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
  #include <sys/mman.h>
  #include <sys/uio.h>
  #include <ucontext.h>
-@@ -78,8 +81,13 @@
+ #include <unistd.h>
+ 
+ extern "C" void runtime_memory_note_write(uintptr_t address, uint64_t size);
++extern "C" int runtime_memory_vma_info(uintptr_t,int*,int*,uintptr_t*);
++extern "C" const uint64_t* runtime_memory_generation();
+ 
+ namespace BbGuestHooks {
+ namespace {
+@@ -78,8 +83,49 @@
      u64 offset;
      std::atomic<u64> stub{0};
  };
 -std::array<NativeSite, 4> native_sites{{{AllocReturn}, {HeapAllocReturns[0]}, {HeapAllocReturns[1]},
 -                                        {HeapAllocReturns[2]}}};
 +constexpr u64 RangeFree = 0x26aa986, HeapFree = 0x20858a0;
++constexpr u64 HeapPlainAlloc = 0x2085730, HeapAlignedAlloc = 0x2085a60;
++constexpr u8 HeapPlainCode[] = {0x53,0x31,0xc0,0x48,0x39,0x77,0x18};
++constexpr u8 HeapAlignedCode[] = {0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54};
++using HeapPlainFn = u64 (*)(u64,u64);
++using HeapAlignedFn = u64 (*)(u64,u64,u64);
++HeapPlainFn original_heap_plain{};
++HeapAlignedFn original_heap_aligned{};
++bool heap_entry_hooks = false;
++thread_local unsigned heap_alloc_depth{};
++using ScopeQueryFn = int (*)(uintptr_t,int*,int*,uintptr_t*);
++ScopeQueryFn scope_query=&runtime_memory_vma_info;
++const uint64_t* (*generation_query)()=&runtime_memory_generation;
++
++// General CPU heaps use these TLSF routines too. Exclude them before entering the
++// tracking mutex. Cache only within a stable runtime mapping generation; remaps or
++// protection changes invalidate every cached classification, including negative hits.
++bool GpuScope(u64 address) {
++    if (!address) return false;
++    struct Scope { u64 start{},end{},generation{};bool gpu{}; };
++    thread_local std::array<Scope,8> scopes{};
++    thread_local unsigned next{};
++    const auto* sequence=generation_query();
++    const u64 generation=__atomic_load_n(sequence,__ATOMIC_ACQUIRE);
++    if (!(generation&1)) {
++        for(const auto& scope:scopes)
++            if(scope.generation==generation && address>=scope.start && address<scope.end)
++                return scope.gpu;
++    }
++    int prot=0,type=-1;uintptr_t end=address;
++    const bool found=scope_query(address,&prot,&type,&end)!=0;
++    const bool gpu=found && type>=0 && (prot&0x30)!=0;
++    const u64 after=__atomic_load_n(sequence,__ATOMIC_ACQUIRE);
++    if(generation==after && !(after&1) && end>address)
++        scopes[next++%scopes.size()]={address,end,after,gpu};
++    return gpu;
++}
 +constexpr u8 RangeFreeCode[] = {0x48,0x8b,0x4c,0x24,0x28,0x48,0xff,0x89,0xc8,0,0,0};
 +constexpr u8 HeapFreeCode[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56};
 +using HeapFreeFn = void (*)(u64, u64);
 +HeapFreeFn original_heap_free{};
-+std::array<NativeSite, 6> native_sites{{{AllocReturn}, {HeapAllocReturns[0]}, {HeapAllocReturns[1]},
-+                                        {HeapAllocReturns[2]}, {RangeFree}, {HeapFree}}};
++std::array<NativeSite, 8> native_sites{{{AllocReturn}, {HeapAllocReturns[0]}, {HeapAllocReturns[1]},
++                                        {HeapAllocReturns[2]}, {RangeFree}, {HeapFree}, {HeapPlainAlloc}, {HeapAlignedAlloc}}};
  u8* stub_page = nullptr;
  std::size_t stub_used = 0;
  constexpr std::size_t StubPageSize = 4096;
-@@ -98,7 +106,7 @@
+@@ -98,7 +144,7 @@
  }
  
  struct Emitter {
@@ -392,7 +440,7 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
      std::size_t size = 0;
      void Bytes(std::initializer_list<u8> bytes) {
          for (const u8 b : bytes) {
-@@ -119,6 +127,26 @@
+@@ -119,6 +165,26 @@
          Bytes({0x41, 0x54});             // push r12 (holds the unaligned stack pointer)
          Bytes({0x49, 0x89, 0xe4});       // mov r12, rsp
          Bytes({0x48, 0x83, 0xe4, 0xf0}); // and rsp, -16
@@ -419,7 +467,7 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
      }
      void CallAbs(const void* fn) {
          Bytes({0x48, 0xb8}); // movabs rax, fn
-@@ -174,14 +202,38 @@
+@@ -174,14 +240,53 @@
      const u64 next = *reinterpret_cast<const u64*>(node + 0x18);
      const u64 end = next ? *reinterpret_cast<const u64*>(next + 8) : start;
      if (end > start && end - start < (u64(1) << 32)) {
@@ -431,7 +479,7 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
  
  void HeapHook(u64 address, u64 size) {
      if (address != 0 && size != 0 && size < (u64(1) << 32)) {
-+        if (BbResourceLifetime::Enabled())
++        if (BbResourceLifetime::Enabled() && !heap_entry_hooks && GpuScope(address))
 +            BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap, address, size);
          on_range_allocated(address, size);
      }
@@ -449,16 +497,31 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
 +    BbResourceLifetime::Get().Release(tag);
 +}
 +void HeapFreeHook(u64 allocator,u64 address) {
++    if (!GpuScope(address)) {original_heap_free(allocator,address);return;}
 +    auto tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,address);
 +    if (!tag) tag={address,0,0,BbResourceLifetime::Domain::Heap};
 +    original_heap_free(allocator,address);
-+    // Another thread may already have reused the address. Generation matching prevents
-+    // this return from releasing the replacement allocation.
-+    if (address) BbResourceLifetime::Get().Release(tag);
++    BbResourceLifetime::Get().Release(tag);
++}
++u64 HeapPlainHook(u64 allocator,u64 size) {
++    const bool top=heap_alloc_depth++==0;
++    const u64 address=original_heap_plain(allocator,size);
++    --heap_alloc_depth;
++    if(top && address && GpuScope(address))
++        BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++    return address;
++}
++u64 HeapAlignedHook(u64 allocator,u64 size,u64 alignment) {
++    const bool top=heap_alloc_depth++==0;
++    const u64 address=original_heap_aligned(allocator,size,alignment);
++    --heap_alloc_depth;
++    if(top && address && GpuScope(address))
++        BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++    return address;
  }
  
  /// The detour of a site whose int3 is in place (Patch). False: left as a trap.
-@@ -291,24 +343,13 @@
+@@ -291,24 +396,13 @@
          if (rip != ImageBase + site) {
              continue;
          }
@@ -485,7 +548,7 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
          g[REG_RSP] += 0x18;
          g[REG_RIP] = greg_t(ImageBase + AllocReturn + sizeof(AllocReturnCode));
          return;
-@@ -357,6 +398,34 @@
+@@ -357,6 +451,50 @@
                       __ATOMIC_SEQ_CST);
      mprotect(page, span, PROT_READ | PROT_EXEC);
      return true;
@@ -493,16 +556,29 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
 +bool InstallLifetimeFree(NativeSite& site) {
 +    const u64 address=ImageBase+site.offset;
 +    Emitter e;
-+    if (site.offset==HeapFree) {
++    if (site.offset==HeapFree || site.offset==HeapPlainAlloc || site.offset==HeapAlignedAlloc) {
 +        // Original prologue has no relative operands. The wrapper calls this trampoline,
 +        // rather than calling the patched entry recursively.
-+        e.Bytes({0x55,0x48,0x89,0xe5,0x41,0x57});
++        unsigned prologue=0;
++        const void* wrapper=nullptr;
++        if(site.offset==HeapFree) {
++            e.Bytes({0x55,0x48,0x89,0xe5,0x41,0x57});prologue=6;
++            wrapper=reinterpret_cast<const void*>(&HeapFreeHook);
++        } else if(site.offset==HeapPlainAlloc) {
++            e.Bytes({0x53,0x31,0xc0,0x48,0x39,0x77,0x18});prologue=7;
++            wrapper=reinterpret_cast<const void*>(&HeapPlainHook);
++        } else {
++            e.Bytes({0x41,0x57,0x41,0x56,0x41,0x55});prologue=6;
++            wrapper=reinterpret_cast<const void*>(&HeapAlignedHook);
++        }
 +        const u64 from=reinterpret_cast<u64>(stub_page+stub_used)+e.size;
-+        std::uint32_t rel{}; if(!Rel32To(from+5,address+6,rel))return false;
-+        e.Bytes({0xe9}); e.U32(rel);
-+        original_heap_free=reinterpret_cast<HeapFreeFn>(PlaceStub(e));
-+        if(!original_heap_free)return false;
-+        e=Emitter{};e.Bytes({0xff,0x25,0,0,0,0});e.U64(reinterpret_cast<u64>(&HeapFreeHook));
++        std::uint32_t rel{};if(!Rel32To(from+5,address+prologue,rel))return false;
++        e.Bytes({0xe9});e.U32(rel);
++        const u64 original=PlaceStub(e);if(!original)return false;
++        if(site.offset==HeapFree)original_heap_free=reinterpret_cast<HeapFreeFn>(original);
++        else if(site.offset==HeapPlainAlloc)original_heap_plain=reinterpret_cast<HeapPlainFn>(original);
++        else original_heap_aligned=reinterpret_cast<HeapAlignedFn>(original);
++        e=Emitter{};e.Bytes({0xff,0x25,0,0,0,0});e.U64(reinterpret_cast<u64>(wrapper));
 +    } else {
 +        e.SaveFull();e.Bytes({0x4c,0x89,0xf7}); // mov rdi,r14 (node)
 +        e.CallAbs(reinterpret_cast<const void*>(&RangeFreeHook));e.RestoreFull();
@@ -514,13 +590,16 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
 +    const u64 stub=PlaceStub(e);std::uint32_t rel{};
 +    if(!stub || !Rel32To(address+5,stub,rel))return false;
 +    site.stub.store(stub,std::memory_order_release);
-+    const bool valid=site.offset==HeapFree ? Patch(address,HeapFreeCode,sizeof(HeapFreeCode)) : Patch(address,RangeFreeCode,sizeof(RangeFreeCode));
++    const bool valid=site.offset==HeapFree ? Patch(address,HeapFreeCode,sizeof(HeapFreeCode)) :
++        site.offset==HeapPlainAlloc ? Patch(address,HeapPlainCode,sizeof(HeapPlainCode)) :
++        site.offset==HeapAlignedAlloc ? Patch(address,HeapAlignedCode,sizeof(HeapAlignedCode)) :
++        Patch(address,RangeFreeCode,sizeof(RangeFreeCode));
 +    if(!valid)return false;
 +    WriteJumpOverTrap(address,0xe9,rel);return true;
  }
  } // namespace
  
-@@ -403,11 +472,23 @@
+@@ -403,11 +541,26 @@
                  detours += InstallCallDetour(site.offset);
              }
          }
@@ -535,12 +614,15 @@ diff --git a/gpu/shim/bbport_guest_hooks.cpp b/gpu/shim/bbport_guest_hooks.cpp
 +            // These optional diagnostics patch the collector too; never stack native hooks.
 +            const bool conflict=active("BB_FREE_CHECK") || active("BB_LABEL_TRAP");
 +            const bool range_free=!conflict && allocator && InstallLifetimeFree(native_sites[4]);
-+            const bool heap_free=heap_sites==3 && InstallLifetimeFree(native_sites[5]);
++            const bool plain=InstallLifetimeFree(native_sites[6]);
++            const bool aligned=InstallLifetimeFree(native_sites[7]);
++            heap_entry_hooks=plain && aligned;
++            const bool heap_free=InstallLifetimeFree(native_sites[5]);
 +            const bool alloc_native=std::all_of(native_sites.begin(),native_sites.begin()+4,
 +                [](const auto& s){return s.stub.load(std::memory_order_acquire)!=0;});
-+            const bool complete=allocator && heap_sites==3 && range_free && heap_free && alloc_native;
++            const bool complete=allocator && heap_sites==3 && range_free && heap_free && alloc_native && heap_entry_hooks;
 +            BbResourceLifetime::SetReclaimReady(complete);
-+            std::printf("Guest resource lifetime hooks: range-alloc=%d/1 heap-alloc=%d/3 range-free=%d/1 heap-free=%d/1 diagnostic-conflict=%d reclaim-ready=%d\n",allocator,heap_sites,range_free,heap_free,conflict,complete);
++            std::printf("Guest resource lifetime hooks: range-alloc=%d/1 heap-alloc=%d/3 range-free=%d/1 heap-free=%d/1 heap-entry-alloc=%d/2 diagnostic-conflict=%d reclaim-ready=%d gpu-protection-filter=on\n",allocator,heap_sites,range_free,heap_free,int(plain)+int(aligned),conflict,complete);
 +        }
          mprotect(stub_page, StubPageSize, PROT_READ | PROT_EXEC);
          std::printf("Guest hooks: %d native detours (no traps; BB_GUEST_HOOK_TRAPS=1: int3)\n",
@@ -990,15 +1072,29 @@ diff --git a/tests/test_guest_resource_hooks.cpp b/tests/test_guest_resource_hoo
 new file mode 100644
 --- /dev/null
 +++ b/tests/test_guest_resource_hooks.cpp
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,128 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#include "../gpu/shim/bbport_guest_hooks.cpp"
 +#include <cassert>
 +extern "C" int CheckGuestHookState(void (*)(), const void *, void *);
 +extern "C" void ClobberGuestHookState();
++static uint64_t scope_generation=2;
++static int scope_calls=0;
++static bool gpu_mapping=true;
++static int FakeScope(uintptr_t address,int* prot,int* type,uintptr_t* end) {
++    ++scope_calls;*prot=gpu_mapping?0x33:0x3;*type=3;*end=address+65536;return 1;
++}
++static const uint64_t* FakeGeneration() {return &scope_generation;}
 +int main() {
 +  using namespace BbGuestHooks;
 +  setenv("BB_GPU_LIFETIME", "1", 1);
++  scope_query=&FakeScope;generation_query=&FakeGeneration;
++  assert(GpuScope(0x2000));const int before=scope_calls;
++  assert(GpuScope(0x2010) && scope_calls==before);
++  gpu_mapping=false;scope_generation+=2;
++  assert(!GpuScope(0x2010) && scope_calls>before);
++  gpu_mapping=true;scope_generation+=2;
++  assert(GpuScope(0x2010));
 +  stub_page = MapStubPage();
 +  assert(stub_page);
 +  Emitter e;
@@ -1067,6 +1163,41 @@ new file mode 100644
 +  assert(allocator[0xc8 / 8] == 2 &&
 +         BbResourceLifetime::Get().Status(range_tag) ==
 +             BbResourceLifetime::State::Released);
++  // Real malloc/memalign prologues: verify return values, original execution and pairing.
++  assert(mprotect(reinterpret_cast<void*>(page),4096,PROT_READ|PROT_WRITE|PROT_EXEC)==0);
++  const u8 plain_function[]={0x53,0x31,0xc0,0x48,0x39,0x77,0x18,
++      0x48,0x8b,0x07,0x5b,0xc3}; // return [allocator]
++  const u8 aligned_function[]={0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,
++      0x48,0x8b,0x07,0x41,0x5c,0x41,0x5d,0x41,0x5e,0x41,0x5f,0xc3};
++  auto* plain_code=reinterpret_cast<u8*>(ImageBase+HeapPlainAlloc);
++  auto* aligned_code=reinterpret_cast<u8*>(ImageBase+HeapAlignedAlloc);
++  std::memcpy(plain_code,plain_function,sizeof(plain_function));
++  std::memcpy(aligned_code,aligned_function,sizeof(aligned_function));
++  assert(InstallLifetimeFree(native_sites[6]));
++  assert(InstallLifetimeFree(native_sites[7]));
++  u64 heap[4]{0x300000,0,0,1<<20};
++  assert(reinterpret_cast<HeapPlainFn>(plain_code)(reinterpret_cast<u64>(heap),4096)==heap[0]);
++  auto plain_tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,heap[0]);
++  assert(plain_tag && plain_tag.size==4096);
++  assert(BbResourceLifetime::Get().Release(plain_tag));
++  heap[0]=0x400000;
++  assert(reinterpret_cast<HeapAlignedFn>(aligned_code)(reinterpret_cast<u64>(heap),8192,256)==heap[0]);
++  auto aligned_tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,heap[0]);
++  assert(aligned_tag && aligned_tag.size==8192);
++  // Aligned allocation can tail-call the plain entry; count that allocation exactly once.
++  assert(mprotect(reinterpret_cast<void*>(page),4096,PROT_READ|PROT_WRITE|PROT_EXEC)==0);
++  u8 tail[]={0x41,0x5c,0x41,0x5d,0x41,0x5e,0x41,0x5f,0x48,0xb8,
++      0,0,0,0,0,0,0,0,0xff,0xe0};
++  const u64 plain_address=reinterpret_cast<u64>(plain_code);std::memcpy(tail+10,&plain_address,8);
++  std::memcpy(aligned_code+8,tail,sizeof(tail));
++  const auto before_nested=BbResourceLifetime::Get().Read().domains[1].allocations;
++  heap[0]=0x600000;
++  assert(reinterpret_cast<HeapAlignedFn>(aligned_code)(reinterpret_cast<u64>(heap),2048,16)==heap[0]);
++  assert(BbResourceLifetime::Get().Read().domains[1].allocations==before_nested+1);
++  // CPU-only heap calls must not grow the GPU interval map or count as unknown frees.
++  gpu_mapping=false;scope_generation+=2;heap[0]=0x500000;
++  assert(reinterpret_cast<HeapPlainFn>(plain_code)(reinterpret_cast<u64>(heap),1024)==heap[0]);
++  assert(!BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,heap[0]));
 +  std::puts("PASS: real inline emitter preserves AVX/GPR/flags, free "
 +            "trampoline calls original, version mismatch unchanged");
 +}
