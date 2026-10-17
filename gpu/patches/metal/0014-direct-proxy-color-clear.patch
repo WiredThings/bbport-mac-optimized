@@ -1,0 +1,202 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -874,7 +874,7 @@
+     // bbport (P7.5): a native use of a proxied scene image resolves its proxy first (this records
+     // a copy pass, which ends the open render pass: Transit comes before the pass of a draw is
+     // opened, the core's BindResources and BeginRendering order).
+-    if (scene_targets) scene_targets->NativeAccess(*image, dst_access);
++    if (scene_targets) scene_targets->NativeAccess(*image, dst_access, bool(dst_stage & vk::PipelineStageFlagBits2::eClear));
+     // The bookkeeping of the shared image state only: Metal tracks the hazards of textures
+     // itself and has no layouts.
+     scratch_barriers.clear();
+@@ -2040,6 +2040,11 @@
+ void Runtime::ClearImage(Image* dst, const SubresourceRange& range,
+                          const vk::ClearValue& clear_value) {
+     if (!dst->backing) {
++        return;
++    }
++    if(scene_targets && scene_targets->ClearProxy(*dst,range,clear_value)) {
++        dst->flags |= ImageFlagBits::GpuModified;
++        dst->flags &= ~ImageFlagBits::Dirty;
+         return;
+     }
+     const bool needs_flush =
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -70,12 +70,15 @@
+     /// view is the whole texture (`info.format` selects the pixel format when it differs).
+     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
+     /// Runtime::Transit: a use of the native image. Writes are the access bits of `access`.
+-    void NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access);
++    void NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access, bool clear = false);
+ 
+     /// Called only after validating a complete non-aliasing native CopyImage destination.
+     void FullCopyOverwrite(VideoCore::Image& image, const void* source, const void* target);
+ 
+     [[nodiscard]] u64 DiscardedCopyResolves() const;
++    /// Full single-level color clear of an existing proxy; lazy native resolve preserves readers.
++    bool ClearProxy(VideoCore::Image&, const VideoCore::SubresourceRange&, const vk::ClearValue&);
++    [[nodiscard]] u64 ProxyClearCount() const;
+ 
+     /// Host-only nearest copy/scale. Caller owns coherence and ShaderRead/PixelFormatView usage.
+     /// Both textures must be single-sample 2D, level zero, with matching format classes.
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -194,7 +194,8 @@
+         }
+     };
+     std::unique_ptr<CopyAudit> copy_audit;
+-    u64 overwrite_candidates=0, overwrite_dirty=0, overwrite_discarded=0;
++    u64 overwrite_candidates=0, overwrite_dirty=0, overwrite_discarded=0, proxy_clears=0;
++    std::chrono::steady_clock::time_point proxy_clear_reported{};
+     std::chrono::steady_clock::time_point overwrite_reported{};
+     Device::Impl& dev;
+     id<MTLLibrary> library = nil;
+@@ -382,13 +383,14 @@
+                                         : vk::ImageLayout::eColorAttachmentOptimal;
+ }
+ 
+-void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access) {
++void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access, bool clear) {
+     const char* reason="native-read";
+     if(access & vk::AccessFlagBits2::eTransferWrite) reason="transfer-write";
+     else if(access & vk::AccessFlagBits2::eTransferRead) reason="transfer-read";
+     else if(access & vk::AccessFlagBits2::eShaderWrite) reason="shader-write";
+     else if(access & (vk::AccessFlagBits2::eColorAttachmentWrite|vk::AccessFlagBits2::eDepthStencilAttachmentWrite)) reason="attachment-write";
+     else if(access & vk::AccessFlagBits2::eShaderRead) reason="shader-read";
++    if(clear) reason="clear";
+     const auto before=std::exchange(impl->copy_reason,reason);
+     constexpr auto writes = vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eTransferWrite |
+                             vk::AccessFlagBits2::eColorAttachmentWrite |
+@@ -631,6 +633,57 @@
+     }
+ }
+ 
++u64 SceneTargets::ProxyClearCount() const { return impl->proxy_clears; }
++
++bool SceneTargets::ClearProxy(VideoCore::Image& image, const VideoCore::SubresourceRange& range,
++                              const vk::ClearValue& value) {
++    if(!Reduced() || !Eligible(image) || image.info.props.is_depth ||
++       image.info.resources.levels!=1 || image.info.resources.layers!=1 ||
++       range.base.level!=0 || range.base.layer!=0 || range.extent.levels!=1 || range.extent.layers!=1 ||
++       image.info.pixel_format!=image.backing->image.image_ci.format) return false;
++    const auto it=entries.find(Key(image.image_uid,0));
++    if(it==entries.end()) return false; // no new allocation/cache entry just for a clear
++    auto& entry=*it->second;
++    const auto proxy=TextureOf(Of(entry).image), native=NativeTexture(image);
++    const auto cls=ClassOf(proxy.pixelFormat);
++    if(IsDepth(cls) || cls==Class::None || proxy.pixelFormat!=native.pixelFormat ||
++       native.textureType!=MTLTextureType2D || native.sampleCount!=1 ||
++       !(native.usage & MTLTextureUsageRenderTarget)) return false;
++    static const bool baseline=[] {const char* v=std::getenv("BB_MTL_PROXY_CLEAR");return !v||v[0]!='0';}();
++    static const char* control=std::getenv("BB_MTL_PROXY_CLEAR_FILE");
++    static bool enabled=baseline;
++    static auto next=std::chrono::steady_clock::time_point{};
++    const auto now=std::chrono::steady_clock::now();
++    if(control && *control && now>=next) {
++        next=now+std::chrono::seconds(1);
++        if(FILE* file=std::fopen(control,"r")) {
++            const int v=std::fgetc(file);std::fclose(file);
++            if((v=='0'||v=='1') && enabled!=(v=='1')) {
++                enabled=v=='1';std::printf("Metal proxy clear mode: enabled=%d; existing full color proxy only\n",int(enabled));
++            }
++        }
++    }
++    if(!enabled) return false;
++    MTLClearColor color;
++    if(cls==Class::Uint) color=MTLClearColorMake(value.color.uint32[0],value.color.uint32[1],value.color.uint32[2],value.color.uint32[3]);
++    else if(cls==Class::Sint) color=MTLClearColorMake(value.color.int32[0],value.color.int32[1],value.color.int32[2],value.color.int32[3]);
++    else color=MTLClearColorMake(value.color.float32[0],value.color.float32[1],value.color.float32[2],value.color.float32[3]);
++    // The clear is constant over the entire logical surface, independent of resolution.
++    // Do not touch native contents: NativeAccess will materialize the same constant on demand.
++    runtime.FlushBarriers();
++    auto* pass=[MTLRenderPassDescriptor renderPassDescriptor];
++    pass.colorAttachments[0].texture=proxy;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
++    pass.colorAttachments[0].storeAction=MTLStoreActionStore;pass.colorAttachments[0].clearColor=color;
++    scheduler.RenderEncoder((__bridge const void*)pass);
++    scheduler.LabelEncoder("Scene proxy clear");scheduler.EndRendering();
++    entry.state.ProxyWrite();++impl->proxy_clears;
++    if(now-impl->proxy_clear_reported>=std::chrono::seconds(5)) {
++        std::printf("Metal proxy clear: direct=%llu; no native clear/resolve/refill, existing color proxy\n",(unsigned long long)impl->proxy_clears);
++        impl->proxy_clear_reported=now;
++    }
++    return true;
++}
++
+ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
+                                               const VideoCore::ImageViewInfo& info, bool clear_color) {
+     auto& original = Original(id);
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -961,6 +961,59 @@
+     f.runtime.scene_targets=previous;Settle(f);
+ }
+ 
++static void TestDirectProxyClear(Fixture& f) {
++    std::printf("direct proxy color clear matches native pixels and lazy readers across formats\n");
++    World world{f};SceneTargets targets{f.device,f.scheduler,f.runtime,world.Lookup()};targets.SetSize({960,540});
++    const auto previous=f.runtime.scene_targets;f.runtime.scene_targets=&targets;
++    const char* disabled=std::getenv("BB_MTL_PROXY_CLEAR");const bool enabled=!disabled||disabled[0]!='0';
++    const std::array<std::pair<vk::Format,unsigned>,6> formats{{
++        {vk::Format::eR8G8B8A8Unorm,4},{vk::Format::eR8G8B8A8Srgb,4},{vk::Format::eB8G8R8A8Unorm,4},
++        {vk::Format::eR32Uint,4},{vk::Format::eR32Sint,4},{vk::Format::eR16G16B16A16Sfloat,8}}};
++    VideoCore::SubresourceRange range{};range.extent.levels=range.extent.layers=1;
++    for(const auto [format,bpp]:formats) {
++        const auto dst=world.Add(MakeInfo(format,1920,1080));auto& image=world.Get(dst);
++        const auto reference=world.Add(MakeInfo(format,1920,1080));auto& ref=world.Get(reference);
++        ImageViewInfo view{};view.format=format;view.range=range;
++        WriteTexture(f,NativeOf(image),bpp,std::vector<u8>(1920*1080*bpp,0x35));
++        targets.Attachment(dst,view); // a dirty proxy whose old pixels will be discarded
++        vk::ClearValue value{};
++        if(format==vk::Format::eR32Uint) value.color.uint32[0]=29;
++        else if(format==vk::Format::eR32Sint) value.color.int32[0]=-29;
++        else {const float color[4]={.25f,.5f,.75f,1.f};for(unsigned c=0;c<4;++c)value.color.float32[c]=color[c];}
++        const auto before=targets.ProxyClearCount();
++        f.runtime.ClearImage(&ref,range,value);f.runtime.ClearImage(&image,range,value);
++        CHECK(targets.ProxyClearCount()==before+(enabled?1:0));
++        if(enabled) CHECK(targets.ProxyDirty(image,0));
++        const auto expected=ReadTexture(f,NativeOf(ref),bpp);
++        const auto proxy=targets.Attachment(dst,view);const auto actual=ReadTexture(f,TextureOf(proxy.view),bpp);
++        for(size_t offset=0;offset<actual.size();offset+=bpp)
++            for(unsigned c=0;c<bpp;++c) CHECK(actual[offset+c]==expected[c]);
++        // GPU download/native reads must still materialize the correct full-size result.
++        targets.NativeAccess(image,vk::AccessFlagBits2::eTransferRead);
++        CHECK(ReadTexture(f,NativeOf(image),bpp)==expected);
++        // Native storage writes invalidate and a later loading attachment must refill.
++        targets.NativeAccess(image,vk::AccessFlagBits2::eShaderWrite);
++        WriteTexture(f,NativeOf(image),bpp,std::vector<u8>(1920*1080*bpp,0x35));
++        const auto loaded=targets.Attachment(dst,view);
++        const auto loaded_pixels=ReadTexture(f,TextureOf(loaded.view),bpp);for(auto b:loaded_pixels) CHECK(b==0x35);
++        auto partial=range;partial.base.level=1;CHECK(!targets.ClearProxy(image,partial,value));
++    }
++    // A mip-chain/depth clear must keep the original preservation path.
++    auto mip_info=MakeInfo(vk::Format::eR8G8B8A8Unorm,960,540);mip_info.resources.levels=3;
++    const auto mip=world.Add(mip_info);const auto depth=world.Add(MakeInfo(vk::Format::eD32SfloatS8Uint,1920,1080));
++    vk::ClearValue zero{};CHECK(!targets.ClearProxy(world.Get(mip),range,zero));CHECK(!targets.ClearProxy(world.Get(depth),range,zero));
++    if(const char* control=std::getenv("BB_MTL_PROXY_CLEAR_FILE")) {
++        const auto id=world.Add(MakeInfo(vk::Format::eR8G8B8A8Unorm,1920,1080));auto& image=world.Get(id);
++        ImageViewInfo view{};view.format=vk::Format::eR8G8B8A8Unorm;view.range=range;targets.Attachment(id,view);
++        auto set=[&](char mode) {FILE* file=std::fopen(control,"w");CHECK(file!=nullptr);if(file){std::fputc(mode,file);std::fclose(file);}std::this_thread::sleep_for(std::chrono::milliseconds(1100));};
++        const auto before=targets.ProxyClearCount();set('0');f.runtime.ClearImage(&image,range,zero);CHECK(targets.ProxyClearCount()==before);
++        targets.Attachment(id,view);set('1');f.runtime.ClearImage(&image,range,zero);CHECK(targets.ProxyClearCount()==before+1);
++        targets.NativeAccess(image,vk::AccessFlagBits2::eTransferRead);
++        const auto bytes=ReadTexture(f,NativeOf(image),4);for(auto b:bytes) CHECK(b==0);
++    }
++    f.runtime.scene_targets=previous;Settle(f);
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -974,6 +1027,7 @@
+         TestLifetime(f);
+         TestFullColorClear(f);
+         TestFullCopyOverwrite(f);
++        TestDirectProxyClear(f);
+         TestGameVelocityMirror(f);
+         TestMotionBlurCopy(f);
+         TestVelocityBatch(f);

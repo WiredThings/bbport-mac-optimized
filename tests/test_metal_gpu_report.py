@@ -35,6 +35,7 @@ Metal GPU render parts: name=guest-render, vertex-samples=2, sampled-vertex-ms=0
 Metal GPU hot pass: label=960x540 C6 D vs abc ps def, samples=2, sampled-ms=2, vertex-samples=2, sampled-vertex-ms=0.3, fragment-samples=1, sampled-fragment-ms=0.5, paired-samples=1, sampled-overlap-ms=0.1, sampled-stage-gap-ms=1.3
 Metal scene copy: uid=42, mip=0, direction=resolve, reason=transfer-write, source=960x540, target=1920x1080, format=70, calls=20
 Metal overwrite discard: candidates=100, dirty=50, skipped-resolves=25
+Metal proxy clear: direct=400; cumulative
 """
         report = module.analyze(window(8) + window(4))
         part = report['render_parts']['guest-render']
@@ -51,6 +52,7 @@ Metal overwrite discard: candidates=100, dirty=50, skipped-resolves=25
         self.assertEqual((row['source'], row['target'], row['calls']), ('960x540', '1920x1080', 40))
         self.assertEqual(row['reason'], 'transfer-write')
         self.assertEqual(report['overwrite_last']['skipped-resolves'], 25)
+        self.assertEqual(report['proxy_clear_last']['direct'], 400)
 
     def test_no_game_frames_rejected(self):
         with self.assertRaises(ValueError):

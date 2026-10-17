@@ -28,6 +28,8 @@ def analyze(text, skip_windows=0):
             windows[-1]['scene_copies'].append(row)
         elif 'Metal overwrite discard: candidates=' in line and windows:
             windows[-1]['overwrite'] = fields(line)
+        elif 'Metal proxy clear: direct=' in line and windows:
+            windows[-1]['proxy_clear'] = fields(line)
         elif 'Metal GPU hot pass: label=' in line and windows:
             label = re.search(r'label=(.*?), samples=', line)[1]
             windows[-1]['hot_passes'].append(dict(fields(line), label=label))
@@ -87,10 +89,12 @@ def analyze(text, skip_windows=0):
             scene_copies[key] = scene_copies.get(key, 0) + r['calls']
     copy_rows = [dict(uid=k[0], mip=k[1], direction=k[2], reason=k[3], source=k[4], target=k[5], format=k[6], calls=v) for k, v in scene_copies.items()]
     overwrite = [w['overwrite'] for w in selected if 'overwrite' in w]
+    proxy_clear = [w['proxy_clear'] for w in selected if 'proxy_clear' in w]
     return dict(windows=selected, frames=frames,
                 render_parts=render_parts,
                 scene_copy_rows=sorted(copy_rows, key=lambda x: x['calls'], reverse=True),
                 overwrite_last=overwrite[-1] if overwrite else None,
+                proxy_clear_last=proxy_clear[-1] if proxy_clear else None,
                 hot_passes_by_span=sorted(hot_passes.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
                 hot_pass_dropped=sum(w.get('hot_dropped', 0) for w in selected),
                 stages_by_span=sorted(stages.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
