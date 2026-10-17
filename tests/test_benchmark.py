@@ -13,6 +13,16 @@ spec=importlib.util.spec_from_file_location('benchmark',Path(__file__).parents[1
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 
 class BenchmarkTests(unittest.TestCase):
+    def test_memory_warning_grace_and_recovery(self):
+        g=b.MemoryGuard(100,256);warning=dict(level=2,swap_mib=100)
+        g.check(warning,10);g.check(warning,39)
+        g.check(dict(level=1,swap_mib=100),40);g.check(warning,50)
+        with self.assertRaisesRegex(RuntimeError,'warning guard'):g.check(warning,80)
+    def test_memory_scoring_refuses_warning_immediately(self):
+        with self.assertRaisesRegex(RuntimeError,'warning guard'):b.MemoryGuard(100,256).check(dict(level=2,swap_mib=100),10,True)
+    def test_memory_critical_or_swap_growth_stops_immediately(self):
+        for sample in [dict(level=4,swap_mib=100),dict(level=1,swap_mib=357)]:
+            with self.assertRaisesRegex(RuntimeError,'Memory guard'):b.MemoryGuard(100,256).check(sample,10)
     def test_capture_refuses_unowned_target(self):
         with patch.object(b,'game_pids',return_value=[]), tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError): b.capture_frame(Mock(pid=1234),Path(d),Mock())
@@ -98,6 +108,16 @@ class BenchmarkTests(unittest.TestCase):
             p=Path(d);(p/'a').write_text(json.dumps(a));(p/'b').write_text(json.dumps(c))
             with contextlib.redirect_stdout(io.StringIO()) as output:b.compare(argparse.Namespace(before=p/'a',after=p/'b'))
             return json.loads(output.getvalue())
+    def test_compare_rejects_audio_backend_change(self):
+        a=self.result();c=self.result();c['audio_driver']='dummy'
+        with self.assertRaisesRegex(ValueError,'audio backends'):self.compare(a,c)
+    def test_compare_rejects_different_telemetry_overhead(self):
+        a=self.result();c=self.result();c['telemetry_mode']='minimal'
+        with self.assertRaisesRegex(ValueError,'telemetry overhead'):self.compare(a,c)
+    def test_missing_diagnostic_timings_are_unknown_not_zero(self):
+        rows=self.rows()
+        for r in rows:del r['rec_busy_ms']
+        m=b.metrics(rows);self.assertIsNone(m['rec_busy_ms']);self.assertEqual(m['fps'],50)
     def test_compare_same_workload(self):
         a=self.result();c=self.result();c['renderer_sha256']='new binary';self.assertEqual(self.compare(a,c)['fps_delta_percent'],0)
     def test_capture_diagnostic_cannot_be_compared_as_fps(self):

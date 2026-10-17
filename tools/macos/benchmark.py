@@ -26,7 +26,7 @@ from datetime import datetime
 DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
-OVERRIDES = {'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
+OVERRIDES = {'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
 
 
@@ -75,6 +75,20 @@ def pressure():
     if not level or not swap:
         raise ValueError('Cannot read system pressure; refusing an unmonitored benchmark')
     return dict(level=int(level[1]), swap_mib=float(swap[1]))
+
+
+class MemoryGuard:
+    """Stop sustained warning pressure; scored windows require normal pressure throughout."""
+    def __init__(self, initial_swap, max_growth):
+        self.initial_swap=initial_swap;self.max_growth=max_growth;self.warning_since=None
+    def check(self, sample, now, measuring=False):
+        if sample['level']>=4 or sample['swap_mib']-self.initial_swap>self.max_growth:
+            raise RuntimeError('Memory guard stopped this benchmark; no result accepted')
+        if sample['level']>=2:
+            if self.warning_since is None:self.warning_since=now
+            if measuring or now-self.warning_since>=30:
+                raise RuntimeError('Memory warning guard stopped this benchmark; no result accepted')
+        else:self.warning_since=None
 
 
 def frame_rows(path):
@@ -153,6 +167,8 @@ def metrics(rows):
                   frame_ms_p99=frames[min(len(frames)-1, math.ceil(len(frames)*.99)-1)],
                   one_percent_low_fps=1000 / statistics.mean(frames[-worst:]), worst_frame_ms=frames[-1])
     for key in ('draws', 'dispatches', 'compiles', 'gpu_ms', 'rec_busy_ms', 'present_wait_ms', 'tick_wait_ms', 'cam_x', 'cam_y', 'cam_z'):
+        if any(key not in r or r[key]=='' for r in rows):
+            result[key]=None;continue
         values = [float(r[key]) for r in rows]
         result[key] = dict(mean=statistics.mean(values), min=min(values), max=max(values))
     return result
@@ -330,6 +346,14 @@ def run(args):
     env.update(BB_USER_DIR=str(folder/'user'), BB_DATA_DIR=str(folder/'data'), BB_CONFIG=str(folder/'data/bbport.ini'),
                BB_GPU_USER_DIR=str(root/'cache'), BB_PAD_FILE=str(pad), BB_PAD_FILE_ONLY='1', BB_FRAME_STATS='1',
                BB_TIMEOUT=str(args.startup_timeout+args.warmup+args.seconds+90))
+    if args.minimal_stats:
+        if b'BB_FRAME_LOG_ONLY' not in (engine/'bin/gpu-metal/libbbgpu.dylib').read_bytes():
+            raise ValueError('App lacks lightweight frame telemetry support; update first')
+        env.pop('BB_FRAME_STATS',None);env['BB_FRAME_LOG_ONLY']='1'
+    if args.mute:
+        if b'BB_BENCHMARK_MUTE' not in (engine/'bin/bb-probe-metal').read_bytes():
+            raise ValueError('App lacks per-stream benchmark mute support; refusing an audible run')
+        env['BB_BENCHMARK_MUTE']='1'
     if args.profile_gpu:
         env.update(BB_MTL_GPU_TIMING='1', BB_MTL_GPU_TIMING_EVERY='8')
     if args.capture_frame:
@@ -340,6 +364,7 @@ def run(args):
     source_before = inventory(manifest['source_save'])
     process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
     log_path=folder/'run.log';frames=folder/'data/out/frames.csv'
+    memory_guard=MemoryGuard(initial_pressure['swap_mib'],args.max_swap_growth_mib);measuring=False
     def guard():
         nonlocal last_guard
         if process.poll() is not None:
@@ -348,8 +373,7 @@ def run(args):
         if now-last_guard<3:
             return
         last_guard=now;p=pressure()
-        if p['level']>=4 or p['swap_mib']-initial_pressure['swap_mib'] > args.max_swap_growth_mib:
-            raise RuntimeError('Memory guard stopped this benchmark; no result accepted')
+        memory_guard.check(p,now,measuring)
         lines=log_path.read_text(errors='replace').splitlines()
         totals=[s for s in lines if s.startswith('Metal memory totals:')][-1:]
         if totals and int(re.search(r'footprint=(\d+)',totals[0])[1]) > 9*1024**3:
@@ -413,7 +437,7 @@ def run(args):
             native=[json.loads(line[7:]) for line in captures[0].read_text().splitlines() if line.startswith('NATIVE ')]
             if not native or native[0].get('truncated',True) or not any(row.get('op')=='attachment' for row in native):
                 raise RuntimeError('Native metadata is incomplete')
-            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Native attachments/encoders and semantic guest resources; no texture or buffer contents.','Not a performance result.']))
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Native attachments/encoders and semantic guest resources; no texture or buffer contents.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
             print(f'Attachment metadata captured: {captures[0]}',flush=True)
             return
         if args.capture_frame:
@@ -426,8 +450,9 @@ def run(args):
             write_json(folder/'capture.json',captured)
             print(f"Single frame captured: {captured['trace']}",flush=True)
             return
+        measuring=True;last_guard=0;guard()
         first_t=float(frame_rows(frames)[-1]['t_s']);measure_start=time.monotonic()
-        write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds))
+        write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds,elapsed_start=measure_start-started,normal_pressure_required=True))
         print(f'Measuring {args.seconds}s; GPU stage timing={args.profile_gpu}',flush=True)
         while time.monotonic()-measure_start<args.seconds:
             guard();time.sleep(.5)
@@ -446,7 +471,7 @@ def run(args):
         if faults:
             raise RuntimeError(f'GPU faults: {faults[:2]}')
         result=dict(schema=1,valid=False,name=args.name,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
-                    profile_gpu=args.profile_gpu,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
+                    profile_gpu=args.profile_gpu,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_driver=env.get('SDL_AUDIO_DRIVER','default'),audio_muted=args.mute,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
                     renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),
                     variants=variants,settings_sha256=manifest['ini_sha256'],camera=camera,samples=samples,
                     system=dict(model=command(['sysctl','-n','hw.model']).strip(),os=command(['sw_vers','-productVersion']).strip()),
@@ -486,6 +511,10 @@ def compare(args):
         raise ValueError('Diagnostic captures are not performance results')
     if not a['valid'] or not b['valid'] or a['cohort_fingerprint']!=b['cohort_fingerprint'] or a['profile_gpu']!=b['profile_gpu'] or a['system']!=b['system']:
         raise ValueError('Unmatched workloads, instrumentation or host; refusing comparison')
+    if a.get('telemetry_mode','full')!=b.get('telemetry_mode','full'):
+        raise ValueError('Different frame telemetry overhead; refusing comparison')
+    if a.get('audio_driver','default')!=b.get('audio_driver','default') or a.get('audio_muted',False)!=b.get('audio_muted',False):
+        raise ValueError('Different audio backends; refusing unlike process workloads')
     if math.dist(a['camera'],b['camera'])>.05:
         raise ValueError('Different player positions')
     draw_delta=(b['metrics']['draws']['mean']/a['metrics']['draws']['mean']-1)*100
@@ -498,7 +527,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('init');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--launcher-data',type=Path,default=DEFAULT_DATA);p.add_argument('--expected-camera',nargs=3,type=float);p.set_defaults(func=init)
-    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
+    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--mute',action='store_true');p.add_argument('--minimal-stats',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
     p=sub.add_parser('compare');p.add_argument('before',type=Path);p.add_argument('after',type=Path);p.set_defaults(func=compare)
     args=parser.parse_args()
     if args.command=='run' and not (15<=args.warmup<=180 and 15<=args.seconds<=180 and 30<=args.startup_timeout<=600 and 256<=args.max_swap_growth_mib<=2048):

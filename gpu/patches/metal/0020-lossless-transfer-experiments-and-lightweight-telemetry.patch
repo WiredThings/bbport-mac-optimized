@@ -1,0 +1,708 @@
+diff --git a/gpu/shadps4/core/libraries/videoout/driver.cpp b/gpu/shadps4/core/libraries/videoout/driver.cpp
+--- a/gpu/shadps4/core/libraries/videoout/driver.cpp
++++ b/gpu/shadps4/core/libraries/videoout/driver.cpp
+@@ -401,6 +401,35 @@
+ 
+     // bbport: BB_FRAME_STATS=1 prints flip rate and frame time spread every 5 seconds.
+     static const bool frame_stats = EmulatorSettingsImpl::Flag("BB_FRAME_STATS", false);
++    // Opt-in lightweight benchmark telemetry: leave all BB_FRAME_STATS timers disabled.
++    static const bool log_only=EmulatorSettingsImpl::Flag("BB_FRAME_LOG_ONLY",false);
++    if(log_only && !frame_stats) {
++        using Clock=std::chrono::steady_clock;
++        static FILE* const file=[] {
++            const char* path=std::getenv("BB_FRAME_LOG");FILE* f=path&&*path?std::fopen(path,"w"):nullptr;
++            if(f)std::fprintf(f,"t_s,frame_ms,draws,dispatches,compiles,cam_x,cam_y,cam_z,gpu_ms\n");
++            return f;
++        }();
++        if(file) {
++            static auto start=Clock::now(),last=start;const auto now=Clock::now();
++            static u64 last_draws=0,last_dispatches=0,last_compiles=0,last_camera=0,last_gpu=0;
++            const auto delta=[](u64 v,u64& old){const auto n=v>=old?v-old:v;old=v;return n;};
++            char camera[96]=",,";
++            const auto committed=BbStats::camera_frames.load(std::memory_order_acquire);
++            if(committed!=last_camera) {
++                last_camera=committed;float p[3];
++                for(unsigned i=0;i<3;++i){const auto bits=BbStats::camera_position_bits[i].load(std::memory_order_relaxed);std::memcpy(p+i,&bits,4);}
++                std::snprintf(camera,sizeof(camera),"%.3f,%.3f,%.3f",p[0],p[1],p[2]);
++            }
++            std::fprintf(file,"%.4f,%.2f,%llu,%llu,%llu,%s,%.2f\n",
++                std::chrono::duration<double>(now-start).count(),std::chrono::duration<double,std::milli>(now-last).count(),
++                (unsigned long long)delta(BbStats::draws.load(std::memory_order_relaxed),last_draws),
++                (unsigned long long)delta(BbStats::dispatches.load(std::memory_order_relaxed),last_dispatches),
++                (unsigned long long)delta(Vulkan::g_bb_compiles.load(std::memory_order_relaxed),last_compiles),camera,
++                delta(BbStats::gpu_busy_ns.load(std::memory_order_relaxed),last_gpu)/1e6);
++            last=now;static unsigned pending=0;if(++pending>=120){std::fflush(file);pending=0;}
++        }
++    }
+     if (frame_stats) {
+         using Clock = std::chrono::steady_clock;
+         static Clock::time_point window_start = Clock::now(), last = window_start;
+diff --git a/gpu/shadps4/video_core/cache_backend.h b/gpu/shadps4/video_core/cache_backend.h
+--- a/gpu/shadps4/video_core/cache_backend.h
++++ b/gpu/shadps4/video_core/cache_backend.h
+@@ -446,6 +446,9 @@
+     /// barriers before and records the accesses after.
+     virtual void DispatchTiling(const TilingDispatch& dispatch) = 0;
+ 
++    /// Optional fused texture-to-guest tiler. False leaves the caller's original staging path.
++    virtual bool DownloadTiledImage(Image* image, const TilingDispatch& dispatch) { return false; }
++
+     /// Creates the fault buffer parser: a kernel for fault bitmaps of 1 bit per page of
+     /// `1 << page_bits` bytes that lists at most `max_faults` addresses. Called once, before the
+     /// first ParseFaultBuffer.
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -222,6 +222,7 @@
+ 
+     // The caches' own GPU work: compute kernels from the D11 host shaders
+     void DispatchTiling(const VideoCore::TilingDispatch& dispatch) override;
++    bool DownloadTiledImage(VideoCore::Image* image, const VideoCore::TilingDispatch& dispatch) override;
+     void CreateFaultParser(u32 page_bits, u32 max_faults) override;
+     void ParseFaultBuffer(const VideoCore::FaultParseDispatch& dispatch) override;
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -43,6 +43,11 @@
+ constexpr u64 LargeMinGranularity = 64_KB;
+ constexpr u64 RingIdleFrames = 3000;
+ constexpr u64 LargeIdleFrames = 3000;
++struct StagingAuditCounters {
++    std::array<u64,3> calls{},bytes{},medium_calls{},medium_bytes{};
++    bool Enabled() const {static const bool on=[] {const char* v=std::getenv("BB_MTL_STAGING_AUDIT");return v&&v[0]=='1';}();return on;}
++} staging_audit;
++
+ 
+ constexpr vk::AccessFlags2 ReadMask =
+     vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
+@@ -506,6 +511,11 @@
+ 
+ StagingSpan StagingPool::Request(u64 size, MemoryType type, u64 alignment, bool deferred) {
+     ASSERT_MSG(u32(type) < NumTypes, "Staging memory of type {}", u32(type));
++    if(staging_audit.Enabled()) {
++        const auto i=u32(type);++staging_audit.calls[i];staging_audit.bytes[i]+=size;
++        if(size>StagingBlockSize/2 && size<=StagingBlockSize){++staging_audit.medium_calls[i];staging_audit.medium_bytes[i]+=size;}
++    }
++
+     Ring& ring = rings[u32(type)];
+     if (deferred || size > StagingBlockSize) {
+         return RequestLarge(size, type, deferred);
+@@ -527,8 +537,14 @@
+         }
+     }
+     if (!best) {
++        static const bool adaptive=[] {const char* v=std::getenv("BB_MTL_ADAPTIVE_STAGING");return v&&v[0]=='1';}();
++        // Large in-ring requests cannot share a 16 MiB block with a second such request.
++        // Use a fitting size instead of retaining up to half a block as unusable tail.
++        // Existing blocks, ring watches, wait policy and retained-byte budget are unchanged.
++        const u64 block_size=adaptive && type==MemoryType::DeviceLocal && size>StagingBlockSize/2
++            ? Common::AlignUp(size,LargeMinGranularity) : StagingBlockSize;
+         best = &ring.blocks.emplace_back(Block{
+-            .buffer = std::make_unique<StreamBuffer>(backend, type, StagingBlockSize),
++            .buffer = std::make_unique<StreamBuffer>(backend, type, block_size),
+             .last_used_frame = frame,
+         });
+         ring.current = ring.blocks.size() - 1;
+@@ -607,6 +623,20 @@
+ }
+ 
+ void StagingPool::TickFrame() {
++    static const bool audit=[] {const char* v=std::getenv("BB_MTL_STAGING_AUDIT");return v&&v[0]=='1';}();
++    if(audit && frame%300==0) {
++        for(unsigned i=0;i<3;++i)std::printf("Metal staging requests: frame=%llu type=%u calls=%llu bytes=%llu medium-calls=%llu medium-bytes=%llu\n",(unsigned long long)frame,i,(unsigned long long)staging_audit.calls[i],(unsigned long long)staging_audit.bytes[i],(unsigned long long)staging_audit.medium_calls[i],(unsigned long long)staging_audit.medium_bytes[i]);
++
++        u64 ring_bytes=0,idle600=0,idle3000=0,discarded=0,age=0;
++        for(const auto& ring:rings)for(const auto& b:ring.blocks) {
++            ring_bytes+=b.buffer->SizeBytes();age=std::max(age,frame-b.last_used_frame);
++            if(b.discarded){discarded+=b.buffer->SizeBytes();continue;}
++            if(!backend.IsFreeKnown(b.buffer->LastTick()))continue;
++            if(frame-b.last_used_frame>=600)idle600+=b.buffer->SizeBytes();
++            if(frame-b.last_used_frame>=3000)idle3000+=b.buffer->SizeBytes();
++        }
++        std::printf("Metal staging audit: frame=%llu ring-bytes=%llu idle600-retired=%llu idle3000-retired=%llu discarded-capacity=%llu oldest-age=%llu\n",(unsigned long long)frame,(unsigned long long)ring_bytes,(unsigned long long)idle600,(unsigned long long)idle3000,(unsigned long long)discarded,(unsigned long long)age);
++    }
+     ++frame;
+     for (Ring& ring : rings) {
+         TrimRing(ring);
+@@ -618,16 +648,18 @@
+ 
+ void StagingPool::TrimRing(Ring& ring) {
+     auto& blocks = ring.blocks;
++    u64 cached_bytes=0;for(const auto& block:blocks)cached_bytes+=block.buffer->SizeBytes();
+     for (size_t i = blocks.size(); i-- > 0;) {
+         Block& block = blocks[i];
+         if (frame - block.last_used_frame < RingIdleFrames ||
+             !backend.IsFreeKnown(block.buffer->LastTick())) {
+             continue;
+         }
+-        if (blocks.size() <= keep_blocks) {
++        if (cached_bytes <= keep_blocks * StagingBlockSize) {
+             if (!block.discarded) block.discarded = backend.DiscardIdleStaging(*block.buffer);
+             continue;
+         }
++        cached_bytes-=block.buffer->SizeBytes();
+         blocks.erase(blocks.begin() + i);
+         if (i < ring.current) {
+             --ring.current;
+@@ -1635,6 +1667,19 @@
+         return;
+     }
+     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
++    // Opt-in diagnostic: identify real proxy-to-native copy round trips before optimizing.
++    static const bool copy_audit=[] {const char* v=std::getenv("BB_MTL_COPY_AUDIT");return v&&v[0]=='1';}();
++    if(copy_audit && scene_targets) {
++        static u64 calls=0,source_current=0,source_dirty=0,both_existing=0,equal_extent=0;
++        static auto reported=std::chrono::steady_clock::now();
++        const bool current=scene_targets->ProxyCurrent(*src);
++        ++calls;source_current+=current;source_dirty+=scene_targets->ProxyDirty(*src,0);
++        both_existing+=current&&scene_targets->Tracks(dst->image_uid);
++        equal_extent+=current&&scene_targets->Tracks(dst->image_uid)&&src->info.size.width==dst->info.size.width&&src->info.size.height==dst->info.size.height;
++        if(calls<=20 || (current && source_current<=16))std::printf("Metal image copy audit pair: src=%llu dst=%llu, size=%ux%u/%ux%u format=%u/%u mips=%u/%u layers=%u/%u, proxy=%d/%d dirty=%d\n",(unsigned long long)src->image_uid,(unsigned long long)dst->image_uid,src->info.size.width,src->info.size.height,dst->info.size.width,dst->info.size.height,unsigned(src->info.pixel_format),unsigned(dst->info.pixel_format),src->info.resources.levels,dst->info.resources.levels,src->info.resources.layers,dst->info.resources.layers,int(current),int(scene_targets->Tracks(dst->image_uid)),int(scene_targets->ProxyDirty(*src,0)));
++        const auto now=std::chrono::steady_clock::now();
++        if(now-reported>=std::chrono::seconds(5)) {std::printf("Metal image copy audit: calls=%llu current-source=%llu dirty-source=%llu both-existing=%llu equal-extent=%llu\n",(unsigned long long)calls,(unsigned long long)source_current,(unsigned long long)source_dirty,(unsigned long long)both_existing,(unsigned long long)equal_extent);reported=now;}
++    }
+ 
+     if (src->info.pixel_format != dst->info.pixel_format) {
+         LOG_DEBUG(Render,
+@@ -1651,6 +1696,11 @@
+     // Match sample count before copying
+     SetBackingSamples(dst, dst->info.num_samples, false);
+     SetBackingSamples(src, src->info.num_samples);
++    if(scene_targets && scene_targets->CopyDirectToNative(*src,*dst)) {
++        dst->flags |= (src->flags & ImageFlagBits::GpuModified);
++        dst->flags &= ~ImageFlagBits::Dirty;
++        return;
++    }
+     PromoteCopySource(src, *dst);
+ 
+     const vk::ImageType src_type = src->backing->image.image_ci.imageType;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
+@@ -46,6 +46,7 @@
+     /// buffer slots); null pipeline when it did not compile (logged).
+     id<MTLComputePipelineState> Tiling(const VideoCore::TilingDispatch& dispatch,
+                                        const HostShaders::Shader*& shader);
++    id<MTLComputePipelineState> TextureTiling(const VideoCore::TilingDispatch& dispatch, bool proxy);
+     /// Builds the fault parser pipeline for bitmaps of 1 bit per `1 << page_bits` bytes.
+     void CreateFaultParser(u32 page_bits, u32 max_faults);
+     [[nodiscard]] id<MTLComputePipelineState> FaultParser() const {
+@@ -84,6 +85,7 @@
+     std::unordered_map<const void*, id<MTLLibrary>> libraries;
+     using TilingKey = std::tuple<u32, bool, std::array<u32, 12>>;
+     std::map<TilingKey, id<MTLComputePipelineState>> tiling;
++    std::map<std::pair<bool,TilingKey>, id<MTLComputePipelineState>> texture_tiling;
+     id<MTLComputePipelineState> fault_parser = nil;
+     id<MTLComputePipelineState> fill_u32 = nil;
+     std::map<std::tuple<u32, u32, bool>, id<MTLRenderPipelineState>> ms_copy;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+@@ -8,6 +8,8 @@
+ #include "common/assert.h"
+ #include "common/logging/log.h"
+ #include "video_core/renderer_metal/mtl_runtime_impl.h"
++#include "video_core/renderer_metal/mtl_texture_tiling.h"
++#include "video_core/renderer_metal/mtl_scene_targets.h"
+ 
+ #include "video_core/host_shaders_msl/color_to_ms_depth_frag_msl.h"
+ #include "video_core/host_shaders_msl/fault_buffer_process_comp_msl.h"
+@@ -179,6 +181,34 @@
+     return pipeline;
+ }
+ 
++id<MTLComputePipelineState> HostKernels::TextureTiling(const VideoCore::TilingDispatch& dispatch, bool proxy) {
++    const auto key=std::make_pair(proxy,TilingKey{32, true, dispatch.constants});
++    if(const auto i=texture_tiling.find(key);i!=texture_tiling.end())return i->second;
++    if(texture_tiling.size()>=32)return nil;
++    const auto source=TextureTilingSource(H::TILING_MACRO_32_COMP.msl);
++    if(source.empty()) {texture_tiling.emplace(key,nil);return nil;}
++    NSError* error=nil;
++    auto library=[dev.device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()]
++                                         options:CompileOptions() error:&error];
++    MTLFunctionConstantValues* values=[MTLFunctionConstantValues new];
++    for(const auto& spec:H::TILING_MACRO_32_COMP.spec_constants) {
++        if(spec.id>=dispatch.num_constants)continue;
++        if(spec.type==H::SpecConstant::Type::Bool) {
++            const bool value=dispatch.constants[spec.id]!=0;
++            [values setConstantValue:&value type:MTLDataTypeBool atIndex:spec.id];
++        } else {
++            const u32 value=dispatch.constants[spec.id];
++            [values setConstantValue:&value type:MTLDataTypeUInt atIndex:spec.id];
++        }
++    }
++    const u32 scale=proxy?2u:1u;[values setConstantValue:&scale type:MTLDataTypeUInt atIndex:12];
++    auto function=library?[library newFunctionWithName:@"main0" constantValues:values error:&error]:nil;
++    auto pipeline=function?[dev.device newComputePipelineStateWithFunction:function error:&error]:nil;
++    if(!pipeline)LOG_WARNING(Render,"Texture tiling unavailable; original staging retained: {}",ErrorText(error));
++    texture_tiling.emplace(key,pipeline);
++    return pipeline;
++}
++
+ void HostKernels::CreateFaultParser(u32 page_bits, u32 max_faults) {
+     const std::array<u32, 2> constants{page_bits, max_faults};
+     fault_parser = ComputePipeline(H::FAULT_BUFFER_PROCESS_COMP, constants.data(),
+@@ -307,6 +337,51 @@
+             threadsPerThreadgroup:MTLSizeMake(shader->local_size[0], 1, 1)];
+ }
+ 
++bool Runtime::DownloadTiledImage(VideoCore::Image* image, const VideoCore::TilingDispatch& dispatch) {
++    static const bool enabled=[] {const char* v=std::getenv("BB_MTL_TEXTURE_TILING");return v&&v[0]=='1';}();
++    if(!enabled || !image || !image->backing || !dispatch.is_macro ||
++       !dispatch.key.is_tiler || dispatch.key.num_bits!=32 || dispatch.key.num_samples!=1 ||
++       dispatch.num_constants!=12 || dispatch.constants[3]!=1 || dispatch.group_count_x==0 ||
++       !dispatch.tiled.buffer || !dispatch.params.buffer)return false;
++    const auto& info=image->info;
++    // A single tightly pitched RGBA8 UNORM plane has an exact float-read inverse. sRGB,
++    // compressed/integer/float/depth, arrays, mip chains and padded linear rows keep the blit.
++    if(info.pixel_format!=vk::Format::eR8G8B8A8Unorm || info.num_samples!=1 ||
++       info.resources.levels!=1 || info.resources.layers!=1 || info.size.depth!=1 ||
++       info.pitch!=info.size.width || info.mips_layout[0].pitch!=info.size.width ||
++       info.size.width%8!=0 || image->backing->num_samples!=1 ||
++       dispatch.tiled.offset>dispatch.tiled.buffer->SizeBytes() ||
++       info.guest_size>dispatch.tiled.buffer->SizeBytes()-dispatch.tiled.offset ||
++       dispatch.tiled.range<info.guest_size)return false;
++    auto source=NativeTexture(*image);
++    if(source.pixelFormat!=MTLPixelFormatRGBA8Unorm || source.textureType!=MTLTextureType2D ||
++       source.sampleCount!=1 || source.mipmapLevelCount!=1 || source.arrayLength!=1 ||
++       source.width!=info.size.width || source.height!=info.size.height || source.buffer ||
++       !(source.usage&MTLTextureUsageShaderRead))return false;
++    BeforeImageAccess();
++    const void* proxy=scene_targets?scene_targets->ExistingTilingProxy(*image):nullptr;
++    auto pipeline=impl->kernels.TextureTiling(dispatch,proxy!=nullptr);if(!pipeline)return false;
++    // Resolve reduced proxies exactly as the old DownloadImage did before reading native data.
++    bool flush=false;
++    if(proxy) source=(__bridge id<MTLTexture>)proxy; // native remains dirty until a real native reader
++    else flush=Transit(image,vk::ImageLayout::eShaderReadOnlyOptimal,
++                       vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderRead);
++    flush|=IsBufferAccessed(dispatch.tiled.buffer,dispatch.tiled.offset,info.guest_size,true);
++    if(flush)FlushBarriers();
++    scheduler.ComputeEncoder("Texture to guest tiling");
++    auto compute=impl->sched.compute;
++    [compute setComputePipelineState:pipeline];
++    [compute setTexture:source atIndex:0];
++    [compute setBuffer:NativeBuffer(*dispatch.tiled.buffer) offset:dispatch.tiled.offset atIndex:1];
++    [compute setBuffer:NativeBuffer(*dispatch.params.buffer) offset:dispatch.params.offset atIndex:3];
++    [compute dispatchThreadgroups:MTLSizeMake(dispatch.group_count_x,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
++    AccessBuffer(dispatch.tiled.buffer,dispatch.tiled.offset,info.guest_size,
++                 vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderWrite);
++    static u64 count=0,bytes=0,proxies=0;++count;bytes+=info.guest_size;proxies+=proxy!=nullptr;
++    if(count==1 || count%600==0)std::printf("Metal texture tiling: copies=%llu linear-staging-avoided=%llu bytes proxy-resolves-avoided=%llu; exact RGBA8 reads, original tiled addresses\n",(unsigned long long)count,(unsigned long long)bytes,(unsigned long long)proxies);
++    return true;
++}
++
+ void Runtime::CreateFaultParser(u32 page_bits, u32 max_faults) {
+     impl->kernels.CreateFaultParser(page_bits, max_faults);
+ }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -74,6 +74,11 @@
+ 
+     /// Called only after validating a complete non-aliasing native CopyImage destination.
+     void FullCopyOverwrite(VideoCore::Image& image, const void* source, const void* target);
++    /// Resolve a dirty source proxy straight into a complete, disjoint native copy target.
++    bool CopyDirectToNative(VideoCore::Image& source, VideoCore::Image& target);
++    [[nodiscard]] u64 DirectCopyCount() const;
++    /// Existing current RGBA8 proxy with exactly 2x native extent; no fill/allocation/coherence change.
++    const void* ExistingTilingProxy(const VideoCore::Image&) const;
+ 
+     [[nodiscard]] u64 DiscardedCopyResolves() const;
+     /// Full single-level color clear of an existing proxy; lazy native resolve preserves readers.
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -213,6 +213,8 @@
+         }
+     };
+     std::unique_ptr<CopyAudit> copy_audit;
++    u64 direct_copies=0;
++    std::chrono::steady_clock::time_point direct_reported{};
+     u64 overwrite_candidates=0, overwrite_dirty=0, overwrite_discarded=0, proxy_clears=0;
+     std::chrono::steady_clock::time_point proxy_clear_reported{};
+     std::chrono::steady_clock::time_point overwrite_reported{};
+@@ -669,6 +671,60 @@
+ } // namespace
+ 
+ u64 SceneTargets::DiscardedCopyResolves() const { return impl->overwrite_discarded; }
++
++u64 SceneTargets::DirectCopyCount() const {return impl->direct_copies;}
++
++const void* SceneTargets::ExistingTilingProxy(const VideoCore::Image& source) const {
++    if(!source.backing || !ProxyDirty(source,0) || !Eligible(source))return nullptr;
++    const auto& a=source.info;
++    if(a.pixel_format!=vk::Format::eR8G8B8A8Unorm || a.resources.levels!=1 || a.resources.layers!=1)return nullptr;
++    const auto found=entries.find(Key(source.image_uid,0));if(found==entries.end())return nullptr;
++    auto proxy=TextureOf(Of(*found->second).image),native=NativeTexture(source);
++    if(!proxy || !native || proxy.pixelFormat!=MTLPixelFormatRGBA8Unorm || native.pixelFormat!=proxy.pixelFormat ||
++       native.width!=a.size.width || native.height!=a.size.height || native.width!=proxy.width*2 || native.height!=proxy.height*2 ||
++       !(proxy.usage&MTLTextureUsageShaderRead))return nullptr;
++    for(id<MTLTexture> t:{proxy,native})
++        if(t.textureType!=MTLTextureType2D || t.sampleCount!=1 || t.mipmapLevelCount!=1 || t.arrayLength!=1 ||
++           t.parentTexture || t.buffer || t.iosurface || t.heap || t.isAliasable || t.storageMode!=MTLStorageModePrivate)return nullptr;
++    return (__bridge const void*)proxy;
++}
++
++bool SceneTargets::CopyDirectToNative(VideoCore::Image& source, VideoCore::Image& target) {
++    static const bool enabled=[] {const char* v=std::getenv("BB_MTL_DIRECT_COPY");return v&&v[0]=='1';}();
++    if(!enabled || &source==&target || !source.backing || !target.backing || source.backing==target.backing ||
++       !ProxyDirty(source,0) || !Eligible(source) || !Eligible(target))return false;
++    const auto& a=source.info;const auto& b=target.info;
++    if(a.resources.levels!=1 || b.resources.levels!=1 || a.resources.layers!=1 || b.resources.layers!=1 ||
++       a.size.width!=b.size.width || a.size.height!=b.size.height || a.pixel_format!=b.pixel_format ||
++       !a.guest_address || !b.guest_address || !a.guest_size || !b.guest_size ||
++       a.guest_size>~u64(0)-a.guest_address || b.guest_size>~u64(0)-b.guest_address ||
++       !(a.guest_address+a.guest_size<=b.guest_address || b.guest_address+b.guest_size<=a.guest_address))return false;
++    const auto found=entries.find(Key(source.image_uid,0));if(found==entries.end())return false;
++    id<MTLTexture> proxy=TextureOf(Of(*found->second).image);
++    id<MTLTexture> native=NativeTexture(source),dest=NativeTexture(target);
++    if(!proxy || !native || !dest || native==dest || proxy==dest || IsDepth(ClassOf(proxy.pixelFormat)) ||
++       proxy.pixelFormat!=native.pixelFormat || native.pixelFormat!=dest.pixelFormat ||
++       native.width!=a.size.width || native.height!=a.size.height || dest.width!=b.size.width || dest.height!=b.size.height ||
++       native.width!=proxy.width*2 || native.height!=proxy.height*2)return false;
++    // No promoted/reinterpreted views, layered surfaces or potentially aliased allocations.
++    for(id<MTLTexture> t:{proxy,native,dest})
++        if(t.textureType!=MTLTextureType2D || t.sampleCount!=1 || t.mipmapLevelCount!=1 || t.arrayLength!=1 ||
++           t.parentTexture || t.buffer || t.iosurface || t.heap || t.isAliasable || t.storageMode!=MTLStorageModePrivate)return false;
++    if(!(proxy.usage&MTLTextureUsageShaderRead) || !(dest.usage&MTLTextureUsageRenderTarget))return false;
++    // Exactly the existing nearest resolve into an identically formatted destination. The
++    // source native image stays stale/dirty and will resolve normally on its next real read.
++    FullCopyOverwrite(target,(__bridge const void*)native,(__bridge const void*)dest);
++    runtime.Transit(&target,vk::ImageLayout::eColorAttachmentOptimal,
++                    vk::PipelineStageFlagBits2::eColorAttachmentOutput,vk::AccessFlagBits2::eColorAttachmentWrite);
++    runtime.FlushBarriers();
++    CopyTextures((__bridge const void*)proxy,(__bridge const void*)dest,"Direct scene copy to native target");
++    ++impl->direct_copies;
++    const auto now=std::chrono::steady_clock::now();
++    if(std::getenv("BB_FRAME_STATS") && now-impl->direct_reported>=std::chrono::seconds(5)) {
++        std::printf("Metal direct image copy: copies=%llu; existing proxy to native destination, no extra texture\n",(unsigned long long)impl->direct_copies);impl->direct_reported=now;
++    }
++    return true;
++}
+ 
+ void SceneTargets::FullCopyOverwrite(VideoCore::Image& image, const void* src, const void* dst) {
+     const auto source=(__bridge id<MTLTexture>)src, target=(__bridge id<MTLTexture>)dst;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_texture_tiling.h b/gpu/shadps4/video_core/renderer_metal/mtl_texture_tiling.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_texture_tiling.h
+@@ -0,0 +1,41 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <string>
++#include <string_view>
++namespace Metal {
++// Reuse the proven PS4 address calculation. Only substitute its two linear texel reads;
++// dead detiler writes are removed because this pipeline specializes IS_TILER=true.
++inline std::string TextureTilingSource(std::string_view original) {
++    std::string out(original);
++    auto replace=[&](const std::string& from,const std::string& to,unsigned expected) {
++        unsigned count=0;size_t pos=0;
++        while((pos=out.find(from,pos))!=std::string::npos) {out.replace(pos,from.size(),to);pos+=to.size();++count;}
++        return count==expected;
++    };
++    if(!replace("device OutputBuf& _794 [[buffer(2)]]", "texture2d<float> _794 [[texture(0)]]",1) ||
++       !replace("device OutputBuf& _794", "texture2d<float> _794",3) ||
++       !replace("_794.linear_data[linear_index + i_1] = texels[i_1];", "/* unused detiler write */",1) ||
++       !replace("_794.linear_data[linear_index] = _788.tiled_data[tiled_offset / 4u];", "/* unused detiler write */",1) ||
++       !replace("_794.linear_data[linear_index + i]", "TextureWord(_794, linear_index + i)",1) ||
++       !replace("_794.linear_data[linear_index]", "TextureWord(_794, linear_index)",1)) return {};
++    if(out.find("_794.linear_data")!=std::string::npos) return {};
++    // The existing kernel visits padded rows as well. They contain no image data;
++    // leave their guest bytes unchanged instead of reading outside the native texture.
++    for(const auto name:{"void CopyWholeRow(","void Copy("}) {
++        auto at=out.find(name);if(at==std::string::npos)return {};
++        at=out.find("{",at);if(at==std::string::npos)return {};
++        out.insert(at+1,"\n    if(linear_index >= _794.get_width()*_794.get_height()*TEXTURE_TILING_SCALE*TEXTURE_TILING_SCALE) return;\n");
++    }
++    const auto at=out.find("using namespace metal;");if(at==std::string::npos)return {};
++    out.insert(at+std::string("using namespace metal;").size(),R"(
++constant uint TEXTURE_TILING_SCALE [[function_constant(12)]];
++// All 256 UNORM8 values round-trip exactly through Metal's float texture read.
++inline uint TextureWord(texture2d<float> image, uint index) {
++    uint w=image.get_width()*TEXTURE_TILING_SCALE;
++    uint4 c=uint4(round(image.read(uint2(index%w,index/w)/TEXTURE_TILING_SCALE)*255.0f));
++    return c.x | (c.y<<8u) | (c.z<<16u) | (c.w<<24u);
++}
++)");
++    return out;
++}
++} // namespace Metal
+diff --git a/gpu/shadps4/video_core/texture_cache/tile_manager.cpp b/gpu/shadps4/video_core/texture_cache/tile_manager.cpp
+--- a/gpu/shadps4/video_core/texture_cache/tile_manager.cpp
++++ b/gpu/shadps4/video_core/texture_cache/tile_manager.cpp
+@@ -185,6 +185,16 @@
+         .range = sizeof(params),
+     };
+ 
++    // Give a capable backend the same tiling description before allocating a linear snapshot.
++    // Other backends and unsupported formats keep the original path without extra resources.
++    const auto direct = MakeDispatch(info, true,
++        {out_buffer, out_offset, info.guest_size}, {}, params_buffer_info);
++    if (backend.DownloadTiledImage(&in_image, direct)) {
++        backend.AccessBuffer(out_buffer, out_offset, info.guest_size,
++                             vk::PipelineStageFlagBits2::eComputeShader,
++                             vk::AccessFlagBits2::eShaderWrite);
++        return;
++    }
+     const auto staging = backend.StagingRequest(info.guest_size, MemoryType::DeviceLocal);
+     for (auto& copy : buffer_copies) {
+         copy.bufferOffset += staging.offset;
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -36,6 +36,8 @@
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ #include "video_core/renderer_metal/mtl_runtime.h"
+ #include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "video_core/texture_cache/tile_manager.h"
++#include "video_core/renderer_metal/mtl_texture_tiling.h"
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ 
+@@ -1398,10 +1400,137 @@
+     CHECK(!f.scheduler.HasFailed());
+ }
+ 
++static void TestTextureTiling(Fixture& f) {
++    namespace Stats=Metal::MemoryStats;
++    const bool enabled=[] {const char* v=std::getenv("BB_MTL_TEXTURE_TILING");return v&&v[0]=='1';}();
++    CHECK(Metal::TextureTilingSource("unknown generated source").empty());
++    StreamBuffer params_stream{f.runtime,MemoryType::HostUncached,1<<20};
++    TileManager manager{f.runtime,params_stream};
++    for(auto size:{std::pair{128u,64u},std::pair{128u,73u},std::pair{1920u,1080u}}) {
++      for(unsigned swizzle:{0u,1u,3u}) {
++        auto [w,h]=size;auto info=MakeInfo(vk::Format::eR8G8B8A8Unorm,w,h);
++        info.tile_mode=AmdGpu::TileMode::Thin2DThin;info.array_mode=AmdGpu::GetArrayMode(info.tile_mode);
++        info.props.is_tiled=1;info.bank_swizzle=swizzle;info.UpdateSize();
++        std::printf("texture tiling case %ux%u swizzle=%u pitch/height=%u/%u size=%u\n",w,h,swizzle,info.mips_layout[0].pitch,info.mips_layout[0].height,info.guest_size);
++        Img source{f.runtime,info};
++        auto pattern=Pattern(size_t(w)*h*4,swizzle+93);auto upload=MakeBuffer(f.runtime,pattern.size(),MemoryType::HostUncached);
++        std::memcpy(upload->mapped_data.data(),pattern.data(),pattern.size());auto whole=WholeCopy(w,h);
++        f.runtime.UploadImage(source.image.get(),upload.get(),{&whole,1});
++        auto linear=MakeBuffer(f.runtime,info.guest_size,MemoryType::DeviceLocal);
++        std::memset(linear->mapped_data.data(),0xa5,linear->SizeBytes());
++        auto reference=MakeBuffer(f.runtime,info.guest_size+512,MemoryType::DeviceLocal);
++        auto actual=MakeBuffer(f.runtime,info.guest_size+512,MemoryType::DeviceLocal);
++        std::memset(reference->mapped_data.data(),0xa5,reference->SizeBytes());
++        std::memset(actual->mapped_data.data(),0xa5,actual->SizeBytes());
++        auto params=TileManager::MakeTilingInfo(info,1);
++        auto dispatch=TileManager::MakeDispatch(info,true,{reference.get(),256,info.guest_size},
++            {linear.get(),0,info.guest_size},{&params_stream,params_stream.Copy(&params,sizeof(params),16),sizeof(params)});
++        whole.bufferRowLength=info.pitch;
++        f.runtime.DownloadImage(source.image.get(),linear.get(),{&whole,1});f.runtime.FlushBarriers();
++        f.runtime.DispatchTiling(dispatch);Settle(f);
++        const auto before=Stats::Read()[unsigned(Stats::Kind::Staging)];
++        dispatch.tiled={actual.get(),256,info.guest_size};
++        CHECK(f.runtime.DownloadTiledImage(source.image.get(),dispatch)==enabled);
++        if(!enabled)manager.TileImage(*source.image,{&whole,1},actual.get(),256);
++        Settle(f);
++        if(enabled) CHECK(std::memcmp(reference->mapped_data.data(),actual->mapped_data.data(),actual->SizeBytes())==0);
++        else {
++            // Original staging padding is unspecified. Compare all defined pixels through a
++            // separately tiled validity mask and both allocation canaries; never score padding.
++            std::memset(linear->mapped_data.data(),0,linear->SizeBytes());
++            std::memset(linear->mapped_data.data(),0xff,size_t(w)*h*4);
++            auto mask=MakeBuffer(f.runtime,info.guest_size,MemoryType::DeviceLocal);
++            std::memset(mask->mapped_data.data(),0,mask->SizeBytes());
++            auto md=dispatch;md.tiled={mask.get(),0,info.guest_size};md.linear={linear.get(),0,info.guest_size};
++            f.runtime.DispatchTiling(md);Settle(f);bool equal=true;
++            for(u64 i=0;i<info.guest_size;++i)if(mask->mapped_data[i] && reference->mapped_data[256+i]!=actual->mapped_data[256+i])equal=false;
++            CHECK(equal);CHECK(std::memcmp(reference->mapped_data.data(),actual->mapped_data.data(),256)==0);
++            CHECK(std::memcmp(reference->mapped_data.data()+256+info.guest_size,actual->mapped_data.data()+256+info.guest_size,256)==0);
++        }
++        if(enabled) {
++            const auto after=Stats::Read()[unsigned(Stats::Kind::Staging)];
++            CHECK(after.bytes==before.bytes && after.objects==before.objects);
++            // Every unsupported shape falls back without a staging allocation or dispatch.
++            const auto original=source.image->info;
++            source.image->info.pixel_format=vk::Format::eR8G8B8A8Srgb;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),dispatch));source.image->info=original;
++            source.image->info.resources.levels=2;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),dispatch));source.image->info=original;
++            source.image->info.resources.layers=2;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),dispatch));source.image->info=original;
++            source.image->info.pitch+=1;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),dispatch));source.image->info=original;
++            auto bad=dispatch;bad.tiled.offset=actual->SizeBytes()-1;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),bad));
++            bad=dispatch;bad.is_macro=false;CHECK(!f.runtime.DownloadTiledImage(source.image.get(),bad));
++            // Integration entry must hit the same exact result, also with pending source work.
++            std::memset(actual->mapped_data.data(),0xa5,actual->SizeBytes());
++            whole.bufferOffset=0;manager.TileImage(*source.image,{&whole,1},actual.get(),256);Settle(f);
++            CHECK(std::memcmp(reference->mapped_data.data(),actual->mapped_data.data(),actual->SizeBytes())==0);
++            CHECK(Stats::Read()[unsigned(Stats::Kind::Staging)].bytes==before.bytes);
++            if(w==1920 && swizzle==0 && std::getenv("BB_TEST_TEXTURE_TILING_PERF")) {
++                // Isolated command-buffer timing, not gameplay FPS. Both paths use the same
++                // already allocated source/output/linear buffers and warmed pipeline states.
++                for(unsigned sample=0;sample<48;++sample) {
++                    const bool fused=(sample%4==1 || sample%4==2);
++                    whole.bufferOffset=0;
++                    if(fused)CHECK(f.runtime.DownloadTiledImage(source.image.get(),dispatch));
++                    else {
++                        f.runtime.DownloadImage(source.image.get(),linear.get(),{&whole,1});
++                        f.runtime.FlushBarriers();
++                        auto old=dispatch;old.linear={linear.get(),0,info.guest_size};
++                        f.runtime.DispatchTiling(old);
++                        f.runtime.AccessBuffer(linear.get(),0,info.guest_size,vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderRead);
++                    }
++                    auto command=f.scheduler.GetImpl().cmdbuf;
++                    Settle(f);
++                    if(sample>=8)std::printf("texture tiling GPU sample %u fused=%d ms=%.6f\n",sample,int(fused),(command.GPUEndTime-command.GPUStartTime)*1000.0);
++                }
++            }
++        }
++      }
++    }
++    std::printf("texture tiling=%d: 9 exact defined-pixel cases, preserved guest padding/guard ranges, swizzles, original fallback and no extra staging\n",int(enabled));
++}
++
++static void TestAdaptiveStaging(Fixture& f) {
++    namespace Stats=Metal::MemoryStats;
++    const auto kind=unsigned(Stats::Kind::Staging);
++    const bool adaptive=[] {const char* v=std::getenv("BB_MTL_ADAPTIVE_STAGING");return v&&v[0]=='1';}();
++    Metal::StagingPool pool{f.runtime};const auto initial=Stats::Read()[kind];
++    constexpr u64 bytes=9ull<<20;
++    std::vector<const Buffer*> buffers;
++    for(unsigned i=0;i<8;++i) {
++        const auto span=pool.Request(bytes,MemoryType::DeviceLocal,16);
++        CHECK(span.offset==0);CHECK(span.buffer->SizeBytes()==(adaptive?bytes:16ull<<20));
++        for(const auto* old:buffers)CHECK(old!=span.buffer);buffers.push_back(span.buffer);
++        f.scheduler.BlitEncoder("adaptive staging test fill");
++        [f.scheduler.GetImpl().blit fillBuffer:(__bridge id<MTLBuffer>)span.buffer->buffer.native range:NSMakeRange(span.offset,bytes) value:0x7b];
++    }
++    Settle(f);const auto warm=Stats::Read()[kind];
++    CHECK(warm.objects==initial.objects+8);CHECK(warm.bytes==initial.bytes+8*(adaptive?bytes:16ull<<20));
++    for(unsigned round=0;round<8;++round) {
++        const auto span=pool.Request(bytes,MemoryType::DeviceLocal,16);
++        CHECK(std::find(buffers.begin(),buffers.end(),span.buffer)!=buffers.end());
++        f.scheduler.BlitEncoder("adaptive staging overwrite");
++        [f.scheduler.GetImpl().blit fillBuffer:(__bridge id<MTLBuffer>)span.buffer->buffer.native range:NSMakeRange(span.offset,bytes) value:uint8_t(round)];
++        Settle(f);CHECK(Stats::Read()[kind].objects==warm.objects);
++    }
++    for(unsigned i=0;i<3001;++i)pool.TickFrame();
++    CHECK(Stats::Read()[kind].objects==warm.objects); // retain the same byte budget, no eviction
++    const auto span=pool.Request(bytes,MemoryType::DeviceLocal,16);
++    CHECK(std::find(buffers.begin(),buffers.end(),span.buffer)!=buffers.end());
++    f.scheduler.BlitEncoder("adaptive staging wake and refill");
++    [f.scheduler.GetImpl().blit fillBuffer:(__bridge id<MTLBuffer>)span.buffer->buffer.native range:NSMakeRange(span.offset,bytes) value:0x63];
++    auto result=[f.device.GetImpl().device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
++    [f.scheduler.GetImpl().blit copyFromBuffer:(__bridge id<MTLBuffer>)span.buffer->buffer.native sourceOffset:span.offset toBuffer:result destinationOffset:0 size:bytes];
++    Settle(f);const auto* data=(const uint8_t*)result.contents;
++    CHECK(std::all_of(data,data+bytes,[](uint8_t x){return x==0x63;}));
++    CHECK(Stats::Read()[kind].objects==warm.objects);
++    std::printf("adaptive staging=%d: 8 in-flight blocks, allocated=%llu bytes; reused after GPU completion and idle backing discard, no new objects\n",int(adaptive),(unsigned long long)(warm.bytes-initial.bytes));
++}
++
+ int main() {
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_TEXTURE_TILING_ONLY")) {TestTextureTiling(f);Settle(f);return failures?1:0;}
++        if(std::getenv("BB_TEST_ADAPTIVE_STAGING_ONLY")) {TestAdaptiveStaging(f);Settle(f);return failures?1:0;}
+         TestOcclusion(f);
+         TestLimitsAndFormats(f);
+         TestBuffers(f);
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -28,6 +28,7 @@
+ #include "video_core/renderer_metal/mtl_runtime.h"
+ #include "video_core/renderer_metal/mtl_runtime_impl.h"
+ #include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "video_core/texture_cache/tile_manager.h"
+ #include "video_core/host_shaders_msl/upscale_merge_comp_msl.h"
+ #include "video_core/renderer_metal/mtl_scene_targets.h"
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+@@ -1189,9 +1190,95 @@
+     Settle(f); f.runtime.scene_targets = previous;
+ }
+ 
++
++static void TestProxyTextureTiling(Fixture& f) {
++    if(const char* v=std::getenv("BB_MTL_TEXTURE_TILING");!v || v[0]!='1')return;
++    std::puts("proxy texture tiling: exact native-resolve equivalent, stale native retained and future reads coherent");
++    World world{f};SceneTargets targets{f.device,f.scheduler,f.runtime,world.Lookup()};targets.SetSize({960,540});
++    auto info=MakeInfo(vk::Format::eR8G8B8A8Unorm,1920,1080);info.guest_address=0x10000000;
++    info.tile_mode=AmdGpu::TileMode::Thin2DThin;info.array_mode=AmdGpu::GetArrayMode(info.tile_mode);info.props.is_tiled=1;info.UpdateSize();
++    const auto id=world.Add(info);auto& source=world.Get(id);
++    ImageViewInfo view{};view.format=info.pixel_format;view.range.extent.levels=view.range.extent.layers=1;
++    const auto pattern=Pattern(960,540,4,71);const std::vector<u8> stale(1920*1080*4,0x35);
++    auto reset=[&] {
++        f.runtime.Transit(&source,vk::ImageLayout::eTransferDstOptimal,vk::PipelineStageFlagBits2::eCopy,vk::AccessFlagBits2::eTransferWrite);f.runtime.FlushBarriers();
++        WriteTexture(f,NativeOf(source),4,stale);
++        auto proxy=TextureOf(targets.Attachment(id,view,true).view);WriteTexture(f,proxy,4,pattern);
++        CHECK(targets.ProxyDirty(source,0));CHECK(targets.ExistingTilingProxy(source)==(__bridge const void*)proxy);
++    };
++    StreamBuffer stream{f.runtime,MemoryType::HostUncached,1<<20};TileManager manager{f.runtime,stream};
++    Buffer reference{f.runtime,0,info.guest_size,MemoryType::DeviceLocal,"tiling reference"};
++    Buffer actual{f.runtime,0,info.guest_size,MemoryType::DeviceLocal,"proxy tiling"};
++    std::memset(reference.mapped_data.data(),0xa5,info.guest_size);std::memset(actual.mapped_data.data(),0xa5,info.guest_size);
++    vk::BufferImageCopy copy{};copy.bufferRowLength=1920;copy.bufferImageHeight=1080;
++    copy.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};copy.imageExtent={1920,1080,1};
++    reset();targets.NativeAccess(source,vk::AccessFlagBits2::eTransferRead);
++    const auto expected_native=ReadTexture(f,NativeOf(source),4);
++    CHECK(!targets.ExistingTilingProxy(source));manager.TileImage(source,{&copy,1},&reference,0);Settle(f);
++    reset();const auto before=Metal::MemoryStats::Read();
++    manager.TileImage(source,{&copy,1},&actual,0);Settle(f);
++    CHECK(std::memcmp(actual.mapped_data.data(),reference.mapped_data.data(),info.guest_size)==0);
++    CHECK(targets.ProxyDirty(source,0));CHECK(ReadTexture(f,NativeOf(source),4)==stale);
++    const auto after=Metal::MemoryStats::Read();
++    for(unsigned i=0;i<before.size();++i){CHECK(before[i].bytes==after[i].bytes);CHECK(before[i].objects==after[i].objects);}
++    targets.NativeAccess(source,vk::AccessFlagBits2::eTransferRead);
++    CHECK(!targets.ProxyDirty(source,0));CHECK(ReadTexture(f,NativeOf(source),4)==expected_native);
++    reset();targets.SetSize({1280,720});targets.Attachment(id,view,true);
++    CHECK(!targets.ExistingTilingProxy(source)); // every unproven ratio materializes native as before
++    Settle(f);
++}
++
++static void TestDirectCopyToNative(Fixture& f) {
++    std::puts("direct source-proxy resolve into copy destination, exact pixels and lazy source coherence");
++    const bool enabled=[] {const char* v=std::getenv("BB_MTL_DIRECT_COPY");return v&&v[0]=='1';}();
++    for(auto format:{vk::Format::eR8G8B8A8Unorm,vk::Format::eR8G8B8A8Srgb,
++                     vk::Format::eR16G16B16A16Sfloat,vk::Format::eR32Uint}) {
++        World world{f};SceneTargets targets{f.device,f.scheduler,f.runtime,world.Lookup()};targets.SetSize({960,540});
++        auto info=MakeInfo(format,1920,1080);info.guest_address=0x10000000;
++        const auto src=world.Add(info);info.guest_address=0x20000000;const auto dst=world.Add(info);
++        auto& source=world.Get(src);auto& dest=world.Get(dst);const auto bytes=vk::blockSize(format);
++        ImageViewInfo view{};view.format=format;view.range.extent.levels=view.range.extent.layers=1;
++        auto pattern=format==vk::Format::eR16G16B16A16Sfloat?HalfPattern(960,540,5):Pattern(960,540,bytes,5);
++        auto reset=[&] {
++            f.runtime.Transit(&source,vk::ImageLayout::eTransferDstOptimal,vk::PipelineStageFlagBits2::eCopy,vk::AccessFlagBits2::eTransferWrite);
++            f.runtime.FlushBarriers();WriteTexture(f,NativeOf(source),bytes,std::vector<u8>(1920*1080*bytes,0x35));
++            auto proxy=TextureOf(targets.Attachment(src,view,true).view);WriteTexture(f,proxy,bytes,pattern);
++            auto dest_proxy=TextureOf(targets.Attachment(dst,view,true).view);WriteTexture(f,dest_proxy,bytes,Pattern(960,540,bytes,17));
++            source.flags|=ImageFlagBits::GpuModified;dest.flags|=ImageFlagBits::Dirty;
++            return proxy;
++        };
++        reset();targets.NativeAccess(source,vk::AccessFlagBits2::eTransferRead);f.runtime.CopyImage(&source,&dest);
++        const auto expected=ReadTexture(f,NativeOf(dest),bytes);
++        auto proxy=reset();const auto stale=ReadTexture(f,NativeOf(source),bytes);
++        const auto count=targets.DirectCopyCount();const auto before=Metal::MemoryStats::Read();
++        f.runtime.CopyImage(&source,&dest);const auto after=Metal::MemoryStats::Read();
++        CHECK(targets.DirectCopyCount()==count+enabled);
++        CHECK(targets.ProxyDirty(source,0)==enabled);CHECK(!targets.ProxyCurrent(dest));
++        CHECK(bool(dest.flags&ImageFlagBits::GpuModified));CHECK(!bool(dest.flags&ImageFlagBits::Dirty));
++        for(unsigned i=0;i<before.size();++i){CHECK(before[i].bytes==after[i].bytes);CHECK(before[i].objects==after[i].objects);}
++        CHECK(ReadTexture(f,NativeOf(dest),bytes)==expected);
++        if(enabled)CHECK(ReadTexture(f,NativeOf(source),bytes)==stale);
++        targets.NativeAccess(source,vk::AccessFlagBits2::eTransferRead);CHECK(!targets.ProxyDirty(source,0));
++        CHECK(ReadTexture(f,NativeOf(source),bytes)==expected); // later source native read is materialized
++        reset();const auto unchanged=targets.DirectCopyCount();
++        CHECK(!targets.CopyDirectToNative(source,source));CHECK(targets.ProxyDirty(source,0));
++        dest.info.guest_address=source.info.guest_address;CHECK(!targets.CopyDirectToNative(source,dest));CHECK(targets.ProxyDirty(source,0));dest.info.guest_address=0x20000000;
++        dest.info.size.width=960;CHECK(!targets.CopyDirectToNative(source,dest));CHECK(targets.ProxyDirty(source,0));dest.info.size.width=1920;
++        dest.info.resources.levels=2;CHECK(!targets.CopyDirectToNative(source,dest));dest.info.resources.levels=1;
++        CHECK(targets.DirectCopyCount()==unchanged);
++        targets.SetSize({1280,720});proxy=TextureOf(targets.Attachment(src,view,true).view);
++        CHECK(!targets.CopyDirectToNative(source,dest)); // unproven non-2x ratio stays on original path
++        Settle(f);
++    }
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_PROXY_TILING_ONLY")) {TestProxyTextureTiling(f);Settle(f);return failures?1:0;}
++        TestProxyTextureTiling(f);
++        if(std::getenv("BB_TEST_DIRECT_COPY_ONLY")) {TestDirectCopyToNative(f);Settle(f);return failures?1:0;}
++        TestDirectCopyToNative(f);
+         TestColor(f, vk::Format::eR8G8B8A8Unorm, 4, vk::Format::eR8G8B8A8Unorm);
+         TestColor(f, vk::Format::eR8G8B8A8Unorm, 4, vk::Format::eR8G8B8A8Srgb);
+         TestColor(f, vk::Format::eR16G16B16A16Sfloat, 8, vk::Format::eR16G16B16A16Sfloat);

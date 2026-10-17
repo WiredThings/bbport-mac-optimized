@@ -113,7 +113,19 @@ static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_
     if (sdl_audio()) {
         SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->channels, 48000};
         p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
-        if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
+        if (p->stream) {
+            /* Private automated tests may silence their own stream without changing the
+               output device, conversion, queueing, cadence or the user's audio settings. */
+            const char *mute=getenv("BB_BENCHMARK_MUTE"), *scripted=getenv("BB_PAD_FILE_ONLY");
+            if (mute && !strcmp(mute,"1") && scripted && !strcmp(scripted,"1")) {
+                if (!SDL_SetAudioStreamGain(p->stream,0.0f)) {
+                    fprintf(stderr,"Runtime: cannot mute benchmark stream: %s\n",SDL_GetError());
+                    exit(1); /* Never silently run an audible test when mute was requested. */
+                }
+                printf("Runtime: benchmark stream muted; original audio backend and cadence retained\n");
+            }
+            SDL_ResumeAudioStreamDevice(p->stream);
+        }
         else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink\n",SDL_GetError(),id);
     }
     p->stats=getenv("BB_AUDIO_STATS")!=NULL;
