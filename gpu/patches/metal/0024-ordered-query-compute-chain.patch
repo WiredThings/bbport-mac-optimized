@@ -1,0 +1,410 @@
+diff --git a/gpu/shadps4/video_core/frame_capture.cpp b/gpu/shadps4/video_core/frame_capture.cpp
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -57,6 +57,8 @@
+ size_t native_bytes=0;
+ bool native_truncated=false;
+ u64 native_frame=0;
++void* native_boundary_owner=nullptr;
++void (*native_boundary_drain)(void*)=nullptr;
+ std::mutex display_mutex;
+ std::vector<VAddr> display_buffers;
+ // bbport: read on every draw; the game registers a handful of display buffers once.
+@@ -92,8 +94,10 @@
+ 
+ void Write(VAddr presented) {
+     const char* dir = std::getenv("BB_CAPTURE_DIR");
+-    const std::string path =
+-        std::format("{}/frame_{}.txt", dir ? dir : ".", static_cast<long long>(std::time(nullptr)));
++    const std::string path = FrameCapture::NativeMode()
++        ? std::format("{}/frame_{}_{}.txt", dir ? dir : ".",
++                      static_cast<long long>(std::time(nullptr)), native_frame)
++        : std::format("{}/frame_{}.txt", dir ? dir : ".", static_cast<long long>(std::time(nullptr)));
+     FILE* f = std::fopen(path.c_str(), "w");
+     if (!f) {
+         std::printf("Frame capture: cannot write %s\n", path.c_str());
+@@ -135,6 +139,7 @@
+         for(const auto& line:native_lines)std::fprintf(f,"NATIVE %s\n",line.c_str());
+     }
+     std::fclose(f);
++    if (FrameCapture::NativeMode()) std::printf("Frame capture: native series member %llu\n", (unsigned long long)native_frame);
+     std::printf("Frame capture: %zu passes written to %s\n", entries.size(), path.c_str());
+ }
+ 
+@@ -177,9 +182,17 @@
+     }
+     Native(std::format("{{\"op\":\"label\",\"queue\":{},\"text\":\"{}\"}}",queue,escaped));
+ }
++void FrameCapture::SetNativeBoundaryDrain(void* owner, void (*drain)(void*)) {
++    native_boundary_owner=owner;native_boundary_drain=drain;
++}
++void FrameCapture::ClearNativeBoundaryDrain(void* owner) {
++    if(native_boundary_owner==owner){native_boundary_owner=nullptr;native_boundary_drain=nullptr;}
++}
++
+ void FrameCapture::FrameBoundary(u64 frame) {
+     if(!NativeMode())return;
+     const auto current=state.load(std::memory_order_relaxed);
++    if(current!=Idle && native_boundary_drain)native_boundary_drain(native_boundary_owner);
+     if(current==Recording){
+         state.store(Idle,std::memory_order_release);
+         Write(last_presented.load(std::memory_order_relaxed));
+diff --git a/gpu/shadps4/video_core/frame_capture.h b/gpu/shadps4/video_core/frame_capture.h
+--- a/gpu/shadps4/video_core/frame_capture.h
++++ b/gpu/shadps4/video_core/frame_capture.h
+@@ -42,6 +42,10 @@
+     static bool NativeMode();
+     static bool NativeRecording();
+     static void FrameBoundary(u64 frame);
++    /// A single renderer owns native frame recording. Installed before recording threads run,
++    /// cleared after they stop. No callback allocation; only invoked for armed/recording frames.
++    static void SetNativeBoundaryDrain(void* owner, void (*drain)(void*));
++    static void ClearNativeBoundaryDrain(void* owner);
+     static void Native(std::string line);
+     static void NativeLabel(const char* text, u64 queue=0);
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -6,6 +6,9 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstring>
++#include <cstdlib>
++#include <format>
++#include "video_core/frame_capture.h"
+ #include "bbport_toggles.h"
+ #include "common/assert.h"
+ #include "video_core/buffer_cache/buffer_cache.h"
+@@ -157,7 +160,12 @@
+     ASSERT_MSG(pairs > 0 && pairs <= 16 && (offset & 7) == 0 && (address & 7) == 0,
+                "Unaligned or oversized Metal occlusion snapshot");
+     auto& s = impl->scheduler;
+-    s.EndWithBarrier(); // releases held commands and joins replay before reading count/scales
++    static const bool chained = [] {
++        const char* flag = std::getenv("BB_MTL_QUERY_COMPUTE_CHAIN");
++        return flag && flag[0] == '1';
++    }();
++    if (chained) s.BeginOrderedHostCompute("Occlusion snapshot");
++    else s.EndWithBarrier(); // join replay before reading count/scales
+     const u64 dropped = Impl::Drops();
+     const Push push{impl->count, u32(impl->poison || dropped != impl->drop_count), pairs,
+                     u32((address & 15) == 8), address & ~15ull};
+@@ -165,8 +173,10 @@
+     const u64 bytes = std::max<u64>(sizeof(u32), impl->count * sizeof(u32));
+     auto scales = impl->runtime.StagingRequest(bytes, VideoCore::MemoryType::HostUncached, 16);
+     std::memcpy(scales.mapped, impl->scales.data(), bytes);
+-    s.MemoryBarrier();
+-    s.ComputeEncoder("Occlusion snapshot", true);
++    if (!chained) {
++        s.MemoryBarrier();
++        s.ComputeEncoder("Occlusion snapshot", true);
++    }
+     id<MTLComputeCommandEncoder> encoder = s.GetImpl().compute;
+     [encoder setComputePipelineState:impl->pipeline];
+     [encoder setBuffer:impl->results offset:0 atIndex:0];
+@@ -176,8 +186,15 @@
+     [encoder setBytes:&push length:sizeof(push) atIndex:4];
+     [encoder setBuffer:NativeBuffer(*scales.buffer) offset:scales.offset atIndex:5];
+     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+-    // End the compute encoder and force the next pass to wait for counter reset/guest writes.
+-    s.EndWithBarrier();
++    if (VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format(
++            "{{\"op\":\"occlusion_snapshot\",\"queue\":{},\"count\":{},\"pairs\":{},\"end\":{},\"poison\":{},\"chained\":{}}}",
++            (uintptr_t)&s, push.count, push.pairs, push.end, push.poison, chained?"true":"false"));
++    // Both paths preserve counter reset, history and guest-write ordering. The chained path
++    // keeps a serial compute encoder for a following tiny clear/query; future render/blit
++    // encoders still wait for its fence. No CPU reset or query-result readback is introduced.
++    if (chained) s.OrderAfterHostCompute();
++    else s.EndWithBarrier();
+     impl->count = 0;
+     impl->poison = false;
+     ++events;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1,3 +1,4 @@
++#include "video_core/frame_capture.h"
+ #include "video_core/renderer_metal/mtl_occlusion.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+@@ -204,12 +205,18 @@
+     runtime.SetImageAccessHook(&JoinBindHelper, static_cast<VideoCore::RasterizerCore*>(this));
+     scheduler.SetSubmitCallback([this](VideoCore::SubmitInfo&) { runtime.FlushBarriers(); });
+     pass_labels = scheduler.PassLabels();
++    VideoCore::FrameCapture::SetNativeBoundaryDrain(this, [](void* context) {
++        auto& scheduler=static_cast<Rasterizer*>(context)->scheduler;
++        scheduler.EndEncoder(); // joins replay and closes compute/blit as well as render
++        scheduler.EndEncoder(); // a velocity render-tail callback may have encoded host work
++    });
+ }
+ 
+ Rasterizer::~Rasterizer() {
+     // The recording thread and the signal thread call into this class and its pipeline cache:
+     // they stop, and the draw preparation workers (which hold the pipeline cache) go, first.
+     ShutdownThreads();
++    VideoCore::FrameCapture::ClearNativeBoundaryDrain(this);
+     draw_prep.reset();
+     scheduler.SetSubmitCallback({});
+     metal_upscaler->SetVelocityMirror(nullptr);
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1549,7 +1549,15 @@
+     }
+     const u8 byte = static_cast<u8>(value);
+     const bool one_byte = value == (u32{byte} * 0x01010101u);
+-    if (one_byte) {
++    static const bool chain_queries = [] {
++        const char* flag = std::getenv("BB_MTL_QUERY_COMPUTE_CHAIN");
++        return flag && flag[0] == '1';
++    }();
++    const bool small_compute_fill = chain_queries && one_byte && size <= 256 &&
++        !(offset & 3) && !(size & 3) && !scheduler.HoldingPass() &&
++        scheduler.OpenEncoder() == Scheduler::EncoderKind::Compute;
++    if (small_compute_fill) scheduler.MemoryBarrier();
++    if (one_byte && !small_compute_fill) {
+         scheduler.BlitEncoder(__func__);
+         [impl->sched.blit fillBuffer:NativeBuffer(*dst) range:NSMakeRange(offset, size) value:byte];
+     } else {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -116,6 +116,12 @@
+     void EndRendering();
+     /// Close all encoded work (join replay too); the next encoder waits for its fences.
+     void EndWithBarrier() { EndEncoder(); need_fence_wait = true; }
++    /// Join render/replay producers, then order directly bound host work in a serial compute
++    /// encoder. Reuse an existing compute encoder without dropping its memory dependencies.
++    void BeginOrderedHostCompute(const char* label);
++    /// Publish host compute writes to the next dispatch and force the next physical encoder
++    /// to wait for this encoder's fence. Keeps this serial compute encoder open.
++    void OrderAfterHostCompute();
+     [[nodiscard]] bool IsRendering() const noexcept {
+         return open_encoder == EncoderKind::Render;
+     }
+@@ -134,8 +140,8 @@
+     /// still outstanding), a blit encoder is ended. Earlier encoders are ordered through fences,
+     /// which every encoder updates at its end.
+     void MemoryBarrier();
+-    /// A barrier was requested while no encoder was open: the next encoder waits for the fences
+-    /// of the earlier ones before it starts.
++    /// The next NEW encoder must wait for earlier fences, including an ordered host-compute
++    /// encoder deliberately kept open. Reusing the current compute encoder retains this flag.
+     [[nodiscard]] bool NeedFenceWait() const noexcept {
+         return need_fence_wait;
+     }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -727,6 +727,21 @@
+     }
+ }
+ 
++void Scheduler::BeginOrderedHostCompute(const char* label) {
++    EndRendering();
++    FlushRenderTail();
++    JoinReplay(); // query count/scales may have been produced on the replay thread
++    MemoryBarrier();
++    ComputeEncoder(label, true);
++}
++
++void Scheduler::OrderAfterHostCompute() {
++    ASSERT_MSG(open_encoder == EncoderKind::Compute && !holding,
++               "Ordered host compute requires an unheld compute encoder");
++    MemoryBarrier();
++    need_fence_wait = true; // preserved until a NEW physical encoder consumes it
++}
++
+ void Scheduler::MemoryBarrier() {
+     if(VideoCore::FrameCapture::NativeRecording())VideoCore::FrameCapture::Native(std::format("{{\"op\":\"barrier\",\"kind\":{},\"holding\":{},\"hoisting\":{}}}",unsigned(open_encoder),holding?"true":"false",hoisting?"true":"false"));
+     impl->profile->Barrier();
+diff --git a/tests/test_frame_capture_metadata.cpp b/tests/test_frame_capture_metadata.cpp
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -11,16 +11,20 @@
+  const std::filesystem::path root=dir, trigger=root/"trigger";
+  setenv("BB_CAPTURE_NATIVE","1",1);setenv("BB_CAPTURE_DIR",dir,1);setenv("BB_CAPTURE_TRIGGER",trigger.c_str(),1);
+  using VideoCore::FrameCapture;
++ unsigned drains=0;
++ FrameCapture::SetNativeBoundaryDrain(&drains,[](void* p){++*static_cast<unsigned*>(p);if(FrameCapture::NativeRecording())FrameCapture::Native("{\"op\":\"close\",\"kind\":1}");});
+  std::ofstream(trigger)<<"1";FrameCapture::OnFlip(123);
+  assert(FrameCapture::Active()&&!FrameCapture::NativeRecording());
+  FrameCapture::FrameBoundary(10);assert(FrameCapture::NativeRecording());
+  FrameCapture::Native("{\"op\":\"open\",\"kind\":1}");FrameCapture::NativeLabel("quote\"\\\n",123);
+  FrameCapture::Buffer(1,0,1,reinterpret_cast<void*>(1),1024); // must not dereference contents
+  FrameCapture::FrameBoundary(11);assert(!FrameCapture::Active());
+- auto read=[&]{for(auto& e:std::filesystem::directory_iterator(root))if(e.path().extension()==".txt"){std::ifstream f(e.path());return std::string(std::istreambuf_iterator<char>(f),{});}return std::string{};};
+- auto text=read();assert(text.find("\"frame\":10")!=std::string::npos);assert(text.find("\"truncated\":false")!=std::string::npos);assert(text.find("\\u000a")!=std::string::npos);assert(text.find("\"queue\":123")!=std::string::npos);
++ auto read=[&](unsigned frame){for(auto& e:std::filesystem::directory_iterator(root))if(e.path().extension()==".txt"){std::ifstream f(e.path());auto text=std::string(std::istreambuf_iterator<char>(f),{});if(text.find("\"frame\":"+std::to_string(frame)+",")!=std::string::npos)return text;}return std::string{};};
++ assert(drains==2);auto text=read(10);assert(text.find("\"op\":\"close\"")!=std::string::npos);assert(text.find("\"frame\":10")!=std::string::npos);assert(text.find("\"truncated\":false")!=std::string::npos);assert(text.find("\\u000a")!=std::string::npos);assert(text.find("\"queue\":123")!=std::string::npos);
+  std::ofstream(trigger)<<"1";FrameCapture::OnFlip(456);FrameCapture::FrameBoundary(20);
+  for(unsigned i=0;i<10000;++i)FrameCapture::Native(std::string(600,'x'));
+- FrameCapture::FrameBoundary(21);text=read();assert(text.find("\"truncated\":true")!=std::string::npos);assert(text.size()<2200000);
++ FrameCapture::FrameBoundary(21);assert(drains==4);text=read(20);assert(text.find("\"truncated\":true")!=std::string::npos);assert(text.size()<2200000);
++ assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==2);
++ FrameCapture::ClearNativeBoundaryDrain(&drains);
+  std::filesystem::remove_all(root);puts("metadata boundaries, buffer non-read, escaping and capacity passed");
+ }
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1267,6 +1267,13 @@
+     return float4(xy[vid], z, 1);
+ }
+ fragment float4 occlusion_fragment() { return float4(1,0,0,1); }
++fragment float4 consume_occlusion(device const ulong* counts [[buffer(0)]],
++                                 constant ulong& expected [[buffer(1)]]) {
++    const ulong valid=1ul<<63;ulong sum=0;bool complete=true;
++    for(uint i=0;i<4;++i){complete=complete&&bool(counts[2*i]&valid)&&bool(counts[2*i+1]&valid);
++        sum+=(counts[2*i+1]&~valid)-(counts[2*i]&~valid);}
++    return complete&&sum==expected?float4(0,1,0,1):float4(1,0,0,1);
++}
+ )MSL";
+     NSError* error = nil;
+     auto library = [f.mtl newLibraryWithSource:shaders options:nil error:&error];
+@@ -1278,6 +1285,13 @@
+     desc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+     auto pipeline = [f.mtl newRenderPipelineStateWithDescriptor:desc error:&error];
+     CHECK(pipeline != nil);
++    auto* consumer_desc=[MTLRenderPipelineDescriptor new];
++    consumer_desc.vertexFunction=desc.vertexFunction;
++    consumer_desc.fragmentFunction=[library newFunctionWithName:@"consume_occlusion"];
++    consumer_desc.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++    auto consumer=[f.mtl newRenderPipelineStateWithDescriptor:consumer_desc error:&error];
++    CHECK(consumer!=nil);
++    auto readback=[f.mtl newBufferWithLength:16*16*4 options:MTLResourceStorageModeShared];
+     auto* zdesc = [MTLDepthStencilDescriptor new];
+     zdesc.depthCompareFunction = MTLCompareFunctionLessEqual;
+     zdesc.depthWriteEnabled = YES;
+@@ -1332,16 +1346,70 @@
+         }
+         return samples;
+     };
+-    const auto interval = [&](bool visible) {
++    const auto interval = [&](bool visible, u64 expected=1920ull*1080) {
+         queries.Snapshot(&output, 0, 0x1000, 4);
+         draw(visible);
+         queries.Snapshot(&output, 8, 0x1008, 4);
+-        return measured(0, 4);
++        // No CPU/GPU wait before the fragment consumer: it must see complete query writes
++        // through the kept compute encoder's fence, including all four valid pairs.
++        auto* consume_pass=[MTLRenderPassDescriptor renderPassDescriptor];
++        consume_pass.colorAttachments[0].texture=color;
++        consume_pass.colorAttachments[0].loadAction=MTLLoadActionDontCare;
++        consume_pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++        f.scheduler.HostRenderEncoder((__bridge const void*)consume_pass);
++        auto enc=f.scheduler.GetImpl().render;const float z=.2f;
++        [enc setRenderPipelineState:consumer];[enc setVertexBytes:&z length:sizeof(z) atIndex:0];
++        [enc setFragmentBuffer:(__bridge id<MTLBuffer>)output.buffer.native offset:0 atIndex:0];
++        [enc setFragmentBytes:&expected length:sizeof(expected) atIndex:1];
++        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++        f.scheduler.EndWithBarrier();f.scheduler.BlitEncoder("Occlusion fragment consumer readback");
++        [f.scheduler.GetImpl().blit copyFromTexture:color sourceSlice:0 sourceLevel:0
++            sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(16,16,1)
++            toBuffer:readback destinationOffset:0 destinationBytesPerRow:16*4 destinationBytesPerImage:16*16*4];
++        const auto samples=measured(0,4);
++        const auto* pixels=static_cast<const u32*>(readback.contents);
++        CHECK(std::all_of(pixels,pixels+16*16,[](u32 p){return p==0xff00ff00;}));
++        return samples;
+     };
++    if (std::getenv("BB_TEST_QUERY_CHAIN_TIMING")) {
++        std::vector<double> gpu_times, cpu_times;
++        for (unsigned round=0;round<28;++round) {
++            const auto started=std::chrono::steady_clock::now();
++            for (unsigned i=0;i<23;++i) {
++                const u64 off=2048+i*32,key=0xf000+i*16;
++                f.runtime.FillBuffer(&output,off,16,0);
++                queries.Snapshot(&output,off,key,1);
++                draw(i%3!=0);
++                queries.Snapshot(&output,off+8,key+8,1);
++            }
++            const auto encoded=std::chrono::steady_clock::now();
++            auto cb=f.scheduler.GetImpl().cmdbuf;
++            Settle(f);
++            CHECK(cb && cb.status==MTLCommandBufferStatusCompleted);
++            if(round>=8) {
++                gpu_times.push_back((cb.GPUEndTime-cb.GPUStartTime)*1000);
++                cpu_times.push_back(std::chrono::duration<double,std::milli>(encoded-started).count());
++            }
++            const auto* out=reinterpret_cast<const u64*>(output.mapped_data.data());
++            for(unsigned i=0;i<23;++i) {
++                const auto word=(2048+i*32)/8;
++                CHECK((out[word]&Valid) && (out[word+1]&Valid));
++                CHECK((out[word+1]&~Valid)>=(out[word]&~Valid));
++                if(round>=8) CHECK((out[word+1]&~Valid)-(out[word]&~Valid)==(i%3?1920ull*1080:0));
++            }
++            std::printf("query-chain sample: round=%u GPU=%.6f ms, CPU-record=%.6f ms\n",round,
++                        (cb.GPUEndTime-cb.GPUStartTime)*1000,
++                        std::chrono::duration<double,std::milli>(encoded-started).count());
++        }
++        std::sort(gpu_times.begin(),gpu_times.end());std::sort(cpu_times.begin(),cpu_times.end());
++        std::printf("query-chain isolated23intervals: GPU median=%.6f ms, CPU-record median=%.6f ms,20warm samples; synthetic16x16,not gameFPS\n",gpu_times[gpu_times.size()/2],cpu_times[cpu_times.size()/2]);
++        f.scheduler.DeferOperation([color,depth,pipeline,depth_state,consumer,readback]{(void)color;(void)depth;(void)pipeline;(void)depth_state;(void)consumer;(void)readback;});
++        return;
++    }
+     CHECK(interval(true) == 1920ull * 1080); // exact sample density restored from 16x16
+     CHECK(interval(false) == 1920ull * 1080); // max-of-three history suppresses jitter flicker
+     CHECK(interval(false) == 1920ull * 1080);
+-    CHECK(interval(false) == 0); // truly hidden after three empty results
++    CHECK(interval(false,0) == 0); // truly hidden after three empty results
+     CHECK(interval(true) == 1920ull * 1080); // immediately visible again
+     queries.Snapshot(&output, 128, 0x2000, 16);
+     draw(true); draw(true); // held passes handed to replay; both must be counted in order
+@@ -1353,6 +1421,7 @@
+     CHECK(measured(512, 1) == 2 * 1920ull * 1080);
+     // Query buffers reused within one unsubmitted batch: no CPU writes can reset GPU results.
+     for (unsigned i = 0; i < 8; ++i) {
++        f.runtime.FillBuffer(&output,768+i*32,16,0); // retain BOTH begin/end validity clears
+         queries.Snapshot(&output, 768 + i*32, 0x4000 + i*16, 1);
+         draw(true);
+         queries.Snapshot(&output, 776 + i*32, 0x4008 + i*16, 1);
+@@ -1393,11 +1462,37 @@
+     draw(true);
+     queries.Snapshot(&output, 1288, 0x7008, 1);
+     // The fixture's raw render objects obey the same unretained-buffer retirement contract.
+-    f.scheduler.DeferOperation([color, depth, pipeline, depth_state] {
+-        (void)color; (void)depth; (void)pipeline; (void)depth_state;
++    f.scheduler.DeferOperation([color, depth, pipeline, depth_state, consumer, readback] {
++        (void)color; (void)depth; (void)pipeline; (void)depth_state; (void)consumer; (void)readback;
+     });
+     CHECK(queries.Events() > 20);
+     CHECK(!f.scheduler.HasFailed());
++}
++
++static void TestSmallComputeFills(Fixture& f) {
++    const bool chained = [] {const char* v=std::getenv("BB_MTL_QUERY_COMPUTE_CHAIN");return v&&v[0]=='1';}();
++    for (u64 offset : {0u, 4u, 32u, 65u}) for (u64 size : {1u, 4u, 16u, 20u, 256u, 260u}) {
++        auto buffer=MakeBuffer(f.runtime,512,MemoryType::HostCached);
++        auto copied=MakeBuffer(f.runtime,512,MemoryType::HostCached);
++        std::memset(buffer->mapped_data.data(),0x5b,512);
++        std::vector<u8> expected(512,0x5b);
++        std::fill(expected.begin()+offset,expected.begin()+offset+size,u8{0xa3});
++        f.scheduler.BeginOrderedHostCompute("Small fill test producer");
++        f.scheduler.OrderAfterHostCompute();
++        auto previous=f.scheduler.GetImpl().compute;
++        f.runtime.FillBuffer(buffer.get(),offset,size,0xa3a3a3a3);
++        const bool eligible=chained && size<=256 && !(offset&3) && !(size&3);
++        if(eligible) {
++            CHECK(f.scheduler.GetImpl().compute==previous);
++            CHECK(f.scheduler.NeedFenceWait());
++        } else CHECK(f.scheduler.OpenEncoder()==Metal::Scheduler::EncoderKind::Blit);
++        // A real subsequent GPU reader must see the fill AND intact surrounding bytes.
++        vk::BufferCopy copy{0,0,512};f.runtime.CopyBuffer(buffer.get(),copied.get(),std::span{&copy,1});
++        Settle(f);
++        CHECK(std::equal(expected.begin(),expected.end(),buffer->mapped_data.data()));
++        CHECK(std::equal(expected.begin(),expected.end(),copied->mapped_data.data()));
++    }
++    std::printf("small ordered compute fills=%d: exact bytes/canaries, shared-encoder reuse, 256-byte bound, unaligned fallback and next-encoder GPU reads passed\n",int(chained));
+ }
+ 
+ static void TestBufferRangeAudit() {
+@@ -1560,6 +1655,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_QUERY_CHAIN_ONLY")) {TestSmallComputeFills(f);TestOcclusion(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BUFFER_RANGE_AUDIT_ONLY")) {TestBufferRangeAudit();Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_TEXTURE_TILING_ONLY")) {TestTextureTiling(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_ADAPTIVE_STAGING_ONLY")) {TestAdaptiveStaging(f);Settle(f);return failures?1:0;}

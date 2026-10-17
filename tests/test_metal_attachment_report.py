@@ -31,3 +31,10 @@ class AttachmentReportTests(unittest.TestCase):
   for summary in [dict(queue=7,requested=1,dropped=0),dict(queue=1,requested=1,dropped=2),dict(queue=1,requested=-1,dropped=0)]:
    rows=self.rows();rows[3:3]=[dict(op='render_barriers',**summary)]
    with self.assertRaises(ValueError):a.analyze(self.text(rows))
+
+ def test_occlusion_events_are_separate_from_physical_encoders(self):
+  rows=self.rows();rows[4:4]=[dict(op='open',queue=1,kind=2,guest=False),dict(op='occlusion_snapshot',queue=1,count=3,pairs=1,end=0,poison=0,chained=True),dict(op='occlusion_snapshot',queue=1,count=0,pairs=1,end=1,poison=0,chained=True),dict(op='close',queue=1,kind=2)]
+  r=a.analyze(self.text(rows));self.assertEqual(r['compute'],1);self.assertEqual(r['occlusion_snapshots'],dict(events=2,chained_events=2,counter_slots=3))
+  self.assertIsNone(a.analyze(self.text(self.rows()))['occlusion_snapshots'])
+  rows[5]['count']=4097
+  with self.assertRaises(ValueError):a.analyze(self.text(rows))

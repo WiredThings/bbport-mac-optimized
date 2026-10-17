@@ -125,6 +125,17 @@ class BenchmarkTests(unittest.TestCase):
             p.unlink();target=Path(d)/'actual';target.write_bytes(bytes(16))
             p=Path(d)/'f000_present_2x2_rgba.raw';p.symlink_to(target)
             with self.assertRaises(ValueError):b.display_snapshot(Path(d))
+    def test_capture_validity_requires_balanced_native_encoders(self):
+        rows=[dict(op='frame',frame=1,truncated=False),dict(op='close',queue=1,kind=2),dict(op='open',queue=1,kind=1,guest=True),dict(op='attachment',queue=1,slot=0,id=1,w=1,h=1,load=1,store=1),dict(op='close',queue=1,kind=1)]
+        text=lambda:'\n'.join('NATIVE '+json.dumps(row) for row in rows)
+        with self.assertRaisesRegex(ValueError,'Incomplete encoder'):b.validate_native_capture(text())
+        rows.pop(1);self.assertEqual(b.validate_native_capture(text())['attachments'],1)
+    def test_capture_series_cli_bounds_before_any_game_start(self):
+        base=['benchmark','run','--workspace','/unused','--name','series']
+        for flags in [['--capture-native','--capture-count','4'],['--capture-count','2'],['--capture-native','--capture-display','--capture-count','2']]:
+            with patch.object(b.sys,'argv',base+flags), patch.object(b,'run') as run,contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):b.main()
+                run.assert_not_called()
     def test_compare_rejects_legacy_scored_audits(self):
         for flag in b.DIAGNOSTIC_OVERRIDES:
             a=self.result();c=self.result();c['variants']={flag:'1'}

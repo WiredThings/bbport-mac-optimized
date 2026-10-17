@@ -10,7 +10,7 @@ def analyze(text):
     rows=[json.loads(line[7:]) for line in text.splitlines() if line.startswith('NATIVE ')]
     if not rows or rows[0].get('op')!='frame' or rows[0].get('truncated',True):
         raise ValueError('Missing or truncated single-frame metadata')
-    nodes=[];current={};render_barriers=[];barrier_paths=Counter()
+    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[]
     for row in rows[1:]:
         op=row['op'];queue=row.get('queue')
         if op=='open':
@@ -22,6 +22,12 @@ def analyze(text):
             del current[queue]
         elif op=='barrier':
             barrier_paths[(row.get('kind'),row.get('holding'),row.get('hoisting'))]+=1
+        elif op=='occlusion_snapshot':
+            if queue not in current or current[queue]['kind']!=2:
+                raise ValueError('Occlusion snapshot without a compute encoder')
+            if not (isinstance(row.get('count'),int) and 0<=row['count']<=4096 and isinstance(row.get('pairs'),int) and 1<=row['pairs']<=16 and row.get('end') in (0,1) and row.get('poison') in (0,1) and isinstance(row.get('chained'),bool)):
+                raise ValueError('Invalid occlusion snapshot counters')
+            query_snapshots.append(row)
         elif op=='render_barriers':
             if queue not in current or current[queue]['kind']!=1:
                 raise ValueError('Render barrier summary without a render encoder')
@@ -52,6 +58,7 @@ def analyze(text):
                 render=counts[1],compute=counts[2],blit=counts[3],attachments=sum(len(n['attachments']) for n in nodes),
                 full_color_clear_passes=clears,consecutive_clear_runs=runs,
                 render_barriers=dict(lists=len(render_barriers),requested=sum(r['requested'] for r in render_barriers) if render_barriers else None,dropped=sum(r['dropped'] for r in render_barriers) if render_barriers else None),
+                occlusion_snapshots=dict(events=len(query_snapshots),chained_events=sum(q['chained'] for q in query_snapshots),counter_slots=sum(q['count'] for q in query_snapshots)) if query_snapshots else None,
                 scheduler_barrier_requests_by_path=[dict(kind=k[0],holding=k[1],hoisting=k[2],count=count) for k,count in barrier_paths.items()],
                 notes=['Decoded guest GPU frame; not a replayable GPU trace.','No texture/buffer payload snapshots.','Adjacent barrier metadata can hide intervening GPU draws or dispatches; it is not evidence that a dependency is redundant.',
                        'Clear-load candidates may contain draws; corroborate labels and source before treating a pass as clear-only.',
