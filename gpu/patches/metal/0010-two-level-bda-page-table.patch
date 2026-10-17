@@ -1,0 +1,1015 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -775,3 +775,15 @@
+     target_link_options(guest-resource-hooks-test PRIVATE -Wl,-export_dynamic)
+     target_link_libraries(guest-resource-hooks-test PRIVATE bbgpu)
+ endif()
++
++if(APPLE)
++    add_executable(mtl-bda-page-table-test EXCLUDE_FROM_ALL ../tests/test_mtl_bda_page_table.mm
++        ../tests/test_gpu_runtime_stubs.cpp)
++    set_source_files_properties(../tests/test_mtl_bda_page_table.mm PROPERTIES
++        COMPILE_OPTIONS "-fobjc-arc;-Wno-unguarded-availability-new")
++    target_compile_options(mtl-bda-page-table-test PRIVATE -UNDEBUG -fPIC
++        -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/bbport_platform.h)
++    target_include_directories(mtl-bda-page-table-test PRIVATE shim shadps4 third_party/gcn/include)
++    target_link_options(mtl-bda-page-table-test PRIVATE -Wl,-export_dynamic)
++    target_link_libraries(mtl-bda-page-table-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
++endif()
+diff --git a/gpu/shadps4/common/bda_page_table.h b/gpu/shadps4/common/bda_page_table.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/common/bda_page_table.h
+@@ -0,0 +1,12 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cstdint>
++namespace Common::BdaTable {
++// Shader ABI: guest addresses stay 40-bit and pages keep their existing granularity.
++inline constexpr unsigned AddressBits=40, LeafBits=12;
++inline constexpr std::uint64_t LeafEntries=1ull<<LeafBits;
++constexpr std::uint64_t RootEntries(unsigned page_shift) {
++    return 1ull<<(AddressBits-page_shift-LeafBits);
++}
++constexpr std::uint64_t Pages(unsigned page_shift) {return 1ull<<(AddressBits-page_shift);}
++} // namespace Common::BdaTable
+diff --git a/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+--- a/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.cpp
++++ b/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+@@ -1,3 +1,4 @@
++#include "common/bda_page_table.h"
+ // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+@@ -1233,10 +1234,7 @@
+     // Get page BDA
+     const auto page{OpShiftRightLogical(U64, address, caching_pagebits)};
+     const auto page32{OpUConvert(U32[1], page)};
+-    const auto& bda_buffer{buffers[bda_pagetable_index]};
+-    const auto [bda_buffer_id, bda_pointer_type] = bda_buffer.Alias(PointerType::U64);
+-    const auto bda_ptr{OpAccessChain(bda_pointer_type, bda_buffer_id, u32_zero_value, page32)};
+-    const auto bda{OpLoad(U64, bda_ptr)};
++    const auto bda=LoadBdaEntry(address,u32_zero_value);
+ 
+     // Check if page is GPU cached
+     const auto is_fault{OpIEqual(U1[1], bda, u64_zero_value)};
+@@ -1247,9 +1245,11 @@
+     AddLabel(fault_label);
+     const auto& fault_buffer{buffers[fault_buffer_index]};
+     const auto [fault_buffer_id, fault_pointer_type] = fault_buffer.Alias(PointerType::U32);
+-    const auto page_div32{OpShiftRightLogical(U32[1], page32, ConstU32(5U))};
++    const Id valid_page=OpULessThan(U1[1],page,Constant(U64,Common::BdaTable::Pages(profile.sparse_page_shift)));
++    const Id fault_page=OpSelect(U32[1],valid_page,page32,u32_zero_value);
++    const auto page_div32{OpShiftRightLogical(U32[1], fault_page, ConstU32(5U))};
+     const auto page_mod32{OpBitwiseAnd(U32[1], page32, ConstU32(31U))};
+-    const auto page_mask{OpShiftLeftLogical(U32[1], u32_one_value, page_mod32)};
++    const auto page_mask{OpSelect(U32[1],valid_page,OpShiftLeftLogical(U32[1], u32_one_value, page_mod32),u32_zero_value)};
+     const auto fault_ptr{
+         OpAccessChain(fault_pointer_type, fault_buffer_id, u32_zero_value, page_div32)};
+     const auto fault_value{OpLoad(U32[1], fault_ptr)};
+@@ -1334,6 +1334,25 @@
+         it->second = TypePointer(spv::StorageClass::PhysicalStorageBuffer, pointee);
+     }
+     return it->second;
++}
++
++Id EmitContext::LoadBdaEntry(Id address,Id guest_offset) {
++    const Id page64=OpShiftRightLogical(U64,address,Constant(U64,u64{profile.sparse_page_shift}));
++    const Id page=OpUConvert(U32[1],page64);
++    const Id valid=OpULessThan(U1[1],page64,Constant(U64,Common::BdaTable::Pages(profile.sparse_page_shift)));
++    const auto [table,pointer]=buffers[bda_pagetable_index].Alias(PointerType::U64);
++    const Id index=profile.two_level_bda
++        ? OpShiftRightLogical(U32[1],page,ConstU32(Common::BdaTable::LeafBits)) : page;
++    const Id safe=OpSelect(U32[1],valid,OpIAdd(U32[1],index,guest_offset),u32_zero_value);
++    const Id root=OpLoad(U64,OpAccessChain(pointer,table,u32_zero_value,safe));
++    Id entry=root;
++    if(profile.two_level_bda) {
++        const Id slot=OpBitwiseAnd(U32[1],page,ConstU32(u32(Common::BdaTable::LeafEntries-1)));
++        const Id offset=OpShiftLeftLogical(U64,OpUConvert(U64,slot),ConstU32(3U));
++        const Id leaf=OpConvertUToPtr(PhysicalPointer(U64),OpIAdd(U64,root,offset));
++        entry=OpLoad(U64,leaf,spv::MemoryAccessMask::Aligned,8u);
++    }
++    return OpSelect(U64,valid,entry,u64_zero_value);
+ }
+ 
+ EmitContext::PagedAccess EmitContext::PagedPointer(const BufferDefinition& buffer, Id byte_offset,
+@@ -1362,14 +1381,10 @@
+     }
+     const Id address = OpIAdd(U64, base, OpUConvert(U64, byte_offset));
+     const u32 shift = profile.sparse_page_shift;
+-    const Id page =
+-        OpUConvert(U32[1], OpShiftRightLogical(U64, address, Constant(U64, u64{shift})));
+-    const auto [table, table_pointer] = buffers[bda_pagetable_index].Alias(PointerType::U64);
+-    const Id table_index = guest_write ? OpIAdd(U32[1], page, word(6)) : page;
+-    // Reject the access before indexing too: a wrapped/out-of-range offset can address a page
+-    // beyond the table, even though the final pointer would select trash.
+-    const Id safe_index = OpSelect(U32[1], in_range, table_index, u32_zero_value);
+-    const Id entry = OpLoad(U64, OpAccessChain(table_pointer, table, u32_zero_value, safe_index));
++    // Guard descriptor range before lookup; the helper separately bounds the guest
++    // address space. Even an absent root uses a valid all-zero leaf, never a null pointer.
++    const Id safe_address=OpSelect(U64,in_range,address,u64_zero_value);
++    const Id entry=LoadBdaEntry(safe_address,guest_write?word(6):u32_zero_value);
+     const Id guard = OpLogicalAnd(U1[1], in_range, OpINotEqual(U1[1], entry, u64_zero_value));
+     const Id in_page = OpBitwiseAnd(U64, address, Constant(U64, (u64{1} << shift) - 1));
+     const Id target = OpSelect(U64, guard, OpIAdd(U64, entry, in_page), trash);
+diff --git a/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.h b/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.h
+--- a/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.h
++++ b/gpu/shadps4/shader_recompiler/backend/spirv/spirv_emit_context.h
+@@ -376,6 +376,7 @@
+                              Id pointee, bool guest_write = false);
+     /// A PhysicalStorageBuffer pointer to `pointee` (cached per type).
+     Id PhysicalPointer(Id pointee);
++    Id LoadBdaEntry(Id address, Id guest_offset);
+ 
+ 
+     Bindings& binding;
+diff --git a/gpu/shadps4/shader_recompiler/profile.h b/gpu/shadps4/shader_recompiler/profile.h
+--- a/gpu/shadps4/shader_recompiler/profile.h
++++ b/gpu/shadps4/shader_recompiler/profile.h
+@@ -62,8 +62,11 @@
+     /// bbport (Metal, P9.1): game fragment shaders without depth export and compute shaders are
+     /// emitted without NoContraction on their float ops; positions (vertex, tessellation,
+     /// geometry) and depth exports keep it. The Vulkan backend never sets it. Keep it the last
+-    /// member: the pipeline cache's profile.bin accepts the layout without it (WarmUp).
++    /// former trailing member: WarmUp accepts the older strict layout without it.
++    /// The two-level ABI below uses a separate cache namespace.
+     bool relaxed_fragment_compute_float{};
++    /// Metal's two-level BDA ABI; isolated pipeline cache namespace (flat remains available).
++    bool two_level_bda{};
+ 
+     bool operator==(const Profile&) const = default;
+ };
+diff --git a/gpu/shadps4/video_core/buffer_cache/bda_page_table.cpp b/gpu/shadps4/video_core/buffer_cache/bda_page_table.cpp
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/buffer_cache/bda_page_table.cpp
+@@ -0,0 +1,133 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "video_core/buffer_cache/bda_page_table.h"
++#include "common/assert.h"
++#include "video_core/cache_backend.h"
++#include <algorithm>
++#include <array>
++#include <cstdio>
++#include <cstring>
++namespace VideoCore {
++BdaPageTable::BdaPageTable(CacheBackend& backend_, u32 shift, bool dual, bool sparse)
++    : backend{backend_}, two_level{sparse}, views{dual ? 2u : 1u},
++      pages{Common::BdaTable::Pages(shift)},
++      root_entries{sparse ? Common::BdaTable::RootEntries(shift) : pages},
++      leaf_bytes{Common::BdaTable::LeafEntries * 8} {
++    const u64 bytes = root_entries * 8 * views;
++    root = std::make_unique<Buffer>(backend, 0, bytes, MemoryType::DeviceLocal, "BDA root table");
++    if (!two_level) {
++        backend.FillBuffer(root.get(), 0, bytes, 0);
++        Report();
++        return;
++    }
++    leaves.resize(root_entries);
++    zero = std::make_unique<Buffer>(backend, 0, leaf_bytes * views, MemoryType::DeviceLocal,
++                                    "BDA zero leaf");
++    backend.FillBuffer(zero.get(), 0, zero->SizeBytes(), 0);
++    backend.RegisterBdaLeaf(zero.get(), true);
++    const auto staging = backend.StagingRequest(bytes, MemoryType::HostUncached);
++    auto* pointers = reinterpret_cast<u64*>(staging.mapped);
++    for (u32 view = 0; view < views; ++view)
++        std::fill_n(pointers + view * root_entries, root_entries,
++                    zero->BufferDeviceAddress() + view * leaf_bytes);
++    staging.Flush();
++    const vk::BufferCopy copy{staging.offset, 0, bytes};
++    backend.CopyBuffer(staging.buffer, root.get(), std::span{&copy, 1});
++    Report();
++}
++BdaPageTable::~BdaPageTable() {
++    if (zero)
++        backend.RegisterBdaLeaf(zero.get(), false);
++    for (const auto& leaf : leaves)
++        if (leaf)
++            backend.RegisterBdaLeaf(leaf.get(), false);
++    // UniqueBuffer destruction follows the backend's completed-tick retirement path.
++}
++u64 BdaPageTable::AllocatedBytes() const {
++    return root->SizeBytes() + (zero ? zero->SizeBytes() : 0) + leaf_count * leaf_bytes * views;
++}
++Buffer& BdaPageTable::EnsureLeaf(u64 index, std::vector<u64>& created) {
++    ASSERT(index < leaves.size());
++    auto& leaf = leaves[index];
++    if (!leaf) {
++        leaf = std::make_unique<Buffer>(backend, 0, leaf_bytes * views, MemoryType::DeviceLocal,
++                                        "BDA leaf");
++        backend.FillBuffer(leaf.get(), 0, leaf->SizeBytes(), 0);
++        backend.RegisterBdaLeaf(leaf.get(), true);
++        ++leaf_count;
++        created.push_back(index);
++    }
++    return *leaf;
++}
++void BdaPageTable::CopyPlane(const Buffer* source, std::span<const vk::BufferCopy> copies, u64 view,
++                             std::vector<u64>& created) {
++    for (const auto& copy : copies) {
++        ASSERT(copy.dstOffset % 8 == 0 && copy.size % 8 == 0 && copy.dstOffset <= pages * 8 &&
++               copy.size <= pages * 8 - copy.dstOffset);
++        u64 at = copy.dstOffset, read = copy.srcOffset, remaining = copy.size;
++        while (remaining) {
++            const u64 leaf_index = at / leaf_bytes, offset = at % leaf_bytes;
++            const u64 n = std::min(remaining, leaf_bytes - offset);
++            auto& leaf = EnsureLeaf(leaf_index, created);
++            const vk::BufferCopy part{read, view * leaf_bytes + offset, n};
++            backend.CopyBuffer(source, &leaf, std::span{&part, 1});
++            at += n;
++            read += n;
++            remaining -= n;
++        }
++    }
++}
++void BdaPageTable::Publish(std::span<const u64> created) {
++    if (created.empty())
++        return;
++    const auto staging =
++        backend.StagingRequest(created.size() * views * 8, MemoryType::HostUncached);
++    auto* pointers = reinterpret_cast<u64*>(staging.mapped);
++    std::vector<vk::BufferCopy> copies;
++    copies.reserve(created.size() * views);
++    u64 index = 0;
++    for (const auto leaf : created)
++        for (u32 view = 0; view < views; ++view) {
++            pointers[index] = leaves[leaf]->BufferDeviceAddress() + view * leaf_bytes;
++            copies.emplace_back(staging.offset + index * 8, (leaf + view * root_entries) * 8, 8);
++            ++index;
++        }
++    staging.Flush();
++    backend.CopyBuffer(staging.buffer, root.get(), copies);
++}
++void BdaPageTable::Copy(const Buffer* source, std::span<const vk::BufferCopy> current,
++                        std::span<const vk::BufferCopy> guest) {
++    ASSERT(views == 2 || guest.empty());
++    if (current.empty() && guest.empty())
++        return;
++    if (!two_level) {
++        std::vector<vk::BufferCopy> copies(current.begin(), current.end());
++        for (auto part : guest) {
++            part.dstOffset += pages * 8;
++            copies.push_back(part);
++        }
++        backend.CopyBuffer(source, root.get(), copies);
++        return;
++    }
++    // The bound root is the logical hazard anchor for indirect leaf accesses. End/barrier
++    // earlier shader readers before overwriting leaves; mark it written for later bindings.
++    if (backend.IsBufferAccessed(root.get(), 0, root->SizeBytes(), true))
++        backend.FlushBarriers();
++    std::vector<u64> created;
++    CopyPlane(source, current, 0, created);
++    CopyPlane(source, guest, 1, created);
++    Publish(created); // zero/data initialization always precedes publishing a new pointer
++    backend.AccessBuffer(root.get(), 0, root->SizeBytes(), vk::PipelineStageFlagBits2::eCopy,
++                         vk::AccessFlagBits2::eTransferWrite);
++}
++void BdaPageTable::Report() {
++    const auto now = std::chrono::steady_clock::now();
++    if (now - reported < std::chrono::seconds(5))
++        return;
++    reported = now;
++    std::printf("GPU BDA page table: mode=%s, allocated=%llu bytes, root=%llu bytes, leaves=%llu, "
++                "views=%u, flat-equivalent=%llu bytes; stable leaves, no cache budget change\n",
++                two_level ? "two-level" : "flat", (unsigned long long)AllocatedBytes(),
++                (unsigned long long)root->SizeBytes(), (unsigned long long)leaf_count, views,
++                (unsigned long long)(pages * 8 * views));
++}
++} // namespace VideoCore
+diff --git a/gpu/shadps4/video_core/buffer_cache/bda_page_table.h b/gpu/shadps4/video_core/buffer_cache/bda_page_table.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/buffer_cache/bda_page_table.h
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <chrono>
++#include <memory>
++#include <span>
++#include <vector>
++#include "common/bda_page_table.h"
++#include "video_core/buffer_cache/buffer.h"
++namespace VideoCore {
++class CacheBackend;
++// One stable root, a shared zero leaf and lazily allocated leaves. Empty entries are
++// reset on unmap; leaf buffers stay stable until shutdown (no stale pointers or churn).
++class BdaPageTable {
++public:
++    BdaPageTable(CacheBackend&,u32 page_shift,bool dual_view,bool two_level);
++    ~BdaPageTable();
++    Buffer* Root() const {return root.get();}
++    u64 GuestOffset() const {return root_entries;}
++    u64 AllocatedBytes() const;
++    u64 LeafCount() const {return leaf_count;}
++    bool TwoLevel() const {return two_level;}
++    // Offsets in both copy lists are logical byte offsets within one flat view.
++    void Copy(const Buffer* source,std::span<const vk::BufferCopy> current,
++              std::span<const vk::BufferCopy> guest={});
++    void Report();
++private:
++    Buffer& EnsureLeaf(u64 index,std::vector<u64>& created);
++    void CopyPlane(const Buffer*,std::span<const vk::BufferCopy>,u64 view,std::vector<u64>&);
++    void Publish(std::span<const u64> created);
++    CacheBackend& backend;
++    bool two_level;
++    u32 views;
++    u64 pages,root_entries,leaf_bytes;
++    std::unique_ptr<Buffer> root,zero;
++    std::vector<std::unique_ptr<Buffer>> leaves;
++    u64 leaf_count=0;
++    std::chrono::steady_clock::time_point reported{};
++};
++} // namespace VideoCore
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+@@ -452,14 +452,10 @@
+     group_demoted.assign(group_use.size(), 0);
+     layer_group_use.assign(group_use.size(), 0);
+ 
+-    const u64 bda_pagetable_size =
+-        (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(vk::DeviceAddress) *
+-        (LayerActive() ? 2 : 1);
+     fault_manager = std::make_unique<FaultManager>(backend, *this, block_shift,
+                                                    blocks_per_arena_page * NUM_ARENA_PAGES);
+-    bda_pagetable_buffer = std::make_unique<Buffer>(
+-        backend, 0, bda_pagetable_size, MemoryType::DeviceLocal, "BDA Page Table Buffer");
+-    backend.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);
++    bda_page_table=std::make_unique<BdaPageTable>(backend,block_shift,LayerActive(),
++                                                backend.Limits().two_level_bda);
+ }
+ 
+ BufferCache::~BufferCache() = default;
+@@ -1393,7 +1389,7 @@
+         sparse_arena->QueueBinds(arena, sparse_binds);
+     }
+     staging.Flush();
+-    backend.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
++    bda_page_table->Copy(staging.buffer,copies);
+ }
+ 
+ std::pair<ArenaMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+@@ -19,6 +19,7 @@
+ #include "common/interval_set.h"
+ #include "common/types.h"
+ #include "video_core/buffer_cache/buffer.h"
++#include "video_core/buffer_cache/bda_page_table.h"
+ #include "video_core/buffer_cache/fault_manager.h"
+ #include "video_core/buffer_cache/range_set.h"
+ #include "video_core/cache_backend.h"
+@@ -84,8 +85,10 @@
+     }
+ 
+     /// Retrieves the device local DBA page table buffer.
++    void ReportBdaPageTable() { bda_page_table->Report(); }
++
+     [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
+-        return bda_pagetable_buffer.get();
++        return bda_page_table->Root();
+     }
+ 
+     /// Retrieves the fault buffer.
+@@ -454,7 +457,7 @@
+     RangeSet gpu_modified_ranges;
+ 
+     std::unique_ptr<FaultManager> fault_manager;
+-    std::unique_ptr<Buffer> bda_pagetable_buffer;
++    std::unique_ptr<BdaPageTable> bda_page_table;
+ 
+     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
+     std::deque<Buffer> arenas;
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp b/gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp
+@@ -1043,12 +1043,9 @@
+     // Keep the original current-view table layout for DMA/ReadConst users too; append the
+     // guest-view table in the second half rather than interleaving its entries.
+     const u64 bytes = (end - first) * sizeof(vk::DeviceAddress);
+-    const std::array<vk::BufferCopy, 2> copies{{
+-        {staging.offset, first * sizeof(vk::DeviceAddress), bytes},
+-        {staging.offset + bytes, bda_pagetable_buffer->SizeBytes() / 2 +
+-                                    first * sizeof(vk::DeviceAddress), bytes},
+-    }};
+-    backend.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
++    const vk::BufferCopy current{staging.offset,first*sizeof(vk::DeviceAddress),bytes};
++    const vk::BufferCopy guest{staging.offset+bytes,first*sizeof(vk::DeviceAddress),bytes};
++    bda_page_table->Copy(staging.buffer,std::span{&current,1},std::span{&guest,1});
+     lap(11);
+ }
+ 
+@@ -1181,8 +1178,7 @@
+                            u32(is_written && force_writes_in_place),
+                            static_cast<u32>(trash),
+                            static_cast<u32>(trash >> 32),
+-                           static_cast<u32>(bda_pagetable_buffer->SizeBytes() /
+-                                            (2 * sizeof(vk::DeviceAddress))),
++                           static_cast<u32>(bda_page_table->GuestOffset()),
+                            0};
+     const u64 offset =
+         stream_buffer.Copy(record, sizeof(record), backend.Limits().storage_min_alignment);
+diff --git a/gpu/shadps4/video_core/cache_backend.h b/gpu/shadps4/video_core/cache_backend.h
+--- a/gpu/shadps4/video_core/cache_backend.h
++++ b/gpu/shadps4/video_core/cache_backend.h
+@@ -66,6 +66,7 @@
+     /// them (the Apple GPU keeps images without them losslessly compressed). Only the Metal runtime
+     /// sets it; with it clear the caches create the images as they always did.
+     bool lean_image_usage{};
++    bool two_level_bda{}; ///< Metal: physical-address second-level page tables
+ };
+ 
+ /// What an image created lean (BackendLimits::lean_image_usage) can gain afterwards.
+@@ -250,6 +251,7 @@
+ class CacheBackend {
+ public:
+     virtual ~CacheBackend() = default;
++    virtual void RegisterBdaLeaf(const Buffer*, bool attach) {}
+     // Optional diagnostics only. The default backend has no guest lifetime association.
+     virtual void AssociateGuestImage(const UniqueImage&, u64 address, u64 size) {}
+     virtual void AssociateGuestBuffer(const UniqueBuffer&, u64 address, u64 size) {}
+diff --git a/gpu/shadps4/video_core/rasterizer_core_signals.cpp b/gpu/shadps4/video_core/rasterizer_core_signals.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core_signals.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_signals.cpp
+@@ -315,6 +315,7 @@
+     }
+     texture_cache.ProcessDownloadImages();
+     texture_cache.RunGarbageCollector();
++    buffer_cache.ReportBdaPageTable();
+     backend.TickFrame();
+ }
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_device_impl.h b/gpu/shadps4/video_core/renderer_metal/mtl_device_impl.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_device_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_device_impl.h
+@@ -9,11 +9,13 @@
+ #import <Metal/Metal.h>
+ 
+ #include <array>
++#include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <mutex>
++#include <vector>
+ #include "video_core/renderer_metal/mtl_device.h"
+ 
+ namespace Metal {
+@@ -35,6 +37,15 @@
+             guest_buffers[n] = buffer; // the chunk keeps it alive for the process
+             guest_count.store(n + 1, std::memory_order_release);
+         }
++    }
++    // Indirect page-table leaves need explicit per-encoder read declarations for tracked
++    // hazards, not residency alone. The cache owns them; this list retains no resource.
++    std::mutex bda_mutex;
++    std::vector<__unsafe_unretained id<MTLResource>> bda_leaves;
++    void BdaLeaf(id<MTLBuffer> buffer,bool attach) {
++        std::scoped_lock lock{bda_mutex};
++        if(attach)bda_leaves.push_back(buffer);
++        else std::erase(bda_leaves,buffer);
+     }
+     bool request_each_commit = false; ///< BB_MTL_REQUEST_EACH=1 (P6.1 experiment)
+     /// BB_FRAME_STATS: residency set commits, printed every 5 s (under residency_mutex).
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+@@ -115,6 +115,7 @@
+         // P9.1: V1 and V2 emit game fragment/compute shaders without NoContraction; part of the
+         // profile, so the disk cache of those rules never meets a strict one.
+         .relaxed_fragment_compute_float = ReadFloatRules() != FloatRules::Strict,
++        .two_level_bda = limits.two_level_bda,
+     };
+ }
+ 
+@@ -185,7 +186,9 @@
+     : PipelineCacheCore{liverpool_, MakeShaderProfile(device_, limits), MakePipelineCapabilities(),
+                         sparse_page_shift,
+                         // V1 and V2 share their SPIR-V; V0 keeps the cache it always had.
+-                        ReadFloatRules() == FloatRules::Strict ? "metal" : "metal-relaxed"},
++                        limits.two_level_bda
++                            ? (ReadFloatRules()==FloatRules::Strict?"metal-pt2":"metal-relaxed-pt2")
++                            : (ReadFloatRules()==FloatRules::Strict?"metal-flat2":"metal-relaxed-flat2")},
+       device{device_}, compiler{device_, msl_cache_dir, ReadFloatRules()},
+       pso_cache{device_, msl_cache_dir, ReadFloatRules() == FloatRules::RelaxedMath},
+       pass_through{device_} {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -121,6 +121,7 @@
+ 
+     /// Releases idle staging memory; once per frame.
+     void TickFrame() override;
++    void RegisterBdaLeaf(const VideoCore::Buffer*,bool attach) override;
+     bool DiscardIdleStaging(const VideoCore::Buffer& buffer);
+     void WakeStaging(const VideoCore::Buffer& buffer);
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -448,6 +448,8 @@
+     // losslessly compressed. BB_MTL_FULL_USAGE=1 restores the usages every image had.
+     const char* full_usage = std::getenv("BB_MTL_FULL_USAGE");
+     limits.lean_image_usage = !(full_usage && full_usage[0] == '1');
++    const char* page_table=std::getenv("BB_MTL_TWO_LEVEL_BDA");
++    limits.two_level_bda=!(page_table && page_table[0]=='0');
+     LOG_INFO(Render, "Metal: texture cache images are created {}",
+              limits.lean_image_usage
+                  ? "lean (ShaderWrite and PixelFormatView on first need, BB_MTL_FULL_USAGE=1 "
+@@ -657,6 +659,10 @@
+     // Pipelines and the objects the caches still hold may be in use by the last command buffers.
+     scheduler.Finish();
+     ImageUsageLog::Flush();
++}
++
++void Runtime::RegisterBdaLeaf(const Buffer* buffer,bool attach) {
++    impl->dev.BdaLeaf(NativeBuffer(*buffer),attach);
+ }
+ 
+ void Runtime::TickFrame() {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -66,6 +66,18 @@
+ /// addresses read and write nothing without residency, D6). BB_MTL_USE_GUEST=0 turns it off
+ /// (only with BB_MTL_GUEST_IN_SET=1).
+ void UseGuestChunks(Scheduler::Impl& impl, EncoderKind kind) {
++    {
++        std::scoped_lock lock{impl.dev.bda_mutex};
++        const auto& leaves=impl.dev.bda_leaves;
++        if(!leaves.empty()) {
++            if(kind==EncoderKind::Render)
++                [impl.render useResources:leaves.data() count:leaves.size()
++                    usage:MTLResourceUsageRead stages:MTLRenderStageVertex|MTLRenderStageFragment];
++            else if(kind==EncoderKind::Compute)
++                [impl.compute useResources:leaves.data() count:leaves.size() usage:MTLResourceUsageRead];
++        }
++    }
++
+     static const bool enabled = [] {
+         const char* env = std::getenv("BB_MTL_USE_GUEST");
+         return !(env && env[0] == '0');
+diff --git a/tests/test_mtl_bda_page_table.mm b/tests/test_mtl_bda_page_table.mm
+new file mode 100644
+--- /dev/null
++++ b/tests/test_mtl_bda_page_table.mm
+@@ -0,0 +1,455 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Actual production table updates and SPIR-V -> MSL addressing on a Metal device; no game.
++#include "shader_recompiler/backend/spirv/emit_spirv.h"
++#include "shader_recompiler/ir/ir_emitter.h"
++#include "video_core/buffer_cache/bda_page_table.h"
++#include "video_core/render_state.h"
++#include "video_core/renderer_metal/mtl_device_impl.h"
++#include "video_core/renderer_metal/mtl_runtime.h"
++#include "video_core/renderer_metal/mtl_scheduler_impl.h"
++#include "video_core/renderer_metal/mtl_shader.h"
++#import <Metal/Metal.h>
++#include <algorithm>
++#include <array>
++#include <cassert>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <memory>
++#include <thread>
++#include <vector>
++using namespace VideoCore;
++struct Fixture {
++    Metal::Device device;
++    Metal::Scheduler scheduler{device, "bda-test"};
++    Metal::Runtime runtime{device, scheduler};
++    Metal::ShaderCompiler compiler{device, std::filesystem::temp_directory_path() / "bb-bda-msl"};
++    void Settle() {
++        runtime.Finish();
++        std::this_thread::sleep_for(std::chrono::milliseconds(10));
++    }
++};
++static std::unique_ptr<Buffer> Make(Fixture& f, u64 bytes) {
++    return std::make_unique<Buffer>(f.runtime, 0, bytes, MemoryType::HostCached, "BDA test data");
++}
++static void Update(BdaPageTable& table, Buffer& upload, u64 first, std::span<const u64> current,
++                   std::span<const u64> guest = {}) {
++    assert(current.size() + guest.size() <= upload.SizeBytes() / 8);
++    std::memcpy(upload.mapped_data.data(), current.data(), current.size_bytes());
++    if (!guest.empty())
++        std::memcpy(upload.mapped_data.data() + current.size_bytes(), guest.data(),
++                    guest.size_bytes());
++    const vk::BufferCopy a{0, first * 8, current.size_bytes()},
++        b{current.size_bytes(), first * 8, guest.size_bytes()};
++    table.Copy(&upload, std::span{&a, 1},
++               guest.empty() ? std::span<const vk::BufferCopy>{} : std::span{&b, 1});
++}
++static std::vector<u32> Program(bool two_level, u32 shift, bool bench, bool random = false,
++                                bool dma = false) {
++    using namespace Shader;
++    constexpr u64 Hash = 0xbda20001;
++    Info info{};
++    info.hw_stage = HwStage::Compute;
++    info.sw_stage = SwStage::Compute;
++    info.pgm_hash = Hash;
++    info.uses_paged_buffers = true;
++    if (dma) {
++        info.uses_dma = true;
++        info.readconst_types = Info::ReadConstType::Dynamic;
++    }
++    for (u32 i = 0; i < 3; ++i) {
++        BufferResource resource{};
++        resource.buffer_type = i == 2 ? BufferType::BdaPagetable : BufferType::Guest;
++        resource.used_types = i == 2 ? IR::Type::U64 : IR::Type::U32;
++        resource.is_written = i == 1;
++        const auto sharp = AmdGpu::Buffer::Placeholder(64 * 1024 * 1024);
++        std::memcpy(resource.sharp_fetch.immediates.data(), &sharp, sizeof(sharp));
++        info.buffers.push_back(resource);
++    }
++    if (dma) {
++        BufferResource fault{};
++        fault.buffer_type = BufferType::FaultBuffer;
++        fault.used_types = IR::Type::U32;
++        fault.is_written = true;
++        info.buffers.push_back(fault);
++    }
++    Common::ObjectPool<IR::Inst> pool;
++    IR::Block block(pool);
++    IR::IREmitter ir(block);
++    if (!bench) {
++        const u32 page = 1u << shift;
++        const std::array<u32, 6> offsets{
++            0, page / 4 - 1, page / 4, page * 2 / 4, page * 3 / 4, 0xffffffffU / 4};
++        for (u32 i = 0; i < offsets.size(); ++i) {
++            const auto value =
++                dma ? IR::Value{ir.ReadConst(
++                          ir.CompositeConstruct(ir.Imm32(0x40000000U), ir.Imm32(0x70U)),
++                          ir.Imm32(i % 4))}
++                    : ir.LoadBufferU32(1, ir.Imm32(0U), ir.Imm32(i % 4), {});
++            ir.StoreBufferU32(1, ir.Imm32(1U), ir.Imm32(offsets[i]), value, {});
++        }
++    } else {
++        info.loads.Set(IR::Attribute::WorkgroupId, 0);
++        info.loads.Set(IR::Attribute::LocalInvocationId, 0);
++        const auto group = ir.GetAttributeU32(IR::Attribute::WorkgroupId, 0);
++        const auto local = ir.GetAttributeU32(IR::Attribute::LocalInvocationId, 0);
++        const auto id = ir.IAdd(ir.IMul(group, ir.Imm32(64U)), local);
++        IR::U32 sum = ir.Imm32(0U);
++        for (u32 j = 0; j < 16; ++j) {
++            const auto page =
++                random
++                    ? ir.BitwiseAnd(ir.IAdd(ir.IMul(id, ir.Imm32(104729U)), ir.Imm32(j * 14713)),
++                                    ir.Imm32(65535U))
++                    : ir.BitwiseAnd(ir.IAdd(ir.ShiftRightLogical(id, ir.Imm32(10U)), ir.Imm32(j)),
++                                    ir.Imm32(65535U));
++            const auto offset = ir.IAdd(ir.ShiftLeftLogical(page, ir.Imm32(shift - 2)),
++                                        ir.BitwiseAnd(id, ir.Imm32(1023U)));
++            sum = ir.IAdd(sum, IR::U32{ir.LoadBufferU32(1, ir.Imm32(0U), offset, {})});
++        }
++        ir.StoreBufferU32(1, ir.Imm32(1U), id, sum, {});
++    }
++    ir.Epilogue();
++    IR::Program program(info);
++    program.blocks.push_back(&block);
++    program.syntax_list.push_back(
++        {.data = {.block = &block}, .type = IR::AbstractSyntaxNode::Type::Block});
++    program.syntax_list.push_back({.type = IR::AbstractSyntaxNode::Type::Return});
++    RuntimeInfo runtime{};
++    runtime.Initialize(info.hw_stage, info.sw_stage);
++    runtime.hw.cs.workgroup_size = {bench ? 64u : 1u, 1, 1};
++    Profile profile{};
++    profile.supported_spirv = 0x00010600;
++    profile.support_int64 = true;
++    profile.paged_buffers = true;
++    profile.sparse_page_shift = shift;
++    profile.two_level_bda = two_level;
++    profile.buffer_copy_shader_hash = bench ? 0 : Hash;
++    Backend::Bindings bindings{};
++    return Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings);
++}
++struct Kernel {
++    std::unique_ptr<Metal::CompiledShader> shader;
++    id<MTLComputePipelineState> pipeline;
++};
++static Kernel Compile(Fixture& f, bool two, u32 shift, bool bench = false, bool random = false,
++                      bool dma = false) {
++    const auto code = Program(two, shift, bench, random, dma);
++    auto compiled =
++        f.compiler.Compile(code, 0xbda20000 + two + 2 * bench + 4 * random + shift, "bda-test");
++    if (compiled.status != Metal::CompileStatus::Ok)
++        std::fprintf(stderr, "%s\n", compiled.error.c_str());
++    assert(compiled.status == Metal::CompileStatus::Ok);
++    NSError* error = nil;
++    auto state = [f.device.GetImpl().device
++        newComputePipelineStateWithFunction:(__bridge id<MTLFunction>)compiled.shader->function
++                                      error:&error];
++    if (!state)
++        std::fprintf(stderr, "%s\n", error.localizedDescription.UTF8String);
++    assert(state);
++    return {std::move(compiled.shader), state};
++}
++static id<MTLCommandBuffer> Dispatch(Fixture& f, Kernel& k, BdaPageTable& table, Buffer& records,
++                                     std::span<Buffer* const> data, u32 threads = 1,
++                                     Buffer* fault = nullptr) {
++    f.runtime.FlushBarriers();
++    f.scheduler.ComputeEncoder("BDA shader");
++    auto encoder = f.scheduler.GetImpl().compute;
++    [encoder setComputePipelineState:k.pipeline];
++    for (const auto& binding : k.shader->bindings)
++        if (binding.kind == Metal::ShaderBinding::Kind::Buffer) {
++            assert(binding.binding < 4 && (binding.binding < 3 || fault));
++            Buffer* buffer = binding.binding == 3   ? fault
++                             : binding.binding == 2 ? table.Root()
++                                                    : &records;
++            [encoder setBuffer:(__bridge id<MTLBuffer>)buffer->buffer.native
++                        offset:binding.binding == 1 ? 256 : 0
++                       atIndex:binding.msl_index];
++        }
++    std::array<u32, 32> push{};
++    [encoder setBytes:push.data() length:sizeof(push) atIndex:0];
++    if (k.shader->buffer_size_buffer != ~0u) {
++        std::array<u32, 32> sizes{};
++        sizes.fill(~0u);
++        [encoder setBytes:sizes.data() length:sizeof(sizes) atIndex:k.shader->buffer_size_buffer];
++    }
++    for (auto* buffer : data)
++        [encoder useResource:(__bridge id<MTLBuffer>)buffer->buffer.native
++                       usage:MTLResourceUsageRead | MTLResourceUsageWrite];
++    [encoder dispatchThreads:MTLSizeMake(threads, 1, 1)
++        threadsPerThreadgroup:MTLSizeMake(std::min<u32>(threads, 64), 1, 1)];
++    f.runtime.AccessBuffer(table.Root(), 0, table.Root()->SizeBytes(),
++                           vk::PipelineStageFlagBits2::eComputeShader,
++                           vk::AccessFlagBits2::eShaderRead);
++    f.runtime.AccessGlobal(vk::PipelineStageFlagBits2::eComputeShader,
++                           vk::AccessFlagBits2::eShaderWrite);
++    return f.scheduler.GetImpl().cmdbuf;
++}
++static void Records(Buffer& records, u64 source, u64 dest, u32 bytes, u64 trash, u32 guest_offset,
++                    bool through = true) {
++    auto* out = reinterpret_cast<u32*>(records.mapped_data.data());
++    const auto put = [&](u32 at, u64 base, bool write) {
++        const u32 words[] = {u32(base),  u32(base >> 32),  bytes,        u32(write),
++                             u32(trash), u32(trash >> 32), guest_offset, 0};
++        std::memcpy(out + at, words, sizeof(words));
++    };
++    put(0, source, false);
++    put(64, dest, through);
++}
++static void Correctness(Fixture& f, u32 shift) {
++    const u32 page = 1u << shift;
++    auto guest = Make(f, page * 3), mirror = Make(f, page * 3), source = Make(f, page),
++         alternate = Make(f, page), records = Make(f, 4096), upload = Make(f, 4096),
++         trash = Make(f, 65536);
++    for (auto* data : {guest.get(), mirror.get(), trash.get()})
++        std::memset(data->mapped_data.data(), 0, data->SizeBytes());
++    auto* input = reinterpret_cast<u32*>(source->mapped_data.data());
++    auto* host = reinterpret_cast<u32*>(guest->mapped_data.data());
++    auto* vram = reinterpret_cast<u32*>(mirror->mapped_data.data());
++    const u32 values[] = {0x12345678, 0x23456789, 0x3456789a, 0x456789ab};
++    std::memcpy(input, values, sizeof(values));
++    auto kernel = Compile(f, true, shift);
++    {
++        BdaPageTable table{f.runtime, shift, true, true};
++        const u64 src_page = 0x7040000000ull >> shift;
++        const u64 dst_page = ((0x70c0000000ull >> shift) & ~4095ull) + 4095;
++        const std::array<u64, 1> cur_src{source->BufferDeviceAddress()},
++            guest_src{guest->BufferDeviceAddress() + 2 * page};
++        Update(table, *upload, src_page, cur_src, guest_src);
++        f.Settle();
++        const std::array<u64, 2> cur_dst{mirror->BufferDeviceAddress(),
++                                         guest->BufferDeviceAddress() + page};
++        const std::array<u64, 2> guest_dst{guest->BufferDeviceAddress(),
++                                           guest->BufferDeviceAddress() + page};
++        Update(table, *upload, dst_page, cur_dst, guest_dst);
++        Records(*records, src_page * page, dst_page * page, page * 3, trash->BufferDeviceAddress(),
++                table.GuestOffset());
++        const std::array<Buffer*, 5> data{guest.get(), mirror.get(), source.get(), alternate.get(),
++                                          trash.get()};
++        Dispatch(f, kernel, table, *records, data);
++        f.Settle();
++        assert(host[0] == values[0] && vram[0] == values[0]);
++        assert(host[page / 4 - 1] == values[1] && vram[page / 4 - 1] == values[1]);
++        assert(host[page / 4] == values[2] && host[page * 2 / 4] == 0 && vram[page * 2 / 4] == 0);
++        assert(table.LeafCount() == 3 && table.AllocatedBytes() < 1048576);
++        auto dma = Compile(f, true, shift, false, false, true);
++        auto faults = Make(f, Common::BdaTable::Pages(shift) / 8);
++        std::memset(faults->mapped_data.data(), 0, faults->SizeBytes());
++        Dispatch(f, dma, table, *records, data, 1, faults.get());
++        f.Settle();
++        assert(host[0] == values[0]);
++        std::puts("PASS production DMA/ReadConst uses the same two-level addressing");
++        // Same leaf replacement while the first dispatch is still pending; snapshot its output.
++        auto snapshot = Make(f, page);
++        std::fill_n(reinterpret_cast<u32*>(alternate->mapped_data.data()), 4, 0xdeadbeefU);
++        Dispatch(f, kernel, table, *records, data);
++        const vk::BufferCopy snap{0, 0, page};
++        f.runtime.CopyBuffer(guest.get(), snapshot.get(), std::span{&snap, 1});
++        const std::array<u64, 1> replacement{alternate->BufferDeviceAddress()};
++        Update(table, *upload, src_page, replacement, guest_src);
++        Dispatch(f, kernel, table, *records, data);
++        f.Settle();
++        assert(reinterpret_cast<u32*>(snapshot->mapped_data.data())[0] == values[0] &&
++               host[0] == 0xdeadbeefU);
++        const auto leaves = table.LeafCount();
++        const std::array<u64, 1> zero{0};
++        Update(table, *upload, src_page, zero, zero);
++        Dispatch(f, kernel, table, *records, data);
++        f.Settle();
++        assert(host[0] == 0 && table.LeafCount() == leaves);
++        // Entirely absent root, then 40-bit overflow, must read zero without a null dereference.
++        for (const u64 bad : {0x100000000ull, 1ull << 40, 0xffffffffffff0000ull}) {
++            Records(*records, bad, dst_page * page, page * 3, trash->BufferDeviceAddress(),
++                    table.GuestOffset());
++            Dispatch(f, kernel, table, *records, data);
++            f.Settle();
++            assert(host[0] == 0);
++        }
++        const u64 last = Common::BdaTable::Pages(shift) - 1;
++        Update(table, *upload, last, cur_src, guest_src);
++        f.Settle();
++        Records(*records, last * page, dst_page * page, page * 3, trash->BufferDeviceAddress(),
++                table.GuestOffset());
++        Dispatch(f, kernel, table, *records, data);
++        f.Settle();
++        assert(host[0] == values[0]);
++        Records(*records, last * page, dst_page * page, page * 3, trash->BufferDeviceAddress(),
++                table.GuestOffset(), false);
++        host[0] = vram[0] = 0;
++        Dispatch(f, kernel, table, *records, data);
++        f.Settle();
++        assert(host[0] == 0 && vram[0] == values[0]);
++    }
++    f.Settle();
++    assert(f.device.GetImpl().bda_leaves.empty());
++    std::printf("PASS two-level BDA shift=%u: high addresses, leaf/page boundaries, dual views, "
++                "pending remap, zero/unmap, overflow, write-through ownership, retirement\n",
++                shift);
++}
++static void RenderUpdateOrdering(Fixture& f) {
++    auto source = Make(f, 16384), alternate = Make(f, 16384), upload = Make(f, 4096);
++    *reinterpret_cast<u32*>(source->mapped_data.data()) = 17;
++    *reinterpret_cast<u32*>(alternate->mapped_data.data()) = 23;
++    f.runtime.RegisterBdaLeaf(source.get(), true);
++    f.runtime.RegisterBdaLeaf(alternate.get(), true);
++    NSString* text = @"#include <metal_stdlib>\nusing namespace metal;\n"
++                      "vertex float4 v(uint i [[vertex_id]]) {float2 "
++                      "p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)};return float4(p[i],0,1);}\n"
++                      "fragment float4 f(device const ulong* root [[buffer(0)]],constant uint& p "
++                      "[[buffer(1)]]) {"
++                      "device const ulong* leaf=reinterpret_cast<device const ulong*>(root[p>>12]);"
++                      "device const uint* data=reinterpret_cast<device const uint*>(leaf[p&4095]);"
++                      "uint a=data[0];return float4(a==17?1.0:0.0,0,a==23?1.0:0.0,1);}";
++    NSError* error = nil;
++    auto device = f.device.GetImpl().device;
++    auto library = [device newLibraryWithSource:text options:nil error:&error];
++    assert(library);
++    auto descriptor = [MTLRenderPipelineDescriptor new];
++    descriptor.vertexFunction = [library newFunctionWithName:@"v"];
++    descriptor.fragmentFunction = [library newFunctionWithName:@"f"];
++    descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
++    auto pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
++    assert(pipeline);
++    auto td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
++                                                                 width:8
++                                                                height:8
++                                                             mipmapped:NO];
++    td.storageMode = MTLStorageModeShared;
++    td.usage = MTLTextureUsageRenderTarget;
++    id<MTLTexture> before = [device newTextureWithDescriptor:td],
++                   before_replay = [device newTextureWithDescriptor:td],
++                   after = [device newTextureWithDescriptor:td];
++    {
++        BdaPageTable table{f.runtime, 14, true, true};
++        const u32 page = 0x7040000000ull >> 14;
++        const std::array<u64, 1> first{source->BufferDeviceAddress()},
++            second{alternate->BufferDeviceAddress()};
++        Update(table, *upload, page, first, first);
++        f.Settle();
++        auto draw = [&](id<MTLTexture> target) {
++            f.runtime.FlushBarriers();
++            auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
++            pass.colorAttachments[0].texture = target;
++            pass.colorAttachments[0].loadAction = MTLLoadActionClear;
++            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
++            RenderState state{};
++            f.scheduler.RenderEncoder((__bridge const void*)pass, state);
++            auto& list = f.scheduler.Commands();
++            list.SetRenderPipelineState((__bridge void*)pipeline);
++            list.SetBuffer(Metal::RenderList::Stage::Fragment, table.Root()->buffer.native, 0, 0);
++            list.SetBytes(Metal::RenderList::Stage::Fragment, &page, 4, 1);
++            Metal::RenderList::Viewport vp{0, 0, 8, 8, 0, 1};
++            list.SetViewports(&vp, 1);
++            list.DrawPrimitives(MTLPrimitiveTypeTriangle, 0, 3, 1, 0);
++            f.runtime.AccessBuffer(table.Root(), 0, table.Root()->SizeBytes(),
++                                   vk::PipelineStageFlagBits2::eAllGraphics,
++                                   vk::AccessFlagBits2::eShaderRead);
++        };
++        draw(before);
++        draw(before_replay);
++        Update(table, *upload, page, second, second);
++        draw(after);
++        f.Settle();
++        std::array<u8, 256> red{}, red_replay{}, blue{};
++        [before getBytes:red.data()
++             bytesPerRow:32
++              fromRegion:MTLRegionMake2D(0, 0, 8, 8)
++             mipmapLevel:0];
++        [before_replay getBytes:red_replay.data()
++                    bytesPerRow:32
++                     fromRegion:MTLRegionMake2D(0, 0, 8, 8)
++                    mipmapLevel:0];
++        [after getBytes:blue.data()
++            bytesPerRow:32
++             fromRegion:MTLRegionMake2D(0, 0, 8, 8)
++            mipmapLevel:0];
++        for (unsigned i = 0; i < 64; ++i)
++            assert(red[i * 4] == 255 && red[i * 4 + 2] == 0 && red_replay[i * 4] == 255 &&
++                   red_replay[i * 4 + 2] == 0 && blue[i * 4] == 0 && blue[i * 4 + 2] == 255);
++    }
++    f.runtime.RegisterBdaLeaf(source.get(), false);
++    f.runtime.RegisterBdaLeaf(alternate.get(), false);
++    f.Settle();
++    assert(f.device.GetImpl().bda_leaves.empty());
++    std::puts("PASS render/held replay: first draw sees old leaf, later draw sees remap, indirect "
++              "buffers declared");
++}
++static void Benchmark(Fixture& f, bool two, bool random) {
++    constexpr u32 Shift = 14, Page = 1u << Shift, Pages = 65536, PhysicalPages = 1024,
++                  Threads = 262144;
++    const u64 source_base = 0x7040000000ull, dest_base = 0x70c0000000ull;
++    auto source = Make(f, u64(PhysicalPages) * Page), output = Make(f, u64(Threads) * 4),
++         records = Make(f, 4096), trash = Make(f, 65536);
++    auto upload = Make(f, (Pages + Threads * 4 / Page) * 2 * 8);
++    auto* data = reinterpret_cast<u32*>(source->mapped_data.data());
++    for (u32 i = 0; i < source->SizeBytes() / 4; ++i)
++        data[i] = i * 17 + 3;
++    std::memset(output->mapped_data.data(), 0, output->SizeBytes());
++    auto kernel = Compile(f, two, Shift, true, random);
++    {
++        BdaPageTable table{f.runtime, Shift, true, two};
++        std::vector<u64> entries(Pages);
++        for (u32 i = 0; i < Pages; ++i)
++            entries[i] = source->BufferDeviceAddress() + u64(i % PhysicalPages) * Page;
++        Update(table, *upload, source_base / Page, entries, entries);
++        f.Settle();
++        entries.resize(output->SizeBytes() / Page);
++        for (u32 i = 0; i < entries.size(); ++i)
++            entries[i] = output->BufferDeviceAddress() + u64(i) * Page;
++        Update(table, *upload, dest_base / Page, entries, entries);
++        f.Settle();
++        Records(*records, source_base, dest_base, Pages * Page, trash->BufferDeviceAddress(),
++                table.GuestOffset(), false);
++        // Source and destination sizes differ, as in game descriptors.
++        reinterpret_cast<u32*>(records->mapped_data.data())[64 + 2] = output->SizeBytes();
++        const std::array<Buffer*, 3> resources{source.get(), output.get(), trash.get()};
++        std::vector<double> times;
++        for (unsigned n = 0; n < 26; ++n) {
++            id<MTLCommandBuffer> command = nil;
++            for (unsigned batch = 0; batch < 16; ++batch)
++                command = Dispatch(f, kernel, table, *records, resources, Threads);
++            f.Settle();
++            assert(command.status == MTLCommandBufferStatusCompleted);
++            if (n >= 6)
++                times.push_back((command.GPUEndTime - command.GPUStartTime) * 1000.0 / 16.0);
++        }
++        const auto* result = reinterpret_cast<u32*>(output->mapped_data.data());
++        for (u32 i = 0; i < Threads; ++i) {
++            u32 expected = 0;
++            for (u32 j = 0; j < 16; ++j) {
++                const u32 page = (random ? (i * 104729 + j * 14713) : ((i >> 10) + j)) & 65535;
++                const u32 index = (page % PhysicalPages) * (Page / 4) + (i & 1023);
++                expected += data[index];
++            }
++            assert(result[i] == expected);
++        }
++        std::sort(times.begin(), times.end());
++        const double median = (times[9] + times[10]) / 2, p95 = times[18];
++        std::printf(
++            "BDA benchmark: mode=%s pattern=%s gpu-median-ms=%.6f gpu-p95-ms=%.6f table-bytes=%llu "
++            "leaf-count=%llu samples=%zu threads=%u lookups=%u checksum=passed\n",
++            two ? "two-level" : "flat", random ? "random" : "local", median, p95,
++            (unsigned long long)table.AllocatedBytes(), (unsigned long long)table.LeafCount(),
++            times.size(), Threads, Threads * 16);
++    }
++    f.Settle();
++}
++int main(int argc, char** argv) {
++    @autoreleasepool {
++        setenv("BB_DIRECT_MEMORY_ACCESS", "1", 1);
++        Fixture f;
++        if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {
++            for (bool random : {false, true}) {
++                for (bool two : {false, true})
++                    Benchmark(f, two, random);
++                for (bool two : {true, false})
++                    Benchmark(f, two, random);
++            }
++        } else {
++            Correctness(f, 14);
++            Correctness(f, 16);
++            RenderUpdateOrdering(f);
++        }
++        f.Settle();
++    }
++}

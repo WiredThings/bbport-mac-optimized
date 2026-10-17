@@ -12,8 +12,13 @@ def fields(text):
 
 def analyze(text):
     snapshots, categories, associations, lifetime = [], {}, {}, {}
+    page_table = {}
     for line in text.splitlines():
-        if 'Metal memory category ' in line:
+        if 'GPU BDA page table: ' in line:
+            page_table = fields(line)
+            mode = re.search(r'mode=([a-z-]+)', line)
+            if mode: page_table['mode'] = mode.group(1)
+        elif 'Metal memory category ' in line:
             tail = line.split('Metal memory category ', 1)[1]
             name, values = tail.split(': ', 1)
             categories[name] = fields(values)
@@ -26,7 +31,7 @@ def analyze(text):
         elif 'Guest resource reclaim: ' in line:
             lifetime['reclaim'] = fields(line.split('Guest resource reclaim: ', 1)[1])
         elif 'Metal memory totals: ' in line:
-            snapshots.append({'categories': categories, 'totals': fields(line.split('Metal memory totals: ', 1)[1]), 'associations': associations, 'internal_gpu_allocators': lifetime})
+            snapshots.append({'categories': categories, 'totals': fields(line.split('Metal memory totals: ', 1)[1]), 'associations': associations, 'internal_gpu_allocators': lifetime, 'bda_page_table': dict(page_table)})
             categories, associations, lifetime = {}, {}, {}
         elif 'Guest memory categories: ' in line and snapshots:
             snapshots[-1]['guest'] = fields(line.split('Guest memory categories: ', 1)[1])

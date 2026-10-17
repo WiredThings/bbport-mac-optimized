@@ -41,7 +41,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -95,6 +95,7 @@ def main():
     copy(ROOT / 'docs/release/METAL-GAME-MOTION-2.md', engine / 'METAL-GAME-MOTION-2.md')
     copy(ROOT / 'docs/release/METAL-MEMORY-2.md', engine / 'METAL-MEMORY-2.md')
     copy(ROOT / 'docs/release/METAL-MEMORY-3.md', engine / 'METAL-MEMORY-3.md')
+    copy(ROOT / 'docs/release/METAL-BDA-PAGE-TABLE.md', engine / 'METAL-BDA-PAGE-TABLE.md')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
     assert run('git', '-C', args.spirv_cross_source, 'rev-parse', 'HEAD') == 'f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7'
@@ -122,6 +123,7 @@ def main():
                     renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original), metal_probe_text_sha256=text_hash(probe),
                     metal_probe_snapshot_abi=bool(args.metal_probe),
                     baseline=(baseline / 'Contents/Resources/bbport/.version').read_text().strip(), default_renderer='metal', fallback_renderer='vulkan',
+                    bda_table_default='two-level', bda_flat_fallback='BB_MTL_TWO_LEVEL_BDA=0',
                     game_started_for_validation=False, gameplay_performance_verified=False)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'

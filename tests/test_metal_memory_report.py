@@ -47,3 +47,11 @@ Metal guest association sampled-textures: live=9999 bytes
         self.assertEqual(snapshot['internal_gpu_allocators']['heap']['unknown-frees'],2)
         self.assertEqual(snapshot['internal_gpu_allocators']['reclaim']['allocation-bytes'],90)
         self.assertEqual(report['process_footprint_gib'],1000/1024**3)
+
+    def test_two_level_capacity_is_diagnostic_not_additional_footprint(self):
+        report=m.analyze("""GPU BDA page table: mode=two-level, allocated=5570560 bytes, root=262144 bytes, leaves=80, flat-equivalent=1073741824 bytes
+Metal memory totals: footprint=1234 bytes
+""")
+        self.assertEqual(report['latest']['bda_page_table']['mode'],'two-level')
+        self.assertEqual(report['latest']['bda_page_table']['leaves'],80)
+        self.assertEqual(report['process_footprint_gib'],1234/1024**3)
