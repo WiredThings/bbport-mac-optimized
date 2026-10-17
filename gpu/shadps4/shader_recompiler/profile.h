@@ -56,6 +56,9 @@ struct Profile {
     bool supports_shader_stencil_export{};
     /// bbport BB_LAYER_MEMORY: guest buffers of IsPagedBuffer size go through the page table.
     bool paged_buffers{};
+    /// Keep position/depth stages precise; Apple fragment/compute shaders can contract floats.
+    /// Part of the serialized profile so the fallback mode never reuses optimized shaders.
+    bool precise_fragment_compute{true};
     /// bbport: the game's buffer copy compute shader (its GCN program hash, from the game's profile;
     /// 0 = none): its paged stores go through to the game's memory as well.
     u64 buffer_copy_shader_hash{};

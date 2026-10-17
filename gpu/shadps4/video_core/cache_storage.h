@@ -38,6 +38,9 @@ public:
     bool Save(BlobType type, const std::string& name, std::vector<u8>&& data);
     bool Save(BlobType type, const std::string& name, std::vector<u32>&& data);
 
+    /// bbport: whether a blob of this name is stored (unarchived caches; false otherwise).
+    [[nodiscard]] bool Exists(BlobType type, const std::string& name) const;
+
     void Load(BlobType type, const std::string& name, std::vector<u8>& data);
     void Load(BlobType type, const std::string& name, std::vector<u32>& data);
 

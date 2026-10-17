@@ -52,6 +52,8 @@ class OptimizedLauncherTests(unittest.TestCase):
                 self.assertEqual(env['BB_GPU_DEPS'], str(self.native / 'deps-arm64'))
                 self.assertEqual(env['BB_QUICKSAVE'], on)
                 self.assertEqual(env['BB_LANGUAGE'], '11')
+                self.assertEqual(env['BB_GPU_USER_DIR'], str(Path(self.env['BB_DATA_DIR']) / 'gpu-cache/perf1-stages'))
+                self.assertEqual(env['MESA_SHADER_CACHE_DIR'], str(Path(self.env['BB_DATA_DIR']) / 'mesa-cache-perf1'))
                 for name in ['BB_MENU_SCANCODE', 'BB_QUICKSAVE_SCANCODE', 'BB_QUICKLOAD_SCANCODE']:
                     self.assertEqual(env[name], self.env[name])
                 self.assertEqual(env['BB_QUICKSAVE_PYTHON'], sys.executable)
@@ -63,6 +65,16 @@ class OptimizedLauncherTests(unittest.TestCase):
                 self.assertNotIn('BB_QUICKLOAD_PENDING', env)
                 self.assertEqual(env['BB_MAC_UNIFIED_MEMORY'], '0')
                 self.assertEqual(env['BB_FRAMES_AHEAD'], '2')
+
+    def test_strict_precision_uses_its_own_cache_and_preserves_overrides(self):
+        self.env['BB_SPIRV_PRECISE'] = 'all'
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        env = json.loads(self.capture.read_text())
+        self.assertTrue(env['BB_GPU_USER_DIR'].endswith('/perf1-all'))
+        self.env['BB_GPU_USER_DIR'] = str(Path(self.temp.name) / 'custom-cache')
+        self.assertEqual(self.run_launcher().returncode, 0)
+        self.assertEqual(json.loads(self.capture.read_text())['BB_GPU_USER_DIR'], self.env['BB_GPU_USER_DIR'])
 
     def test_missing_native_build_never_falls_back_to_release(self):
         (self.native / 'out/gpu-arm64/bb-gpu').unlink()

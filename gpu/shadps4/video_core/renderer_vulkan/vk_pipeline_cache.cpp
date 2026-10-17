@@ -408,6 +408,14 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
         // bbport BB_LAYER_MEMORY: buffers over nearly all memory go through the page table.
         .paged_buffers = VideoCore::BufferCache::LayerPagedActive(),
+        .precise_fragment_compute = [] {
+#ifdef __APPLE__
+            const char* mode = std::getenv("BB_SPIRV_PRECISE");
+            return mode && std::strcmp(mode, "all") == 0;
+#else
+            return true;
+#endif
+        }(),
         // The game's buffer copy shader, from its profile (games/).
         .buffer_copy_shader_hash = Game::BufferCopyShader(),
     };
@@ -1125,20 +1133,21 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     if (it_pgm == program_cache.end()) {
         auto new_program = std::make_unique<Program>(hw_stage, sw_stage, params);
         auto start = binding;
+        const size_t perm_idx = FreePermIndex(params.hash, 0);
         const auto module =
-            CompileModule(new_program->info, runtime_info, params.code, 0, binding);
+            CompileModule(new_program->info, runtime_info, params.code, perm_idx, binding);
         auto spec = Shader::StageSpecialization(new_program->info, runtime_info, profile, start);
-        const auto perm_hash = HashCombine(params.hash, 0);
+        const auto perm_hash = HashCombine(params.hash, perm_idx);
 
-        RegisterShaderMeta(new_program->info, spec.fetch_shader_data, spec, perm_hash, 0);
-        new_program->AddPermut(module, std::move(spec));
+        RegisterShaderMeta(new_program->info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
+        new_program->InsertPermut(module, std::move(spec), perm_idx);
         new_program->info_template = std::make_unique<Shader::Info>(new_program->info);
         Program* program = new_program.get();
         {
             std::unique_lock lk{programs_mutex};
             program_cache.emplace(params.hash, std::move(new_program));
         }
-        return std::make_tuple(&program->info, module, program->modules[0].spec.fetch_shader_data,
+        return std::make_tuple(&program->info, module, program->modules[perm_idx].spec.fetch_shader_data,
                                perm_hash);
     }
 
@@ -1168,12 +1177,14 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         program->last_used = std::distance(program->modules.begin(), it);
     }
     if (it == program->modules.end()) {
+        perm_idx = FreePermIndex(params.hash, perm_idx);
+        perm_hash = HashCombine(params.hash, perm_idx);
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
 
         RegisterShaderMeta(info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
         std::unique_lock lk{programs_mutex};
-        program->AddPermut(module, std::move(spec));
+        program->InsertPermut(module, std::move(spec), perm_idx);
     } else {
         info.AddBindings(binding);
         module = it->module;
@@ -1182,6 +1193,19 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     }
     return std::make_tuple(&program->info, module,
                            program->modules[perm_idx].spec.fetch_shader_data, perm_hash);
+}
+
+// Adapted from Wooloomooloo2/bloodborne_mac_port 29bd6c8. Only probe the disk for new
+// permutations, never on the hot path of an already loaded shader.
+size_t PipelineCache::FreePermIndex(u64 pgm_hash, size_t from) const {
+    if (!EmulatorSettings.IsPipelineCacheEnabled()) {
+        return from;
+    }
+    auto& db = Storage::DataBase::Instance();
+    while (db.Exists(Storage::BlobType::ShaderBinary, fmt::format("{:#018x}_{}", pgm_hash, from))) {
+        ++from;
+    }
+    return from;
 }
 
 std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule module,

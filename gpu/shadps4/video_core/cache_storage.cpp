@@ -200,6 +200,16 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u32>&& d
     return WriteVector(type, std::move(path), std::move(data));
 }
 
+bool DataBase::Exists(BlobType type, const std::string& name) const {
+    if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
+        return false;
+    }
+    auto path = cache_path / name;
+    path.replace_extension(GetBlobFileExtension(type));
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
 void DataBase::Load(BlobType type, const std::string& name, std::vector<u8>& data) {
     if (!opened) {
         return;

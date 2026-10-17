@@ -205,6 +205,15 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(shader-performance-port-test EXCLUDE_FROM_ALL
+    ../tests/test_shader_performance_port.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_compile_options(shader-performance-port-test PRIVATE -UNDEBUG)
+target_include_directories(shader-performance-port-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(shader-performance-port-test PRIVATE bbgpu)
+if (APPLE)
+    target_link_options(shader-performance-port-test PRIVATE -Wl,-export_dynamic)
+endif()
+
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)

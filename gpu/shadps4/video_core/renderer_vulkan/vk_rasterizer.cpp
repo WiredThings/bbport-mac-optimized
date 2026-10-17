@@ -4275,6 +4275,19 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     if (key.motion_vectors) {
         object_motion->Attach(state, state.width, state.height);
     }
+    // Adapted from Wooloomooloo2/bloodborne_mac_port 5137a3e (Mark Hall).
+    // Memory-writing vertex passes have no fragment shader or attachments. A device-sized
+    // render area still makes Apple's tiler process empty tiles; retain the vertex work at 16x16.
+    static const bool compact_no_output = [] {
+        const char* value = std::getenv("BB_COMPACT_NO_OUTPUT");
+        return !value || value[0] != '0';
+    }();
+    if (compact_no_output && state.num_color_attachments == 0 &&
+        !state.depth_stencil_attachment.has_depth && !state.depth_stencil_attachment.has_stencil &&
+        !pipeline->GetStages()[u32(Shader::SwStage::Fragment)]) {
+        state.width = 16;
+        state.height = 16;
+    }
     return state;
 }
 

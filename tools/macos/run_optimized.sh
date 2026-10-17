@@ -30,7 +30,12 @@ export BB_PREBUILT=1 BB_NATIVE_GPU=1 BB_PROBE=$probe BB_GPU_PROCESS=$gpu BB_GPU_
 export BB_VULKAN_LIBRARY=$deps/lib/libvulkan.1.dylib SDL_VULKAN_LIBRARY=$deps/lib/libvulkan.1.dylib
 export VK_DRIVER_FILES=$deps/lib/kosmickrisp/kosmickrisp_mesa_icd.json
 unset VK_ICD_FILENAMES DYLD_LIBRARY_PATH
-export MESA_SHADER_CACHE_DIR=$BB_DATA_DIR/mesa-cache PYTHONDONTWRITEBYTECODE=1
+# The precision policy changes generated SPIR-V. Keep the old release's caches intact,
+# and separate the strict fallback from this port's optimized shader profile.
+precision=stages
+[[ ${BB_SPIRV_PRECISE:-} != all ]] || precision=all
+export BB_GPU_USER_DIR=${BB_GPU_USER_DIR:-$BB_DATA_DIR/gpu-cache/perf1-$precision}
+export MESA_SHADER_CACHE_DIR=$BB_DATA_DIR/mesa-cache-perf1 PYTHONDONTWRITEBYTECODE=1
 if [[ -f .packaged ]]; then
     export PYTHON=$PWD/python/bin/python3 PYTHONHOME=$PWD/python PYTHONNOUSERSITE=1
     unset PYTHONPATH PYTHONSTARTUP
@@ -55,4 +60,5 @@ echo "Runtime: $BB_PROBE"
 echo "Renderer: $BB_GPU_PROCESS"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
 echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
+echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"
 exec bash run.sh "$@"

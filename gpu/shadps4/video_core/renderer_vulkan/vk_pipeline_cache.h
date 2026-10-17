@@ -130,7 +130,9 @@ public:
 
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
-    bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
+    bool LoadPipelineStage(Serialization::Archive& ar, size_t stage,
+                           Shader::Backend::Bindings& binding);
+    size_t FreePermIndex(u64 pgm_hash, size_t from) const;
 
     /// `indirect`: the draw's arguments are in memory (bbport: never skipped while compiling).
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},

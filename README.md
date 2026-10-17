@@ -19,6 +19,11 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
+The `0.1.3-perf1` preview also ports compact vertex-only render areas, selective Apple shader
+precision and persistent shader-permutation fixes from Wooloomooloo2/Mark Hall. It keeps
+KosmicKrisp and uses separate caches. See [scope, source commits and validation limits](docs/release/PERFORMANCE-PORT-1.md).
+Gameplay FPS on a base M4 has not been measured for this preview.
+
 - **Native Apple Silicon launcher and renderer.** The original game's x86-64 code still runs through Rosetta 2; this is not a fully native ARM64 game port.
 - **16:9, 21:9 and 32:9 resolutions**, selectable in the launcher. First launch defaults to 1920×1080, then remembers your choice.
 - **Optional ultrawide UI fix.** Choose your own downloaded [Nexus Mods UI pack](https://www.nexusmods.com/bloodborne/mods/202); the launcher backs up the existing files and installs it. Disabling restores those previous files. No UI pack is bundled.

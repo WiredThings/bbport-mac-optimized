@@ -7,7 +7,13 @@
 namespace Shader::Backend::SPIRV {
 
 Id Decorate(EmitContext& ctx, IR::Inst* inst, Id op) {
-    ctx.Decorate(op, spv::Decoration::NoContraction);
+    // Adapted from Wooloomooloo2/bloodborne_mac_port fe06953 (Mark Hall).
+    // SPIRV-Cross's precise helpers prevent Metal from optimizing fragment/compute math.
+    // Preserve precision in vertex/tessellation/geometry stages so passes agree on position.
+    if (ctx.profile.precise_fragment_compute ||
+        (ctx.sw_stage != SwStage::Fragment && ctx.sw_stage != SwStage::Compute)) {
+        ctx.Decorate(op, spv::Decoration::NoContraction);
+    }
     return op;
 }
 
