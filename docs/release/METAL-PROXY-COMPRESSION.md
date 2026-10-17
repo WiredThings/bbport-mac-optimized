@@ -38,3 +38,41 @@ Actual game bandwidth/ALU percentages remain unmeasured. Public MTLCounterSet ex
 only timestamps here; an Xcode system trace provides channel activity but its captured
 GPU interval in this run is short and does not establish sustained occupancy. Gameplay
 results must be recorded separately from these probes.
+
+## Gameplay measurement, M4 Mac mini (2026-10-17)
+
+Two separate runs of the same 0.2.15 renderer (175a865), Hunter's Dream at the Yharnam
+headstone, 960x540 MetalFX input to 1920x1080 output. Existing settings/effects unchanged.
+Both runs enabled the same stage sampling (every 8 command buffers), frame statistics and
+CPU sections. Each recording lasted 60 seconds; initial intervals were omitted. This is one
+paired comparison, not a randomized multi-run benchmark or an all-scene claim.
+
+| Metric | Full usage | Lean colour proxies |
+|---|---:|---:|
+| Game FPS, stable reports | 45.94 | 49.60 |
+| Guest fragment-stage span, sampled ms/frame | 7.09 | 5.48 |
+| Guest vertex-stage span, sampled ms/frame | 4.41 | 4.12 |
+| CPU recording time, last 35 seconds, ms/frame | 9.54 | 9.18 |
+| Present/tick waits, ms/frame | 0 / 0 | 0 / 0 |
+| Process footprint, average GiB | 4.34 | 4.15 |
+| Scene proxy objects | 18 | 18 |
+| Scene proxy allocated MiB | 43.80 | 44.27 |
+
+FPS rose about 8%; guest fragment-stage spans fell about 23%. Player/camera-position
+coordinates matched, draw counts differed by 0.22%, and neither steady interval compiled
+new pipelines. Stage spans include memory, dependencies and tile work; these are not isolated
+ALU timings. Bandwidth/cache-miss percentages were not measured. The earlier partial-vertex
+A/B also left other vertex passes optimized, so it was not a whole-version comparison.
+
+The total footprint difference is observational: staging pools and retained native render
+targets differed across boots. Do not attribute the entire ~0.19 GiB reduction to compression.
+The 18 proxies gained only ~0.47 MiB of allocation metadata and created no duplicate backing
+cache. In-game format promotions were zero. System memory pressure temporarily reached the
+warning level during the optimized run and returned to normal at its end; this does not prove
+the system's overall memory pressure is solved.
+
+Velocity merge, both blur bypass copies, occlusion, two-level BDA and direct proxy clears
+remained active. No new GPU faults, invalid/capacity-dropped timing samples or additional
+null-texture drops were observed (both boots reported the same three startup null-texture
+drops). The 37 native regression groups and 12 packaging tests passed. Temporary diagnostics
+were removed and original launcher preferences restored; lean proxies remain the default.
