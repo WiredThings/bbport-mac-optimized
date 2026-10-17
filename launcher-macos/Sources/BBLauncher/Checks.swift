@@ -142,24 +142,24 @@ func checkRepository(_ url: URL?) -> Check {
 }
 
 /// The launcher must never silently fall back to the old in-process renderer.
-func checkOptimizedEngine(_ repo: URL?, packaged: Bool) -> Check {
+func checkOptimizedEngine(_ repo: URL?, packaged: Bool, renderer: String = "vulkan") -> Check {
     guard let repo, isRepository(repo), isFile(repo.appendingPathComponent("tools/macos/run_optimized.sh")) else {
         return Check(level: .error, message: L10n.key("Choose the optimized source checkout in Settings."))
     }
     let native = packaged || isFile(repo.appendingPathComponent("src/runtime_quicksave_bindings.h"))
             ? repo : repo.appendingPathComponent("out/native-05-checkout").resolvingSymlinksInPath()
     let bin = native.appendingPathComponent(packaged ? "bin" : "out")
-    for path in ["bb-probe", "gpu-arm64/bb-gpu"] {
+    for path in renderer == "metal" ? ["bb-probe-metal"] : ["bb-probe", "gpu-arm64/bb-gpu"] {
         if !FileManager.default.isExecutableFile(atPath: bin.appendingPathComponent(path).path) {
             return Check(level: .error, message: L10n.key("The optimized native build is missing. See Settings for the source checkout."))
         }
     }
-    for path in ["gpu/libbbgpu.dylib", "gpu-arm64/libbbgpu.dylib"] {
+    for path in renderer == "metal" ? ["gpu-metal/libbbgpu.dylib"] : ["gpu/libbbgpu.dylib", "gpu-arm64/libbbgpu.dylib"] {
         if !isFile(bin.appendingPathComponent(path)) {
             return Check(level: .error, message: L10n.key("The optimized renderer libraries are missing."))
         }
     }
-    for path in ["lib/libvulkan.1.dylib", "lib/kosmickrisp/kosmickrisp_mesa_icd.json"] {
+    for path in renderer == "metal" ? [] : ["lib/libvulkan.1.dylib", "lib/kosmickrisp/kosmickrisp_mesa_icd.json"] {
         if !isFile(native.appendingPathComponent("deps-arm64").appendingPathComponent(path)) {
             return Check(level: .error, message: L10n.key("The native graphics driver is missing."))
         }

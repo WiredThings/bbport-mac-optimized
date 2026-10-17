@@ -20,6 +20,10 @@ struct EffectDefinition: Sendable {
 }
 
 enum Catalog {
+    static let renderers: [Choice<String>] = [
+        Choice(value: "metal", label: "Metal (default)"),
+        Choice(value: "vulkan", label: "Vulkan (compatibility)"),
+    ]
     // Upscalers offered on macOS (bbport.ini "upscaler", BB_UPSCALER). FSR 4 and 4.1.1 need
     // FP8/WMMA features the Mac Vulkan drivers lack; the port falls back to FSR 3.1 for them.
     static let upscalers: [Choice<String>] = [
@@ -177,6 +181,7 @@ struct LauncherPrefs: Equatable {
     var readbacks = ""
     var preupload = ""
     var nativeGpu = false
+    var renderer = "metal"
     var frameStats = false
     var gpuProfile = false
     var vkValidation = false
@@ -215,6 +220,7 @@ struct LauncherPrefs: Equatable {
         static let readbacks = "readbacks"
         static let preupload = "preupload"
         static let nativeGpu = "nativeGpu"
+        static let renderer = "renderer"
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
         static let vkValidation = "vkValidation"
@@ -267,6 +273,8 @@ struct LauncherPrefs: Equatable {
         p.readbacks = text(Key.readbacks, p.readbacks)
         p.preupload = text(Key.preupload, p.preupload)
         p.nativeGpu = flag(Key.nativeGpu, p.nativeGpu)
+        p.renderer = text(Key.renderer, p.renderer)
+        if !Catalog.contains(Catalog.renderers, p.renderer) { p.renderer = "metal" }
         p.frameStats = flag(Key.frameStats, p.frameStats)
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
         p.vkValidation = flag(Key.vkValidation, p.vkValidation)
@@ -311,6 +319,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(readbacks, forKey: Key.readbacks)
         defaults.set(preupload, forKey: Key.preupload)
         defaults.set(nativeGpu, forKey: Key.nativeGpu)
+        defaults.set(renderer, forKey: Key.renderer)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)
         defaults.set(vkValidation, forKey: Key.vkValidation)

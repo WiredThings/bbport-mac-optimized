@@ -174,6 +174,15 @@ class NativeUiTests(unittest.TestCase):
         # TAA is native-only and uses the live host targets.
         self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
 
+    def test_metalfx_preserves_the_existing_quality_scene_patch(self):
+        for output in ['1280x720', '1920x1080', '2560x1440']:
+            for preset in range(6):
+                settings = dict(output_res=output, preset=str(preset))
+                self.assertEqual(scaled_sizes(dict(settings, upscaler='metalfx')),
+                                 scaled_sizes(dict(settings, upscaler='fsr3')))
+                self.assertEqual(render_size(dict(settings, upscaler='metalfx')),
+                                 render_size(dict(settings, upscaler='fsr3')))
+
 
 class DebugPatchTests(unittest.TestCase):
     def test_camera_patch_is_optional_and_compatible_with_fps_and_debug_menu(self):

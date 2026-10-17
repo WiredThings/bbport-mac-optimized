@@ -384,6 +384,10 @@ struct DisplaySection: View {
 
     var body: some View {
         Section {
+            Picker(L10n.key("Renderer backend"), selection: $model.prefs.renderer) {
+                ForEach(Catalog.renderers) { Text(L10n.key($0.label)).tag($0.value) }
+            }
+            .onChange(of: model.prefs.renderer) { _ in model.normalizeRendererSettings() }
             Picker(selection: $model.prefs.display) {
                 Text(L10n.key("Main display")).tag("")
                 ForEach(NSScreen.screens.map(\.localizedName), id: \.self) { Text($0).tag($0) }
@@ -398,9 +402,10 @@ struct DisplaySection: View {
                 ForEach(Catalog.presentModes) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Present mode"))
-                Text(L10n.key("KosmicKrisp has no Mailbox and uses FIFO instead"))
+                Text(L10n.key(model.prefs.renderer == "metal" ? "Metal presentation mode" : "KosmicKrisp has no Mailbox and uses FIFO instead"))
             }
             Toggle(L10n.key("Allow HDR"), isOn: $model.prefs.hdr)
+                .disabled(model.prefs.renderer == "metal")
             Toggle(L10n.key("Show FPS"), isOn: $model.game.showFPS)
         } header: {
             Text(L10n.key("Display"))
@@ -448,7 +453,9 @@ struct UpscalerSection: View {
         let upscaler = model.game.upscaler
         Section {
             Picker(selection: $model.game.upscaler) {
-                ForEach(Catalog.upscalers) { Text(L10n.key($0.label)).tag($0.value) }
+                ForEach(Catalog.upscalers.filter { model.prefs.renderer == "metal" ? ["off", "metalfx"].contains($0.value) : $0.value != "metalfx" }) {
+                    Text(L10n.key($0.label)).tag($0.value)
+                }
             } label: {
                 Text(L10n.key("Upscaler"))
                 Text(hint(for: upscaler))
@@ -458,7 +465,7 @@ struct UpscalerSection: View {
             }
             .disabled(upscaler == "off" || upscaler == "taa")
             Toggle(L10n.key("Sharpening (RCAS)"), isOn: $model.game.sharpen)
-                .disabled(upscaler == "off")
+                .disabled(upscaler == "off" || model.prefs.renderer == "metal")
             LabeledContent(L10n.key("Sharpness")) {
                 HStack {
                     Slider(value: $model.game.sharpness, in: 0...2, step: 0.05)
@@ -468,15 +475,19 @@ struct UpscalerSection: View {
                         .frame(width: 36, alignment: .trailing)
                 }
             }
-            .disabled(upscaler == "off" || !model.game.sharpen)
+            .disabled(upscaler == "off" || !model.game.sharpen || model.prefs.renderer == "metal")
             Toggle(isOn: $model.game.objectMotion) {
                 Text(L10n.key("Object motion vectors"))
                 Text(L10n.key("Less ghosting on characters; costs about 10% FPS"))
             }
+            .disabled(model.prefs.renderer == "metal")
         } header: {
             Text(L10n.key("Upscaler"))
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
+                if model.prefs.renderer == "metal" {
+                    Text(L10n.key("Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable."))
+                }
                 if let replaced = model.game.replacedUpscaler {
                     Text(L10n.format("bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead.", String(describing: replaced)))
                 }
@@ -659,6 +670,7 @@ struct DeveloperSection: View {
                 Text(L10n.key("Vulkan validation layers"))
                 Text(L10n.key("Much slower; needs the validation layers installed"))
             }
+            .disabled(model.prefs.renderer == "metal")
             TextField(text: $model.prefs.extraEnv, prompt: Text("NAME=value NAME2=value")) {
                 Text(L10n.key("Extra variables"))
             }

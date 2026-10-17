@@ -29,7 +29,7 @@ class OptimizedLauncherTests(unittest.TestCase):
         self.capture = Path(self.temp.name) / 'capture.json'
         (self.repo / 'run.sh').write_text('exec "$PYTHON" -c \'import json,os; from pathlib import Path; '
                                         'Path(os.environ["CAPTURE"]).write_text(json.dumps(dict(os.environ)))\'\n')
-        self.env = dict(os.environ, BB_GAME_DIR='/not-used', CAPTURE=str(self.capture), PYTHON=sys.executable,
+        self.env = dict(os.environ, BB_RENDERER='vulkan', BB_GAME_DIR='/not-used', CAPTURE=str(self.capture), PYTHON=sys.executable,
                         BB_DATA_DIR=str(Path(self.temp.name) / 'profile'), BB_USER_DIR=str(Path(self.temp.name) / 'saves'))
 
     def run_launcher(self):
@@ -83,6 +83,36 @@ class OptimizedLauncherTests(unittest.TestCase):
         result = self.run_launcher()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('optimized runtime or native renderer is missing', result.stderr)
+        self.assertFalse(self.capture.exists())
+
+    def test_metal_default_keeps_runtime_features_and_isolates_driver_and_cache(self):
+        for name in ['out/bb-probe-metal', 'out/gpu-metal/libbbgpu.dylib']:
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            path.chmod(0o755)
+        self.env.pop('BB_RENDERER')
+        self.env.update(BB_GPU_PROCESS='/old-gpu', VK_DRIVER_FILES='/old-icd',
+                        BB_MAC_UNIFIED_MEMORY='0', BB_QUICKSAVE='1', BB_LANGUAGE='11',
+                        BB_MENU_SCANCODE='58', BB_DMEM_MB='9152', BB_HDR='1')
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        env = json.loads(self.capture.read_text())
+        for key, value in dict(BB_RENDERER='metal', BB_NATIVE_GPU='0', BB_PC_MODEL='1',
+                              BB_GUEST_IN_PLACE='1', BB_LAYER_MEMORY='1', BB_GUEST_MEMORY='host',
+                              BB_QUICKSAVE='1', BB_LANGUAGE='11', BB_MENU_SCANCODE='58',
+                              BB_DMEM_MB='9152', BB_HDR='0', BB_AUTO_NOHIZ='0').items():
+            self.assertEqual(env[key], value, key)
+        self.assertEqual(env['BB_PROBE'], str(self.repo / 'out/bb-probe-metal'))
+        self.assertTrue(env['BB_GPU_USER_DIR'].endswith('/gpu-cache/metal1'))
+        for key in ['BB_GPU_PROCESS', 'VK_DRIVER_FILES', 'BB_MAC_UNIFIED_MEMORY']:
+            self.assertNotIn(key, env)
+
+    def test_missing_metal_stops_instead_of_silently_using_vulkan(self):
+        self.env['BB_RENDERER'] = 'metal'
+        result = self.run_launcher()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Metal renderer build is missing', result.stderr)
         self.assertFalse(self.capture.exists())
 
 

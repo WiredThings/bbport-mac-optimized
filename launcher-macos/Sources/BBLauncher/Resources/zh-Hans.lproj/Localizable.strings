@@ -281,3 +281,8 @@
 "eboot.bin found; sce_sys/param.sfo is missing or unreadable" = "已找到 eboot.bin，但 sce_sys/param.sfo 缺失或无法读取";
 "out/last-run.log: the full output of the last run (send this when reporting a problem)" = "out/last-run.log 包含上次运行的完整日志，可在反馈问题时提供。";
 "shadPS4-format patches for version 01.09. Resolution patches are controlled by the Display section." = "支持游戏 01.09 版本的 shadPS4 格式补丁。分辨率补丁由显示设置控制。";
+"Renderer backend" = "渲染后端";
+"Metal (default)" = "Metal（默认）";
+"Vulkan (compatibility)" = "Vulkan（兼容模式）";
+"Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable." = "Metal 使用 MetalFX 和相机运动矢量，暂不支持物体运动矢量、RCAS 锐化及 HDR。";
+"Metal presentation mode" = "Metal 显示同步模式";

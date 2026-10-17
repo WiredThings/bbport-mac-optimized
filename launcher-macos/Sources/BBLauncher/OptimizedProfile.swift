@@ -19,6 +19,13 @@ struct OptimizedProfile {
         var settings = game
         settings.outputRes = prefs.ultrawide ? "1920x1080" : prefs.resolution
         settings.liveResolution = "0"
+        if prefs.renderer == "metal" {
+            if !["off", "metalfx"].contains(settings.upscaler) { settings.upscaler = "metalfx" }
+            settings.objectMotion = false
+            settings.sharpen = false
+        } else if settings.upscaler == "metalfx" {
+            settings.upscaler = "fsr3"
+        }
         if prefs.ultrawide {
             settings.upscaler = "off"
             settings.preset = 0
@@ -29,7 +36,8 @@ struct OptimizedProfile {
     var environment: [String: String] {
         var env = [
             "BB_LANGUAGE": prefs.language,
-            "BB_NATIVE_GPU": "1", "BB_PREBUILT": "1",
+            "BB_NATIVE_GPU": prefs.renderer == "metal" ? "0" : "1", "BB_PREBUILT": "1",
+            "BB_RENDERER": prefs.renderer,
             "BB_SKIP_EMPTY_DRAWS": "1", "BB_VK_RECORD_THREADS": "1",
             "BB_FRAMES_AHEAD": "2", "BB_GPU_QOS": "1",
             "BB_MAC_UNIFIED_MEMORY": "0", "BB_PIPE_PARK_WAITS": "0",

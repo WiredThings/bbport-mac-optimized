@@ -1,0 +1,76 @@
+diff --git a/gpu/shim/bbgpu.cpp b/gpu/shim/bbgpu.cpp
+index 22fa823..bb9e0ab 100644
+--- a/gpu/shim/bbgpu.cpp
++++ b/gpu/shim/bbgpu.cpp
+@@ -17,6 +17,8 @@
+ #include "video_core/renderdoc.h"
+ #include <cstring>
+ #include <mutex>
++#include <functional>
++#include <condition_variable>
+ #include <string>
+ #include <chrono>
+ #include <thread>
+@@ -262,6 +264,36 @@ static void StartProfileWriter() {
+ }
+ #endif
+ 
++// Optimized launcher ABI: the preserved runtime starts the game on a worker
++// and parks Cocoa's main thread here. Keep all window operations on that thread.
++#ifdef __APPLE__
++namespace {
++std::mutex g_main_mutex;
++std::condition_variable g_main_cv;
++std::function<void()> g_main_task;
++}
++extern "C" void bbgpu_main_thread_loop(void) {
++    for (;;) {
++        std::function<void()> task;
++        {
++            std::unique_lock lock{g_main_mutex};
++            g_main_cv.wait(lock, [] { return bool(g_main_task); });
++            task = std::move(g_main_task);
++            g_main_task = nullptr;
++        }
++        task();
++    }
++}
++static void RunOnMainThread(std::function<void()> task) {
++    { std::scoped_lock lock{g_main_mutex}; g_main_task = std::move(task); }
++    g_main_cv.notify_all();
++}
++#endif
++extern "C" int bbgpu_share_range(void*, uint64_t, int) { return 0; }
++extern "C" const bool* bbgpu_keyboard_state(void) {
++    return SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(nullptr) : nullptr;
++}
++
+ extern "C" int bbgpu_init(const BbGpuConfig* config) {
+     BbSettings::Load();
+     // What the translator knows about this game (games/), before anything asks for it.
+@@ -275,9 +307,22 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
+     const std::string title = config->title ? config->title : "Bloodborne";
+     const s32 width = config->width, height = config->height;
+ #ifdef __APPLE__
+-    // macOS: Cocoa windows exist on the main thread only (bbgpu_window_loop runs its events).
+-    g_window = new Frontend::WindowSDL(width, height, title.c_str());
+-    g_window_ready = true;
++    RunOnMainThread([title, width, height] {
++        auto* window = new Frontend::WindowSDL(width, height, title.c_str());
++        {
++            std::scoped_lock lock{g_window_mutex};
++            g_window = window;
++            g_window_ready = true;
++        }
++        g_window_cv.notify_all();
++        while (window->PollEvents()) SDL_Delay(2);
++        std::fflush(stdout);
++        std::_Exit(0);
++    });
++    {
++        std::unique_lock lock{g_window_mutex};
++        g_window_cv.wait(lock, [] { return g_window_ready; });
++    }
+ #else
+     g_window_thread = std::thread([title, width, height] {
+         Common::SetCurrentThreadName("bb:window");

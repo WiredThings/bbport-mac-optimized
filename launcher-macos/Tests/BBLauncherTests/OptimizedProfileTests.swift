@@ -4,6 +4,7 @@ import XCTest
 final class OptimizedProfileTests: XCTestCase {
     func testNativeWidePatchAndReturnToStandardResolution() {
         var prefs = LauncherPrefs()
+        prefs.renderer = "vulkan"
         prefs.ultrawide = true
         prefs.resolution = "2560x1440"
         var game = GameSettings()
@@ -23,6 +24,54 @@ final class OptimizedProfileTests: XCTestCase {
         XCTAssertEqual(profile.environment["BB_PATCHES"], "")
         XCTAssertNil(profile.environment["BB_DISPLAY_ASPECT"])
         XCTAssertNil(profile.environment["BB_DMEM_MB"])
+    }
+
+    func testMetalDefaultsAndUnsupportedEffectsAreNormalized() {
+        var prefs = LauncherPrefs()
+        XCTAssertEqual(prefs.renderer, "metal")
+        prefs.language = "11"
+        prefs.quicksave = true
+        var game = GameSettings()
+        game.upscaler = "fsr3"
+        game.preset = 1
+        game.objectMotion = true
+        game.sharpen = true
+        let profile = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(profile.settings.upscaler, "metalfx")
+        XCTAssertEqual(profile.settings.preset, 1)
+        XCTAssertFalse(profile.settings.objectMotion)
+        XCTAssertFalse(profile.settings.sharpen)
+        XCTAssertEqual(profile.environment["BB_RENDERER"], "metal")
+        XCTAssertEqual(profile.environment["BB_NATIVE_GPU"], "0")
+        XCTAssertEqual(profile.environment["BB_LANGUAGE"], "11")
+        XCTAssertEqual(profile.environment["BB_QUICKSAVE"], "1")
+        prefs.renderer = "vulkan"
+        let fallback = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(fallback.settings.upscaler, "fsr3")
+        XCTAssertTrue(fallback.settings.objectMotion)
+        XCTAssertEqual(fallback.environment["BB_NATIVE_GPU"], "1")
+        game.upscaler = "metalfx"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).settings.upscaler, "fsr3")
+    }
+
+    func testMetalReadinessChecksSelectedBackendResources() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func executable(_ path: String) throws {
+            let file = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        for path in ["tools/macos/run.sh", "tools/macos/run_optimized.sh", "python/bin/python3"] {
+            try executable(path)
+        }
+        XCTAssertFalse(checkOptimizedEngine(root, packaged: true, renderer: "metal").allowsPlay)
+        try executable("bin/bb-probe-metal")
+        try executable("bin/gpu-metal/libbbgpu.dylib")
+        XCTAssertTrue(checkOptimizedEngine(root, packaged: true, renderer: "metal").allowsPlay)
+        XCTAssertFalse(checkOptimizedEngine(root, packaged: true, renderer: "vulkan").allowsPlay)
     }
 
     func testEveryWideOptionHasAnExactCommunityPatch() throws {

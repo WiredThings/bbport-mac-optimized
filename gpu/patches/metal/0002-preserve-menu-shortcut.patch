@@ -1,0 +1,33 @@
+diff --git a/gpu/shim/bbport_overlay.cpp b/gpu/shim/bbport_overlay.cpp
+index d491e1f..c41e8f4 100644
+--- a/gpu/shim/bbport_overlay.cpp
++++ b/gpu/shim/bbport_overlay.cpp
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "bbport_overlay.h"
++#include "../../../../src/runtime_quicksave_bindings.h"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -749,7 +750,7 @@ void Init(const std::function<bool()>& backend_init) {
+         return;
+     }
+     initialized = true;
+-    std::printf("Overlay: menu ready (Insert or L3+R3)\n");
++    std::printf("Overlay: menu ready (%s or L3+R3)\n", menu_shortcut_label());
+ }
+ 
+ void UpdateTextInput(SDL_Window* window) {
+@@ -778,9 +779,10 @@ bool HandleEvent(const SDL_Event& event) {
+     case SDL_EVENT_KEY_DOWN:
+     case SDL_EVENT_KEY_UP: {
+         const bool down = event.type == SDL_EVENT_KEY_DOWN;
++        const bool menu_key = menu_shortcut_matches(&event.key);
+         if (down && !event.key.repeat &&
+-            (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
+-            SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);
++            (menu_key || (is_open && event.key.key == SDLK_ESCAPE))) {
++            SetOpen(menu_key ? !is_open : false);
+             return true;
+         }
+         if (!is_open) {

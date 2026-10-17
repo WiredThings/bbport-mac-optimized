@@ -281,3 +281,8 @@
 "eboot.bin found; sce_sys/param.sfo is missing or unreadable" = "eboot.bin found; sce_sys/param.sfo is missing or unreadable";
 "out/last-run.log: the full output of the last run (send this when reporting a problem)" = "out/last-run.log: the full output of the last run (send this when reporting a problem)";
 "shadPS4-format patches for version 01.09. Resolution patches are controlled by the Display section." = "shadPS4-format patches for version 01.09. Resolution patches are controlled by the Display section.";
+"Renderer backend" = "Renderer backend";
+"Metal (default)" = "Metal (default)";
+"Vulkan (compatibility)" = "Vulkan (compatibility)";
+"Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable." = "Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable.";
+"Metal presentation mode" = "Metal presentation mode";

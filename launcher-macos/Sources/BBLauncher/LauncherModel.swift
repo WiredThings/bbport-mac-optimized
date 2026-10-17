@@ -196,6 +196,10 @@ final class LauncherModel: ObservableObject {
 
     private func prefsChanged(from old: LauncherPrefs) {
         prefs.save(to: UserDefaults.standard)
+        if prefs.renderer != old.renderer {
+            normalizeRendererSettings()
+            refreshChecks()
+        }
         if prefs.uiLanguage != old.uiLanguage { refreshChecks() }
         if prefs.repoOverride != old.repoOverride {
             refreshChecks()
@@ -221,7 +225,7 @@ final class LauncherModel: ObservableObject {
 
     /// Cheap checks, also run when the app becomes active (a build may have finished meanwhile).
     func refreshChecks() {
-        repoCheck = checkOptimizedEngine(repoURL, packaged: usesBuiltInEngine)
+        repoCheck = checkOptimizedEngine(repoURL, packaged: usesBuiltInEngine, renderer: prefs.renderer)
         refreshGameCheck()
     }
 
@@ -258,6 +262,17 @@ final class LauncherModel: ObservableObject {
     func reloadIni() {
         ini = IniFile.load(iniURL)
         game = GameSettings(ini: ini.values)
+        normalizeRendererSettings()
+    }
+
+    func normalizeRendererSettings() {
+        if prefs.renderer == "metal" {
+            if !["off", "metalfx"].contains(game.upscaler) { game.upscaler = "metalfx" }
+            game.objectMotion = false
+            game.sharpen = false
+        } else if game.upscaler == "metalfx" {
+            game.upscaler = "fsr3"
+        }
     }
 
     private func saveIni() throws {
@@ -503,7 +518,7 @@ final class LauncherModel: ObservableObject {
         env["BB_SKIP_NETWORK_CHOICE"] = p.skipNetworkChoice ? "1" : "0"
         if p.display.isEmpty { env.removeValue(forKey: "BB_DISPLAY") } else { env["BB_DISPLAY"] = p.display }
         env["BB_PRESENT_MODE"] = p.presentMode
-        env["BB_HDR"] = p.hdr ? "1" : "0"
+        env["BB_HDR"] = p.hdr && p.renderer != "metal" ? "1" : "0"
         env["BB_FPS"] = p.fpsMode
         // The ini's upscaler is overridden by BB_UPSCALER at start; both carry the same value.
         env["BB_UPSCALER"] = game.upscaler
