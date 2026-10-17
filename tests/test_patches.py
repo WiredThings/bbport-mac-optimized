@@ -1,7 +1,12 @@
 from paths import ROOT
+import contextlib
+import io
+import os
 import struct
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -15,6 +20,61 @@ from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
 
 XML = ROOT / 'patches/Bloodborne.xml'
 SEGMENTS = [(0, 0x6000000)]
+
+
+class ChineseLanguagePatchTests(unittest.TestCase):
+    def compile_launch(self, language, extra=''):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            # Only segment bounds are needed to compile patches; no game code runs.
+            elf = bytearray(120)
+            struct.pack_into('<Q', elf, 0x20, 64)
+            struct.pack_into('<HH', elf, 0x36, 56, 1)
+            struct.pack_into('<IIQQQQQQ', elf, 64, 1, 5, 0, 0, 0, 0, 0x6000000, 0)
+            (out / 'eboot.elf').write_bytes(elf)
+            env = {'BB_INTEL_TONEMAP_FIX': '0', 'BB_SKIP_NETWORK_CHOICE': '0'}
+            if language is not None:
+                env['BB_LANGUAGE'] = language
+            args = ['patches.py', '--out', str(out), '--settings', str(out / 'missing.ini'),
+                    '--fps', '30', '--extra', extra]
+            log = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', args), \
+                    contextlib.redirect_stdout(log):
+                patches.main()
+            data = (out / 'patches.bin').read_bytes()
+            magic, base, count = struct.unpack_from('<8sQQ', data)
+            self.assertEqual((magic, base), (b'BBPATCH2', EBOOT_BASE))
+            writes = []
+            pos = 24
+            for _ in range(count):
+                offset, size = struct.unpack_from('<QQ', data, pos)
+                pos += 16
+                writes.append((offset, data[pos:pos + size]))
+                pos += size
+            self.assertEqual(pos, len(data))
+            return writes, log.getvalue()
+
+    def test_both_chinese_choices_emit_region_unlock_into_loader_blob(self):
+        expected = [(0x023B9190 - EBOOT_BASE, bytes.fromhex('b805000000c3')),
+                    (0x023B8730 - EBOOT_BASE, bytes.fromhex('31c0c3' + '90' * 12)),
+                    (0x01C2C890 - EBOOT_BASE, bytes.fromhex('31c0c3' + '90' * 12))]
+        for language in ('10', '11'):
+            with self.subTest(language=language):
+                writes, log = self.compile_launch(language)
+                self.assertEqual(writes, expected)
+                self.assertIn('Unlock Game Region', log)
+
+    def test_other_languages_leave_region_checks_unchanged(self):
+        for language in (None, '1', '0', '8', '9'):
+            with self.subTest(language=language):
+                writes, log = self.compile_launch(language)
+                self.assertEqual(writes, [])
+                self.assertNotIn('Unlock Game Region', log)
+
+    def test_explicit_region_patch_is_not_duplicated_for_chinese(self):
+        automatic, _ = self.compile_launch('11')
+        explicit, _ = self.compile_launch('11', 'Unlock Game Region')
+        self.assertEqual(explicit, automatic)
 
 
 def immediate(writes, address):

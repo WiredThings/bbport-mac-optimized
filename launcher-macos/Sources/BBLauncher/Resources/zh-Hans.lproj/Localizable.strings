@@ -105,6 +105,7 @@
 "Game engine" = "游戏引擎";
 "Game folder" = "游戏文件夹";
 "Game language" = "游戏语言";
+"Chinese automatically enables the bundled region unlock patch at launch. Original game files are unchanged." = "选择中文时，启动时会自动加载内置的区域解锁补丁，不修改原始游戏文件。";
 "Game patches, applied at start." = "游戏补丁在启动时应用。";
 "German" = "德语";
 "Graphical glitches after loading? Restarting the game often clears them." = "加载后出现画面异常时，重新启动游戏通常可缓解。";

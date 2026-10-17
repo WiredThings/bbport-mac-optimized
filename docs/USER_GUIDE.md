@@ -45,7 +45,12 @@ The **Language** section has two independent choices:
 Existing game language, folder, controller and save settings are retained. A new launcher-language
 preference defaults to the system language. Chinese requires the matching text archives in
 `dvdroot_ps4/msg/zhocn` or `zhotw`, and `dvdroot_ps4/menu/<language>/font.gfx`. The launcher
-warns if these files are missing. No translation patch or game files are downloaded or replaced.
+warns if these files are missing. CUSA03173 also restricts Chinese through its region checks:
+when game language is 10 or 11, the launch pipeline automatically includes the bundled
+**Unlock Game Region** patch by Lance McDonald and Kyo. It applies to the in-memory game
+image through `patches.bin`; the source game files are not changed. No translations or game
+files are downloaded. Restart the game after changing language. The log must show
+`Game language: 11` (or 10) and `Unlock Game Region` in the compiled patch list.
 Language availability and actual in-game rendering still depend on the player's game dump.
 
 Translations are standard `Localizable.strings` resources under

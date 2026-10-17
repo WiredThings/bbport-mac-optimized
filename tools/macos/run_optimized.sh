@@ -54,4 +54,5 @@ echo "Bloodborne Optimized: native Apple Silicon renderer; quicksave=$BB_QUICKSA
 echo "Runtime: $BB_PROBE"
 echo "Renderer: $BB_GPU_PROCESS"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
+echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
 exec bash run.sh "$@"

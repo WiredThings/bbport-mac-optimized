@@ -83,6 +83,7 @@ struct LanguageSection: View {
             Text(L10n.key("Language"))
         } footer: {
             Text(L10n.key("Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged."))
+            Text(L10n.key("Chinese automatically enables the bundled region unlock patch at launch. Original game files are unchanged."))
         }
     }
 }

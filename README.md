@@ -13,7 +13,9 @@ Ultrawide demo (3840x1080): https://youtu.be/ZWVT99gC3lE
 This fork adds English, Simplified Chinese and Traditional Chinese launcher interfaces, with
 instant switching and an independent game-language menu. The game menu includes 简体中文
 (PS4 language 11) and 繁體中文 (10), preserving existing settings. Matching text/font assets
-must already exist in your own game dump. See [language setup](docs/USER_GUIDE.md#launcher-and-game-languages).
+must already exist in your own game dump. Selecting Chinese also applies the bundled
+`Unlock Game Region` patch to the launch image, bypassing CUSA03173's language restrictions
+without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-and-game-languages).
 
 ## What's included
 

@@ -60,6 +60,14 @@ def intel_cpu(cpuinfo='/proc/cpuinfo'):
 # The title's PLAY ONLINE / PLAY OFFLINE dialog: the port has no PSN, the game goes straight to the
 # main menu offline. On by default (the launcher's switch); BB_SKIP_NETWORK_CHOICE=0 shows it.
 SKIP_NETWORK_CHOICE='Skip Online/Offline Choice'
+# CUSA03173 ships Chinese text/fonts, but the game's region checks reject those
+# system languages. Use the bundled Lance McDonald/Kyo patch in the launch image;
+# setting BB_LANGUAGE alone does not bypass the checks. The source dump is untouched.
+UNLOCK_GAME_REGION='Unlock Game Region'
+
+
+def language_patches(env=os.environ):
+    return [UNLOCK_GAME_REGION] if env.get('BB_LANGUAGE','1') in ('10','11') else []
 
 
 def skip_network_choice(env=os.environ):
@@ -370,6 +378,7 @@ def main():
         return
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
     names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
+    names+=[n for n in language_patches() if n not in names]
     if intel_tonemap_fix() and INTEL_TONEMAP not in names:
         names.append(INTEL_TONEMAP)
     if skip_network_choice() and SKIP_NETWORK_CHOICE not in names:

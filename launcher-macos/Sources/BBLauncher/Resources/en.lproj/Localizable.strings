@@ -105,6 +105,7 @@
 "Game engine" = "Game engine";
 "Game folder" = "Game folder";
 "Game language" = "Game language";
+"Chinese automatically enables the bundled region unlock patch at launch. Original game files are unchanged." = "Chinese automatically enables the bundled region unlock patch at launch. Original game files are unchanged.";
 "Game patches, applied at start." = "Game patches, applied at start.";
 "German" = "German";
 "Graphical glitches after loading? Restarting the game often clears them." = "Graphical glitches after loading? Restarting the game often clears them.";
