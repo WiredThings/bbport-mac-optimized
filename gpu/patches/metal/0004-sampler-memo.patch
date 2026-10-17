@@ -1,0 +1,292 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -753,3 +753,8 @@
+         message(STATUS "Online module: off (protobuf, nlohmann_json, OpenSSL, zlib or miniupnpc missing)")
+     endif()
+ endif()
++
++add_executable(sampler-memo-test EXCLUDE_FROM_ALL ../tests/test_sampler_memo.cpp)
++target_compile_options(sampler-memo-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(sampler-memo-test PRIVATE .. shadps4)
++
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -27,6 +27,7 @@
+ #include <vector>
+ 
+ #include "common/slot_vector.h"
++#include "video_core/texture_cache/sampler_memo.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ #include "video_core/renderer_metal/mtl_runtime.h"
+@@ -566,11 +567,25 @@
+     guest.raw1 = (u64(AmdGpu::Filter::Bilinear) << 20) | (u64(AmdGpu::Filter::Bilinear) << 22);
+     Sampler sampler{f.runtime, guest, AmdGpu::BorderColorBuffer{}, false};
+     CHECK(sampler.native != nullptr && sampler.owner == &f.runtime);
++    SamplerMemo<SamplerRef> memo;
++    SamplerMemo<SamplerRef>::Key key;
++    std::memcpy(key.sharp.data(), &guest, sizeof(guest));
++    unsigned lookups = 0;
++    const auto lookup = [&](size_t&) {
++        ++lookups;
++        return SamplerRef{sampler.Handle(), sampler.native};
++    };
++    auto cached = memo.Get(key, 0, 0, lookup, [](size_t) {});
++    for (unsigned i = 0; i < 1000; ++i) {
++        cached = memo.Get(key, 0, 0, lookup, [](size_t) {});
++        CHECK(cached.native == sampler.native);
++    }
++    CHECK(lookups == 1);
+     f.scheduler.ComputeEncoder();
+     auto& compute2 = f.scheduler.GetImpl().compute;
+     [compute2 setComputePipelineState:Pipeline(f.mtl, @"sample_texel")];
+     [compute2 setTexture:(__bridge id<MTLTexture>)identity.native atIndex:0];
+-    [compute2 setSamplerState:(__bridge id<MTLSamplerState>)sampler.native atIndex:0];
++    [compute2 setSamplerState:(__bridge id<MTLSamplerState>)cached.native atIndex:0];
+     [compute2 setBuffer:(__bridge id<MTLBuffer>)out->buffer.native offset:0 atIndex:0];
+     [compute2 dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+     Settle(f);
+diff --git a/gpu/shadps4/video_core/rasterizer_core.cpp b/gpu/shadps4/video_core/rasterizer_core.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core.cpp
+@@ -1137,6 +1137,26 @@
+     }
+ }
+ 
++// Awakenchan's BB_SAMPLER_MEMO: avoid repeated hashes, locks and map lookups in stage B.
++SamplerRef RasterizerCore::CachedSampler(const AmdGpu::Sampler& sharp, bool is_depth,
++                                         float lod_bias) {
++    static const bool enabled = [] {
++        const char* env = std::getenv("BB_SAMPLER_MEMO");
++        return !(env && env[0] == '0');
++    }();
++    if (!enabled) {
++        return texture_cache.GetSampler(sharp, Regs().ta_bc_base, is_depth, lod_bias);
++    }
++    SamplerMemo<SamplerRef>::Key key;
++    static_assert(sizeof(sharp) == sizeof(key.sharp));
++    std::memcpy(key.sharp.data(), &sharp, sizeof(sharp));
++    key.variant = u64(is_depth) << 32 | std::bit_cast<u32>(lod_bias);
++    return sampler_memo.Get(key, texture_cache.SamplerGeneration(), texture_cache.GcTick(),
++        [&](size_t& lru_id) {
++            return texture_cache.GetSampler(sharp, Regs().ta_bc_base, is_depth, lod_bias, &lru_id);
++        }, [&](size_t lru_id) { texture_cache.TouchSampler(lru_id); });
++}
++
+ void RasterizerCore::BindSamplers(const Shader::Info& stage, const PreparedStage* prepared,
+                                   Shader::Backend::Bindings& binding, u32& write_index) {
+     boost::container::static_vector<VideoCore::SamplerRef, Shader::NUM_SAMPLERS> samplers;
+@@ -1145,8 +1165,8 @@
+         auto ssharp =
+             prepared ? prepared->sampler_sharps[sampler_index] : sampler.GetSharp(stage);
+         ForceAnisotropy(ssharp, sampler.is_depth);
+-        samplers.push_back(texture_cache.GetSampler(
+-            ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias));
++        samplers.push_back(CachedSampler(
++            ssharp, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias));
+     }
+     BindSamplerSet({samplers.data(), samplers.size()}, binding, write_index);
+ }
+diff --git a/gpu/shadps4/video_core/rasterizer_core.h b/gpu/shadps4/video_core/rasterizer_core.h
+--- a/gpu/shadps4/video_core/rasterizer_core.h
++++ b/gpu/shadps4/video_core/rasterizer_core.h
+@@ -27,6 +27,7 @@
+ #include "video_core/gpu_services.h"
+ #include "video_core/render_state.h"
+ #include "video_core/texture_cache/texture_cache.h"
++#include "video_core/texture_cache/sampler_memo.h"
+ #include <magic_enum/magic_enum.hpp>
+ #include "video_core/amdgpu/liverpool.h"
+ 
+@@ -541,6 +542,8 @@
+     VideoCore::ImageViewId ViewIdOf(const VideoCore::Image& image, const VideoCore::ImageView& view);
+ 
+     void ForceAnisotropy(AmdGpu::Sampler& sharp, bool is_depth) const;
++    SamplerMemo<SamplerRef> sampler_memo;
++    SamplerRef CachedSampler(const AmdGpu::Sampler& sharp, bool is_depth, float lod_bias);
+ 
+     /// bbport: the samplers of `stage` (S# or the prepared sharps, with this draw's LOD bias) from
+     /// the texture cache, handed to the backend in one call.
+diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.h b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.h
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+@@ -200,7 +200,17 @@
+     /// extra_lod_bias: bbport, added to the S#'s bias (reduced scene rendering).
+     [[nodiscard]] SamplerRef GetSampler(const AmdGpu::Sampler& sampler,
+                                         AmdGpu::BorderColorBuffer border_color_base,
+-                                        bool is_depth, float extra_lod_bias = 0.0f);
++                                        bool is_depth, float extra_lod_bias = 0.0f,
++                                        size_t* lru_id = nullptr);
++
++    // Only stage B binds samplers. GC runs between packets or with the draw pipe drained,
++    // never concurrently with this fast path. A collected sampler invalidates every memo.
++    [[nodiscard]] u64 SamplerGeneration() const noexcept { return sampler_generation; }
++    [[nodiscard]] u64 GcTick() const noexcept { return gc_tick; }
++    void TouchSampler(size_t lru_id) {
++        std::scoped_lock lock{samplers_mutex};
++        sampler_lru_cache.Touch(lru_id, gc_tick);
++    }
+ 
+     /// Retrieves the image with the specified id.
+     Image* TryGetImage(ImageId id, u64 uid) {
+@@ -401,6 +411,7 @@
+     Common::SlotVector<Image> slot_images;
+     Common::SlotVector<ImageView> slot_image_views;
+     tsl::robin_map<u64, Sampler> samplers;
++    u64 sampler_generation = 0;
+     std::unordered_set<ImageId> download_images;
+     u64 total_used_memory = 0;
+     u64 gc_evictions = 0, gc_downloads = 0; ///< bbport: pressure report
+diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -1013,7 +1013,7 @@
+ 
+ SamplerRef TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
+                                     AmdGpu::BorderColorBuffer border_color_base,
+-                                    const bool is_depth, float extra_lod_bias) {
++                                    const bool is_depth, float extra_lod_bias, size_t* lru_id) {
+     // Compare and plain uses of one S# need separate samplers; so do extra LOD biases.
+     const u64 hash = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
+                                  u64(std::bit_cast<u32>(extra_lod_bias)));
+@@ -1027,6 +1027,9 @@
+         sampler_lru_cache.Touch(it->second.lru_id, gc_tick);
+     }
+ 
++    if (lru_id) {
++        *lru_id = it->second.lru_id;
++    }
+     return {it->second.Handle(), it->second.native};
+ }
+ 
+@@ -1371,6 +1374,7 @@
+         }
+         --num_deletions;
+         const size_t lru_id = samplers.at(hash).lru_id;
++        ++sampler_generation; // invalidate references before a slot or handle can be reused
+         samplers.erase(hash);
+         sampler_lru_cache.Free(lru_id);
+         return false;
+diff --git a/gpu/shadps4/video_core/texture_cache/sampler_memo.h b/gpu/shadps4/video_core/texture_cache/sampler_memo.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/texture_cache/sampler_memo.h
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Adapted from Awakenchan/BloodBorneButPc, engine/bbhost-changes.patch (4f93643e).
++#pragma once
++#include <array>
++#include <bit>
++#include <cstddef>
++#include <cstdint>
++
++namespace VideoCore {
++// A stage-B-only fast path. The texture cache remains the owner and collector; every hit
++// refreshes its LRU once per GC tick. Any collection invalidates all remembered references.
++template <typename Ref, std::size_t Slots = 1024>
++class SamplerMemo {
++public:
++    struct Key {
++        std::array<std::uint64_t, 2> sharp{};
++        std::uint64_t variant{}; // depth flag and exact extra-LOD-bias bits
++        bool operator==(const Key&) const = default;
++    };
++    template <typename Lookup, typename Touch>
++    Ref Get(const Key& key, std::uint64_t generation, std::uint64_t tick,
++            Lookup&& lookup, Touch&& touch) {
++        auto hash = (key.sharp[0] ^ std::rotl(key.sharp[1], 29) ^ key.variant) *
++                    0x9E3779B97F4A7C15ull;
++        hash ^= hash >> 32;
++        auto& entry = entries[hash % Slots];
++        if (entry.valid && entry.generation == generation && entry.key == key) {
++            if (entry.touched_tick != tick) {
++                touch(entry.lru_id);
++                entry.touched_tick = tick;
++            }
++            return entry.ref;
++        }
++        std::size_t lru_id = 0;
++        const Ref ref = lookup(lru_id);
++        entry = {key, ref, lru_id, generation, tick, true};
++        return ref;
++    }
++private:
++    struct Entry {
++        Key key{};
++        Ref ref{};
++        std::size_t lru_id{};
++        std::uint64_t generation{}, touched_tick{};
++        bool valid = false;
++    };
++    std::array<Entry, Slots> entries{};
++};
++} // namespace VideoCore
+diff --git a/tests/test_sampler_memo.cpp b/tests/test_sampler_memo.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_sampler_memo.cpp
+@@ -0,0 +1,62 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Cache lifetime regressions: active hits survive GC; collected/reused slots never escape.
++#include <cassert>
++#include <cstdio>
++#include <unordered_map>
++#include "gpu/shadps4/common/lru_cache.h"
++#include "gpu/shadps4/video_core/texture_cache/sampler_memo.h"
++
++int main() {
++    using Memo = VideoCore::SamplerMemo<unsigned, 1>; // force collisions on every different key
++    Memo memo;
++    Common::LeastRecentlyUsedCache<unsigned, std::uint64_t> lru;
++    std::unordered_map<unsigned, size_t> live;
++    unsigned next = 1, lookups = 0, touches = 0;
++    std::uint64_t generation = 0, tick = 0;
++    const auto get = [&](Memo::Key key) {
++        return memo.Get(key, generation, tick, [&](size_t& id) {
++            ++lookups;
++            const unsigned handle = next++;
++            id = lru.Insert(handle, tick);
++            live.emplace(handle, id);
++            return handle;
++        }, [&](size_t id) {
++            ++touches;
++            lru.Touch(id, tick);
++        });
++    };
++    const auto collect = [&](std::uint64_t older_than) {
++        lru.ForEachItemBelow(older_than, [&](unsigned handle) {
++            const size_t id = live.at(handle);
++            ++generation;
++            live.erase(handle);
++            lru.Free(id);
++            return false;
++        });
++    };
++    const Memo::Key plain{{123, 456}, 0};
++    const auto first = get(plain);
++    for (unsigned i = 0; i < 100000; ++i) assert(get(plain) == first);
++    assert(lookups == 1 && touches == 0);
++    tick = 100;
++    assert(get(plain) == first && touches == 1);
++    collect(99); // a memo hit must keep the owner's LRU alive, without pinning it indefinitely
++    assert(live.contains(first));
++    tick = 200;
++    collect(199);
++    assert(!live.contains(first));
++    const auto second = get(plain); // the freed LRU slot can now be reused
++    assert(second != first && lookups == 2 && touches == 1);
++    auto depth = plain;
++    depth.variant = 1ull << 32;
++    const auto third = get(depth);
++    assert(third != second); // comparison and plain samplers must never alias
++    auto biased = plain;
++    biased.variant = 0x3f800000;
++    assert(get(biased) != third);
++    auto different = plain;
++    different.sharp[1] ^= 1;
++    assert(get(different) != second);
++    assert(get(plain) != first); // hash collisions must compare the entire descriptor
++    std::printf("sampler memo: 100001 repeats use 1 lookup; LRU touch, GC reuse, depth, LOD and collisions passed\n");
++}

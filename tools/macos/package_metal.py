@@ -40,7 +40,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -76,8 +76,9 @@ def main():
     for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
-    if args.version.startswith('0.2.1'):
-        copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
+    copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
+    if args.version.startswith('0.2.2'):
+        copy(ROOT / 'docs/release/METAL-PERFORMANCE-1.md', engine / 'METAL-PERFORMANCE-1.md')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
     assert run('git', '-C', args.spirv_cross_source, 'rev-parse', 'HEAD') == 'f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7'
@@ -109,6 +110,7 @@ def main():
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
     notices.write_text(notices.read_text() + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +
                        '\nSPIRV-Cross f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7 (Apache-2.0).\n' +
+                       'Sampler memo adapted from Awakenchan/BloodBorneButPc 4f93643eb573ae445a24db1d64eabf663a5d5147 (GPL-3.0-or-later).\n' +
                        'Integration source and adapter patches: https://github.com/WiredThings/bbport-mac-optimized/tree/optimized\n')
     inspect_payload(engine)
     for p in (lib, probe):
