@@ -22,7 +22,8 @@ class BenchmarkTests(unittest.TestCase):
             r=self.rows()
             if key=='cam_x':
                 for row in r:row.update(cam_x='0',cam_y='0',cam_z='0')
-            else:r[0][key]=value
+            else:
+                for row in r:row[key]=value
             with self.assertRaises(ValueError):b.metrics(r)
     def test_3d_title_preview_is_not_a_game_scene(self):
         r=self.rows()
@@ -34,6 +35,12 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(b.stable_scene(r,[-9,-4,-18]))
         self.assertTrue(b.stable_scene(self.rows(),[-9,-4,-18]))
         self.assertFalse(b.stable_scene(self.rows(),[7,2,8]))
+    def test_low_recorder_count_keeps_slow_frame_in_score(self):
+        r=self.rows();r[0].update(draws='20',frame_ms='100')
+        m=b.metrics(r);self.assertEqual(m['frames'],1000);self.assertAlmostEqual(m['fps'],1000/20.08);self.assertEqual(m['low_draw_frame_fraction'],.001)
+        self.assertTrue(b.stable_scene(r,[-9,-4,-18]))
+        for row in r[-30:]:row['draws']='20'
+        self.assertFalse(b.stable_scene(r))
     def test_nonfinite_and_zero_frame_times_rejected(self):
         for invalid in ['nan','0','-1','inf']:
             r=self.rows();r[0]['frame_ms']=invalid

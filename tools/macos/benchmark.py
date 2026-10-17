@@ -80,7 +80,9 @@ def pressure():
 def frame_rows(path):
     if not path.exists():
         return []
-    rows = list(csv.DictReader(path.read_text().splitlines()))
+    text=path.read_text()
+    if text and not text.endswith('\n'): text=text.rsplit('\n',1)[0]+'\n' if '\n' in text else ''
+    rows = list(csv.DictReader(text.splitlines()))
     return [r for r in rows if None not in r and None not in r.values()]
 
 
@@ -92,8 +94,15 @@ def is_world(row):
         return False
 
 
+def world_camera(row):
+    try:
+        c=[float(row[k]) for k in ('cam_x','cam_y','cam_z')]
+        return all(math.isfinite(v) for v in c) and math.dist(c,(0,0,0))>.1 and math.dist(c,(0,4,-8))>.1
+    except (KeyError,ValueError,TypeError): return False
+
+
 def scene_matches(row, expected=None):
-    if not is_world(row): return False
+    if not world_camera(row): return False
     return not expected or math.dist([float(row[k]) for k in ('cam_x','cam_y','cam_z')],expected)<=.15
 
 
@@ -101,17 +110,20 @@ def stable_scene(rows, expected=None, seconds=3):
     if not rows: return False
     end=float(rows[-1]['t_s'])
     recent=[r for r in rows if end-seconds<=float(r['t_s'])<=end]
-    return len(recent)>=60 and end-float(recent[0]['t_s'])>=seconds-.1 and all(scene_matches(r,expected) for r in recent)
+    if len(recent)<60 or end-float(recent[0]['t_s'])<seconds-.1: return False
+    # Frame-boundary recorder counters can occasionally be low during normal gameplay.
+    # Validate the window, retain all frame times, and never count the title camera as gameplay.
+    return all(scene_matches(r,expected) for r in recent) and sum(float(r['draws'])>300 for r in recent)/len(recent)>=.99
 
 
 def metrics(rows):
-    if len(rows) < 100 or not all(is_world(row) for row in rows):
+    if len(rows) < 100 or not all(world_camera(row) for row in rows) or sum(float(r['draws'])>300 for r in rows)/len(rows)<.99:
         raise ValueError('Measurement contains menus/loading or too few game frames')
     frames = sorted(float(r['frame_ms']) for r in rows)
     if not all(math.isfinite(t) and t > 0 for t in frames):
         raise ValueError('Invalid frame times')
     worst = max(1, math.ceil(len(frames) * .01))
-    result = dict(frames=len(frames), fps=1000 / statistics.mean(frames), frame_ms_mean=statistics.mean(frames),
+    result = dict(frames=len(frames), low_draw_frame_fraction=sum(float(r['draws'])<=300 for r in rows)/len(rows), fps=1000 / statistics.mean(frames), frame_ms_mean=statistics.mean(frames),
                   frame_ms_p50=statistics.median(frames), frame_ms_p95=frames[min(len(frames)-1, math.ceil(len(frames)*.95)-1)],
                   frame_ms_p99=frames[min(len(frames)-1, math.ceil(len(frames)*.99)-1)],
                   one_percent_low_fps=1000 / statistics.mean(frames[-worst:]), worst_frame_ms=frames[-1])
@@ -235,7 +247,7 @@ def run(args):
         env.update(BB_MTL_GPU_TIMING='1', BB_MTL_GPU_TIMING_EVERY='8')
     log_file = (folder/'run.log').open('w')
     source_before = inventory(manifest['source_save'])
-    process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0
+    process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
     log_path=folder/'run.log';frames=folder/'data/out/frames.csv'
     def guard():
         nonlocal last_guard
@@ -266,13 +278,13 @@ def run(args):
             if rr and is_world(rr[-1]):
                 # Stop title input on a plausible world frame; require a complete stable window
                 # before entering warmup. The title's 3D preview camera is explicitly excluded.
-                pad.write_text(NEUTRAL);held=False;input_pause_until=now+12
+                pad.write_text(NEUTRAL);held=False;input_pause_until=now+12;left_title=True
             if stable_scene(rr,manifest['expected_camera']):
                 world=True;pad.write_text(NEUTRAL);break
             log=log_path.read_text(errors='replace')
             if 'Runtime: pad opened' in log and next_press is None:
                 next_press=now+15
-            if next_press is not None and now>=next_press and now>=input_pause_until:
+            if next_press is not None and now>=next_press and now>=input_pause_until and not left_title:
                 if held:
                     pad.write_text(NEUTRAL);held=False;next_press=now+7
                 elif presses<32:
@@ -298,6 +310,7 @@ def run(args):
                 raise RuntimeError('Shader warmup did not settle')
             time.sleep(.5)
         first_t=float(frame_rows(frames)[-1]['t_s']);measure_start=time.monotonic()
+        write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds))
         print(f'Measuring {args.seconds}s; GPU stage timing={args.profile_gpu}',flush=True)
         while time.monotonic()-measure_start<args.seconds:
             guard();time.sleep(.5)
@@ -315,7 +328,7 @@ def run(args):
         faults=[line for line in log.splitlines() if re.search(r'GPU fault|device lost|command buffer.*error|assertion failed|Execution of the command buffer was aborted',line,re.I)]
         if faults:
             raise RuntimeError(f'GPU faults: {faults[:2]}')
-        result=dict(schema=1,valid=False,name=args.name,cohort_fingerprint=manifest['cohort_fingerprint'],
+        result=dict(schema=1,valid=False,name=args.name,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
                     profile_gpu=args.profile_gpu,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
                     renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),
                     variants=variants,settings_sha256=manifest['ini_sha256'],camera=camera,samples=samples,

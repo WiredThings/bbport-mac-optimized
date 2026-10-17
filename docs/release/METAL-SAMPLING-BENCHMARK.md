@@ -22,8 +22,10 @@ keyboard/gamepad input and overlay shortcuts do not drive the benchmark. Window 
 allows the owner to abort it. No global `pkill` or original-save restore is used.
 
 Default warmup/sample are 45/45 seconds; startup is bounded to 300 seconds. The sample needs
-at least 100 real game frames, nonzero non-title camera position and over 300 draws/frame, continuously for three seconds. Shader
-compilation invalidates a warm-cache sample. Static camera position must remain within 5 cm;
+at least 100 real game frames and a nonzero non-title camera. Entry requires a stable
+three-second window: every camera must match, and at least 99% of recorder frame counters
+must exceed 300 draws. Occasional low recorder counts retain their complete frame times in
+the score; no slow frames are excluded. Shader compilation invalidates a warm-cache sample. Static camera position must remain within 5 cm;
 `--expected-camera X Y Z` during init can enforce the intended location. Comparison rejects
 changed config/save cohorts, instrumentation, host, camera position and draw count shifts
 over 2%. This is a static scene test, not a whole-game average or bit-exact simulation replay.
@@ -78,3 +80,11 @@ aborted the private process at 38 seconds. This was a script error, not the memo
 The original save hashes were unchanged. Title-camera exclusion, continuous stable-window
 entry and warmup grace now have regression tests; the failed run is never accepted as a
 performance result.
+
+The current local cohort starts from a pre-boss-death save. The owner confirmed that it
+naturally dies and respawns at Central Yharnam. Its expected camera is
+(-190.784, -27.226, 71.116); warmup starts only after this respawn settles. This is a separate
+Central Yharnam cohort and must not be compared with the earlier manual Hunter's Dream
+samples. Title input stops permanently on the first world frame, including during death
+and respawn transitions. A second smoke run reached the stable respawn scene but was
+rejected by an overly strict per-frame recorder-count check; it is not an accepted baseline.
