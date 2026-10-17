@@ -26,7 +26,7 @@ from datetime import datetime
 DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
-OVERRIDES = {'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
+OVERRIDES = {'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
 
 
@@ -89,6 +89,22 @@ class MemoryGuard:
             if measuring or now-self.warning_since>=30:
                 raise RuntimeError('Memory warning guard stopped this benchmark; no result accepted')
         else:self.warning_since=None
+
+
+def check_gpu_faults(log):
+    faults=[line for line in log.splitlines() if re.search(r'GPU fault|device lost|command buffer.*error|assertion failed|Execution of the command buffer was aborted',line,re.I)]
+    if faults:raise RuntimeError(f'GPU faults: {faults[:2]}')
+
+
+def display_snapshot(folder):
+    files=list(folder.glob('f*_present_*_*.raw'))
+    if len(files)!=1:raise ValueError('Expected one bounded display snapshot')
+    p=files[0];m=re.fullmatch(r'f[0-9]+_present_([0-9]+)x([0-9]+)_(rgba|bgra)\.raw',p.name)
+    if not m or p.is_symlink():raise ValueError('Invalid display snapshot path')
+    width,height=int(m[1]),int(m[2]);size=width*height*4
+    if not width or not height or size>32*1024**2 or p.stat().st_size!=size:
+        raise ValueError('Display snapshot is incomplete or over 32 MiB')
+    return dict(path=str(p),width=width,height=height,order=m[3],bytes=size,sha256=digest(p))
 
 
 def frame_rows(path):
@@ -360,6 +376,9 @@ def run(args):
         env['MTL_CAPTURE_ENABLED']='1'
     if args.capture_native:
         env.update(BB_CAPTURE_NATIVE='1',BB_CAPTURE_DIR=str(folder),BB_CAPTURE_TRIGGER=str(folder/'capture.trigger'),BB_PASS_LABELS='1')
+        if args.capture_display:
+            if b'display dump exceeds the 32 MiB diagnostic bound' not in (engine/'bin/gpu-metal/libbbgpu.dylib').read_bytes():raise ValueError('App lacks bounded display snapshot support; update first')
+            env.update(BB_PRESENT_DUMP_TRIGGER=str(folder/'display.trigger'),BB_DUMP_DIR=str(folder))
     log_file = (folder/'run.log').open('w')
     source_before = inventory(manifest['source_save'])
     process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
@@ -425,19 +444,23 @@ def run(args):
                 raise RuntimeError('Shader warmup did not settle')
             time.sleep(.5)
         if args.capture_native:
-            print('Recording one decoded GPU frame: bounded attachment metadata only',flush=True)
+            print('Recording one decoded GPU frame: bounded attachment metadata'+(' and display image' if args.capture_display else ' only'),flush=True)
             (folder/'capture.trigger').write_text('1')
+            if args.capture_display:(folder/'display.trigger').write_text('1')
             capture_deadline=time.monotonic()+10
             while time.monotonic()<capture_deadline:
                 guard()
                 captures=list(folder.glob('frame_*.txt'))
-                if captures and 'passes written to' in log_path.read_text(errors='replace'):break
+                log=log_path.read_text(errors='replace')
+                if captures and 'passes written to' in log and (not args.capture_display or 'display buffer dumped to' in log):break
                 time.sleep(.1)
             else:raise RuntimeError('Native attachment capture timed out')
             native=[json.loads(line[7:]) for line in captures[0].read_text().splitlines() if line.startswith('NATIVE ')]
             if not native or native[0].get('truncated',True) or not any(row.get('op')=='attachment' for row in native):
                 raise RuntimeError('Native metadata is incomplete')
-            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Native attachments/encoders and semantic guest resources; no texture or buffer contents.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
+            check_gpu_faults(log_path.read_text(errors="replace"))
+            snapshot=display_snapshot(folder) if args.capture_display else None
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',display=snapshot,trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
             print(f'Attachment metadata captured: {captures[0]}',flush=True)
             return
         if args.capture_frame:
@@ -467,9 +490,7 @@ def run(args):
         if any(stats[k]['max']-stats[k]['min']>.05 for k in ('cam_x','cam_y','cam_z')):
             raise ValueError('Player moved during static-scene measurement')
         log=log_path.read_text(errors='replace')
-        faults=[line for line in log.splitlines() if re.search(r'GPU fault|device lost|command buffer.*error|assertion failed|Execution of the command buffer was aborted',line,re.I)]
-        if faults:
-            raise RuntimeError(f'GPU faults: {faults[:2]}')
+        check_gpu_faults(log)
         result=dict(schema=1,valid=False,name=args.name,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
                     profile_gpu=args.profile_gpu,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_driver=env.get('SDL_AUDIO_DRIVER','default'),audio_muted=args.mute,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
                     renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),
@@ -527,13 +548,15 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('init');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--launcher-data',type=Path,default=DEFAULT_DATA);p.add_argument('--expected-camera',nargs=3,type=float);p.set_defaults(func=init)
-    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--mute',action='store_true');p.add_argument('--minimal-stats',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
+    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--mute',action='store_true');p.add_argument('--minimal-stats',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-display',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
     p=sub.add_parser('compare');p.add_argument('before',type=Path);p.add_argument('after',type=Path);p.set_defaults(func=compare)
     args=parser.parse_args()
     if args.command=='run' and not (15<=args.warmup<=180 and 15<=args.seconds<=180 and 30<=args.startup_timeout<=600 and 256<=args.max_swap_growth_mib<=2048):
         parser.error('Use bounded warmup/sample (15..180s), startup (30..600s), and swap growth (256..2048 MiB)')
     if args.command=='run' and (args.capture_frame and args.capture_native):
         parser.error('Choose either resource capture or native attachment metadata')
+    if args.command=='run' and args.capture_display and not args.capture_native:
+        parser.error('--capture-display requires --capture-native and never produces an FPS score')
     if args.command=='run' and args.capture_shared_memory and not args.capture_frame:
         parser.error('--capture-shared-memory requires --capture-frame')
     try: args.func(args)

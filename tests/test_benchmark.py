@@ -108,6 +108,23 @@ class BenchmarkTests(unittest.TestCase):
             p=Path(d);(p/'a').write_text(json.dumps(a));(p/'b').write_text(json.dumps(c))
             with contextlib.redirect_stdout(io.StringIO()) as output:b.compare(argparse.Namespace(before=p/'a',after=p/'b'))
             return json.loads(output.getvalue())
+    def test_diagnostic_capture_rejects_gpu_faults(self):
+        for log in ['GPU fault at address 0x1','device lost','Command buffer completed with error','assertion failed']:
+            with self.assertRaisesRegex(RuntimeError,'GPU faults'):b.check_gpu_faults(log)
+        b.check_gpu_faults('Shader cache warmed; no errors')
+    def test_display_snapshot_validates_shape_size_and_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'f000_present_2x2_rgba.raw';p.write_bytes(bytes(range(16)))
+            result=b.display_snapshot(Path(d));self.assertEqual(result['bytes'],16);self.assertEqual(result['width'],2)
+            p.write_bytes(b'incomplete')
+            with self.assertRaisesRegex(ValueError,'incomplete'):b.display_snapshot(Path(d))
+    def test_display_snapshot_rejects_large_and_linked_outputs(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'f000_present_999999x999999_rgba.raw';p.write_bytes(b'')
+            with self.assertRaises(ValueError):b.display_snapshot(Path(d))
+            p.unlink();target=Path(d)/'actual';target.write_bytes(bytes(16))
+            p=Path(d)/'f000_present_2x2_rgba.raw';p.symlink_to(target)
+            with self.assertRaises(ValueError):b.display_snapshot(Path(d))
     def test_compare_rejects_audio_backend_change(self):
         a=self.result();c=self.result();c['audio_driver']='dummy'
         with self.assertRaisesRegex(ValueError,'audio backends'):self.compare(a,c)

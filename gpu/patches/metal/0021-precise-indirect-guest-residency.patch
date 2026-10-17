@@ -1,0 +1,601 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_camera_motion.mm b/gpu/shadps4/video_core/renderer_metal/mtl_camera_motion.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_camera_motion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_camera_motion.mm
+@@ -78,7 +78,7 @@
+     const H::Shader& shader = H::CAMERA_MOTION_COMP;
+     id<MTLTexture> depth = (__bridge id<MTLTexture>)depth_texture;
+     id<MTLTexture> motion = (__bridge id<MTLTexture>)motion_texture;
+-    scheduler.ComputeEncoder();
++    scheduler.ComputeEncoder(nullptr, true);
+     scheduler.LabelEncoder("Camera motion");
+     id<MTLComputeCommandEncoder> compute = impl->sched.compute;
+     [compute setComputePipelineState:impl->pipeline];
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -166,7 +166,7 @@
+     auto scales = impl->runtime.StagingRequest(bytes, VideoCore::MemoryType::HostUncached, 16);
+     std::memcpy(scales.mapped, impl->scales.data(), bytes);
+     s.MemoryBarrier();
+-    s.ComputeEncoder("Occlusion snapshot");
++    s.ComputeEncoder("Occlusion snapshot", true);
+     id<MTLComputeCommandEncoder> encoder = s.GetImpl().compute;
+     [encoder setComputePipelineState:impl->pipeline];
+     [encoder setBuffer:impl->results offset:0 atIndex:0];
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm b/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
+@@ -53,6 +53,10 @@
+     // buffer and its 8 MB buffer stayed alive.
+     @autoreleasepool {
+         const NSUInteger width = texture.width, height = texture.height, row = width * 4;
++        constexpr NSUInteger MaxPixels=8*1024*1024; // one <=32 MiB diagnostic display readback
++        if(!width || !height || width>MaxPixels/height) {
++            std::fprintf(stderr,"Metal: display dump exceeds the 32 MiB diagnostic bound\n");return;
++        }
+         id<MTLBuffer> buffer = [device newBufferWithLength:row * height
+                                                    options:MTLResourceStorageModeShared];
+         id<MTLCommandBuffer> cmdbuf = [queue commandBuffer];
+@@ -524,7 +528,7 @@
+             pass.colorAttachments[0].texture = to;
+             pass.colorAttachments[0].loadAction = MTLLoadActionDontCare; // the triangle covers it
+             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+-            scheduler->RenderEncoder((__bridge const void*)pass);
++            scheduler->HostRenderEncoder((__bridge const void*)pass);
+             id<MTLRenderCommandEncoder> render = scheduler->GetImpl().render;
+             [render setRenderPipelineState:impl->post_process_pipeline];
+             [render setViewport:MTLViewport{0, 0, double(width), double(height), 0, 1}];
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -155,7 +155,7 @@
+         return {NativeBuffer(*bytes_block.span.buffer), offset};
+     }
+     Runtime* runtime_ptr = nullptr;
+-    const Scheduler* scheduler_ptr = nullptr;
++    Scheduler* scheduler_ptr = nullptr;
+ 
+     /// Binds `length` bytes at buffer slot `index` of `stage` (StoreBytes, or setBytes).
+     void Bytes(StageKind stage, const void* data, u64 length, u32 index);
+@@ -439,6 +439,7 @@
+ 
+ void Rasterizer::Impl::BindStage(StageKind stage, const CompiledShader& shader,
+                                  const Shader::PushData& push) {
++    if(stage!=StageKind::Compute && shader.uses_device_address)scheduler_ptr->RequireGuestRender();
+     std::array<u32, kMaxBuffers> buffer_sizes{}; // SPIRV-Cross' spvBufferSizeConstants
+     const auto missing = [&](const char* what, const ShaderBinding& b) {
+         missing_bindings.fetch_add(1, std::memory_order_relaxed);
+@@ -969,22 +970,30 @@
+ } // namespace
+ 
+ const RenderState& Rasterizer::OpenPass(const GraphicsPipeline& pipeline, const RenderState& state) {
+-    if (impl->velocity_replaying) return state; // record host commands without interrupting guest
++    const auto& r=pipeline.Render();
++    // Plain shader metadata comes from the SPIR-V capability scan, also on disk-cache hits.
++    // Unknown/synthesized tessellation/geometry/rect-list programs remain conservative.
++    const bool bound_only=r.vs && r.vs->variant.kind==CompileVariant::Kind::Plain &&
++        !r.vs->uses_device_address && (!r.fs || !r.fs->uses_device_address) &&
++        !r.tessellation && !r.geometry && !r.rect_list;
++    if (impl->velocity_replaying) {if(!bound_only)scheduler.RequireGuestRender();return state;} // record host commands without interrupting guest
+     MarkPass(&pipeline, state);
+     if (const RenderState* open = scheduler.OpenRenderState();
+         open && !BbToggle::Experiment(BbToggle::MtlNoDepthPassMerge) &&
+         FitsOpenDepthPass(*open, state, pipeline.Render())) {
++        if(!bound_only)scheduler.RequireGuestRender();
+         return *open;
+     }
+     // A pass re-opened after a tessellation draw's kernels is the loading variant of the same
+     // state (WithoutClears): the draws after it continue it instead of clearing again.
+     if (!scheduler.IsRenderingWith(state) && !scheduler.IsRenderingWith(WithoutClears(state))) {
+         MTLRenderPassDescriptor* desc = MakePassDescriptor(state, pipeline.Render());
+-        scheduler.RenderEncoder((__bridge const void*)desc, state, !impl->velocity_replaying);
++        scheduler.RenderEncoder((__bridge const void*)desc, state, !impl->velocity_replaying, bound_only);
+         if (scheduler.PassLabels()) {
+             scheduler.LabelEncoder(impl->next_pass_label.c_str());
+         }
+     }
++    if(!bound_only)scheduler.RequireGuestRender();
+     return state;
+ }
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -353,7 +353,7 @@
+     boost::container::small_vector<ConvertedCopy, 14> converted;
+     const StagingSpan temp = PlanConversions(ctx, guest_format, host_format, copies, converted);
+     if (temp.buffer) {
+-        ctx.scheduler.ComputeEncoder(label);
++        ctx.scheduler.ComputeEncoder(label, true);
+         id<MTLComputeCommandEncoder> compute = ctx.scheduler.GetImpl().compute;
+         for (size_t i = 0; i < copies.size(); ++i) {
+             const ConvertedCopy& entry = converted[i];
+@@ -398,7 +398,7 @@
+     if (!temp.buffer) {
+         return;
+     }
+-    ctx.scheduler.ComputeEncoder(label);
++    ctx.scheduler.ComputeEncoder(label, true);
+     id<MTLComputeCommandEncoder> compute = ctx.scheduler.GetImpl().compute;
+     for (size_t i = 0; i < copies.size(); ++i) {
+         const ConvertedCopy& entry = converted[i];
+@@ -1501,7 +1501,7 @@
+         // A pattern of four different bytes: a small kernel, one thread per word.
+         const u32 words = static_cast<u32>(size / 4);
+         id<MTLComputePipelineState> pipeline = impl->kernels.FillU32();
+-        scheduler.ComputeEncoder(__func__);
++        scheduler.ComputeEncoder(__func__, true);
+         id<MTLComputeCommandEncoder> compute = impl->sched.compute;
+         [compute setComputePipelineState:pipeline];
+         [compute setBuffer:NativeBuffer(*dst) offset:offset atIndex:0];
+@@ -2077,7 +2077,7 @@
+                 color.storeAction = MTLStoreActionStoreAndMultisampleResolve;
+                 color.resolveTexture = dst_texture;
+                 color.resolveSlice = dst_range.base.layer + layer;
+-                scheduler.RenderEncoder((__bridge const void*)pass);
++                scheduler.HostRenderEncoder((__bridge const void*)pass);
+                 scheduler.EndRendering();
+             }
+         }
+@@ -2148,7 +2148,7 @@
+                     attachment.loadAction = MTLLoadActionClear;
+                     attachment.clearColor = color;
+                     attachment.storeAction = MTLStoreActionStore;
+-                    scheduler.RenderEncoder((__bridge const void*)pass);
++                    scheduler.HostRenderEncoder((__bridge const void*)pass);
+                     scheduler.EndRendering();
+                 }
+             }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+@@ -277,7 +277,7 @@
+     pass.colorAttachments[0].texture = dst;
+     pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+-    scheduler.RenderEncoder((__bridge const void*)pass);
++    scheduler.HostRenderEncoder((__bridge const void*)pass);
+     id<MTLRenderCommandEncoder> render = scheduler.GetImpl().render;
+     [render setRenderPipelineState:pipeline];
+     [render setFragmentTexture:src atIndex:0];
+@@ -300,7 +300,7 @@
+     pass.depthAttachment.loadAction = MTLLoadActionClear;
+     pass.depthAttachment.clearDepth = 1.0;
+     pass.depthAttachment.storeAction = MTLStoreActionStore;
+-    scheduler.RenderEncoder((__bridge const void*)pass);
++    scheduler.HostRenderEncoder((__bridge const void*)pass);
+     id<MTLRenderCommandEncoder> render = scheduler.GetImpl().render;
+     [render setRenderPipelineState:pipeline];
+     [render setDepthStencilState:depth_always_write];
+@@ -321,7 +321,7 @@
+     const u32 tiled_slot = HostKernels::BufferSlot(*shader, 0);
+     const u32 linear_slot = HostKernels::BufferSlot(*shader, 1);
+     const u32 params_slot = HostKernels::BufferSlot(*shader, 2);
+-    scheduler.ComputeEncoder(__func__);
++    scheduler.ComputeEncoder(__func__, true);
+     id<MTLComputeCommandEncoder> compute = impl->sched.compute;
+     [compute setComputePipelineState:pipeline];
+     [compute setBuffer:NativeBuffer(*dispatch.tiled.buffer)
+@@ -368,7 +368,7 @@
+                        vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderRead);
+     flush|=IsBufferAccessed(dispatch.tiled.buffer,dispatch.tiled.offset,info.guest_size,true);
+     if(flush)FlushBarriers();
+-    scheduler.ComputeEncoder("Texture to guest tiling");
++    scheduler.ComputeEncoder("Texture to guest tiling", true);
+     auto compute=impl->sched.compute;
+     [compute setComputePipelineState:pipeline];
+     [compute setTexture:source atIndex:0];
+@@ -393,7 +393,7 @@
+         return;
+     }
+     const auto& shader = H::FAULT_BUFFER_PROCESS_COMP;
+-    scheduler.ComputeEncoder(__func__);
++    scheduler.ComputeEncoder(__func__, true);
+     // The game's shaders wrote the fault buffer through its device address, which Metal does not
+     // track: order the parser after them (the barrier also waits for the earlier encoders).
+     scheduler.MemoryBarrier();
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -550,7 +550,7 @@
+             pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+         }
+-        scheduler.RenderEncoder((__bridge const void*)pass);
++        scheduler.HostRenderEncoder((__bridge const void*)pass);
+         scheduler.LabelEncoder(label);
+         id<MTLRenderCommandEncoder> render = scheduler.GetImpl().render;
+         [render setRenderPipelineState:impl->Pipeline(target.pixelFormat)];
+@@ -824,7 +824,7 @@
+     runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
+                     vk::AccessFlagBits2::eShaderWrite);
+     runtime.FlushBarriers();
+-    scheduler.ComputeEncoder();
++    scheduler.ComputeEncoder(nullptr, true);
+     scheduler.LabelEncoder("Upscale merge alpha fusion");
+     const auto compute = scheduler.GetImpl().compute;
+     const std::array<float, 2> scale{float(alpha.width) / native.width,
+@@ -888,7 +888,7 @@
+     auto* pass=[MTLRenderPassDescriptor renderPassDescriptor];
+     pass.colorAttachments[0].texture=proxy;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
+     pass.colorAttachments[0].storeAction=MTLStoreActionStore;pass.colorAttachments[0].clearColor=color;
+-    scheduler.RenderEncoder((__bridge const void*)pass);
++    scheduler.HostRenderEncoder((__bridge const void*)pass);
+     scheduler.LabelEncoder("Scene proxy clear");scheduler.EndRendering();
+     }
+     entry.state.ProxyWrite();++impl->proxy_clears;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -91,8 +91,12 @@
+     /// Begins a render pass; `pass_descriptor` is an MTLRenderPassDescriptor (bridged void*).
+     /// Always a new pass: the caller decides to continue a pass by checking IsRendering().
+     void RenderEncoder(const void* pass_descriptor);
++    /// Known host shaders with directly bound resources only; no raw guest GPU pointers.
++    void HostRenderEncoder(const void* pass_descriptor);
++    /// Union indirect residency into a recorded/reused pass before a shader uses raw pointers.
++    void RequireGuestRender();
+     /// The same, remembering the state the pass was begun with (IsRenderingWith compares it).
+-    void RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest = true);
++    void RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest = true, bool bound_only = false);
+     /// The render commands of the rasterizer's pass (the one begun with a RenderState): valid
+     /// while IsRendering() after such a RenderEncoder. Passes begun without a state (the
+     /// upscaler, the presenter, the runtime's kernels) use Impl::render directly.
+@@ -101,7 +105,7 @@
+     }
+     /// The open compute encoder, or a new one (dispatches of one encoder run in order). `label`
+     /// names a new encoder with BB_PASS_LABELS=1.
+-    void ComputeEncoder(const char* label = nullptr);
++    void ComputeEncoder(const char* label = nullptr, bool bound_only = false);
+     /// The open blit encoder, or a new one.
+     void BlitEncoder(const char* label = nullptr);
+     /// Ends the open encoder, if any (the command buffer stays open).
+@@ -242,10 +246,10 @@
+         u64 gpu_tick;
+     };
+ 
+-    void BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest = false);
++    void BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest = false, bool bound_only = false);
+     /// Creates the encoder of `kind` (none may be open): fence waits, guest chunk use, groups.
+     /// `wait_all`: wait for the fences of every earlier encoder still outstanding first.
+-    void OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest = false);
++    void OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest = false, bool bound_only = false);
+     /// Ends the physical encoder of `kind` (fence update, groups).
+     void ClosePhysical(EncoderKind kind);
+     void PriorityPendingOpsThread(std::stop_token stoken);
+@@ -270,6 +274,7 @@
+     std::optional<VideoCore::RenderState> render_state;
+     RenderList commands;
+     bool commands_active = false; ///< the open render pass is the rasterizer's (Commands())
++    bool held_bound_only = false; ///< union of all shader accesses in the pending pass
+     bool held_guest = true;       ///< immutable tag carried into replay; host mirrors never count
+     bool hold_env = true;         ///< BB_MTL_HOLD (default 1)
+     bool hoisting = false;        ///< between BeginHoist and EndHoist of a held pass
+@@ -305,6 +310,7 @@
+     // Replay thread (see the class comment).
+     struct ReplayJob {
+         RenderList list;            ///< the pass's commands
++        bool bound_only = false;
+         bool guest = true;         ///< captured when posted, never a global replay-time toggle
+         bool close_compute = false; ///< end the hoisted compute encoder first
+         bool wait_all = false;      ///< the render encoder waits for every earlier encoder
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -62,6 +62,11 @@
+             WaitFence(impl, kind, slot);
+         }
+     }
++}
++
++bool PreciseHostResidency() {
++    static const bool enabled=[] {const char* v=std::getenv("BB_MTL_PRECISE_RESIDENCY");return v&&v[0]=='1';}();
++    return enabled;
+ }
+ 
+ /// Every encoder declares the guest chunks used, as MoltenVK does for every device-address
+@@ -246,16 +251,16 @@
+     visibility_query = std::move(query);
+ }
+ 
+-void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest) {
++void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest, bool bound_only) {
+     EndEncoder();
+     if (kind == EncoderKind::None) {
+         return;
+     }
+-    OpenPhysical(kind, pass_descriptor, std::exchange(need_fence_wait, false), guest);
++    OpenPhysical(kind, pass_descriptor, std::exchange(need_fence_wait, false), guest, bound_only);
+     open_encoder = kind;
+ }
+ 
+-void Scheduler::OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest) {
++void Scheduler::OpenPhysical(EncoderKind kind, const void* pass_descriptor, bool wait_all, bool guest, bool bound_only) {
+     id<MTLCommandBuffer> cmdbuf = impl->EnsureCommandBuffer();
+     const auto encode_start = impl->profile->Enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+     impl->profile->Open(static_cast<unsigned>(kind), guest);
+@@ -306,7 +311,14 @@
+             attachment(-1,d.depthAttachment);attachment(-2,d.stencilAttachment);
+         }
+     }
+-    UseGuestChunks(*impl, kind);
++    // Direct bindings already declare their resources. Only explicitly classified host
++    // kernels may omit the broad indirect-guest set; every unknown/game shader keeps it.
++    const bool indirect_guest=kind!=EncoderKind::Blit && !(PreciseHostResidency() && bound_only);
++    if(kind==EncoderKind::Compute)impl->compute_guest_declared=indirect_guest;
++    if(kind==EncoderKind::Render)impl->render_guest_declared=indirect_guest;
++    if(indirect_guest)UseGuestChunks(*impl, kind);
++    if(VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format("{{\"op\":\"residency\",\"queue\":{},\"indirect_guest\":{}}}",(uintptr_t)this,indirect_guest?"true":"false"));
+     // The slot this encoder updates at its end may still wait for a waiter (more encoders than
+     // slots without a barrier): that one waits now, which keeps the chain.
+     const u32 slot = impl->next_fence;
+@@ -343,12 +355,18 @@
+     render_state.reset();
+ }
+ 
+-void Scheduler::RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest) {
++void Scheduler::HostRenderEncoder(const void* pass_descriptor) {
++    ASSERT_MSG(pass_descriptor, "HostRenderEncoder without a pass descriptor");
++    BeginEncoder(EncoderKind::Render,pass_descriptor,false,true);
++    render_state.reset();
++}
++
++void Scheduler::RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest, bool bound_only) {
+     ASSERT_MSG(pass_descriptor, "RenderEncoder without a pass descriptor");
+     // Experiment bit MtlNoHold switches holding off while the game runs (taken at a pass begin).
+     hold_passes = hold_env && !BbToggle::Experiment(BbToggle::MtlNoHold);
+     if (!hold_passes) {
+-        BeginEncoder(EncoderKind::Render, pass_descriptor, guest);
++        BeginEncoder(EncoderKind::Render, pass_descriptor, guest, bound_only);
+         render_state = state;
+         commands.BeginDirect((__bridge void*)impl->render);
+         commands_active = true;
+@@ -367,6 +385,7 @@
+     render_state = state;
+     holding = true;
+     held_guest = guest;
++    held_bound_only = bound_only;
+     ++held_serial;
+     hoisting = false;
+     hoisted = false;
+@@ -375,6 +394,15 @@
+     commands_active = true;
+ }
+ 
++void Scheduler::RequireGuestRender() {
++    if(!PreciseHostResidency())return;
++    if(holding) {held_bound_only=false;return;}
++    JoinReplay();
++    if(open_encoder==EncoderKind::Render && impl->render && !impl->render_guest_declared) {
++        UseGuestChunks(*impl,EncoderKind::Render);impl->render_guest_declared=true;
++    }
++}
++
+ void Scheduler::ReleaseHeldPass() {
+     JoinReplay();
+     if (!holding) {
+@@ -392,7 +420,7 @@
+     }
+     hoisted = false;
+     OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->held_pass,
+-                 std::exchange(need_fence_wait, false), held_guest);
++                 std::exchange(need_fence_wait, false), held_guest, held_bound_only);
+     impl->held_pass = nil;
+     if (pass_labels && !held_label.empty()) {
+         impl->render.label = @(held_label.c_str());
+@@ -411,6 +439,7 @@
+     // What ReleaseHeldPass and EndEncoder do on this thread, but the encoding goes to the job.
+     // The hoisted compute encoder is the only one open while a pass is held.
+     job.guest = held_guest;
++    job.bound_only = held_bound_only;
+     job.close_compute = hoisted;
+     job.wait_all = std::exchange(need_fence_wait, false) || hoisted || commands.HasBarrier();
+     job.label = pass_labels ? held_label : std::string{};
+@@ -476,7 +505,7 @@
+             CloseNative(EncoderKind::Compute);
+         }
+         OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->replay_passes[slot],
+-                     job.wait_all, job.guest);
++                     job.wait_all, job.guest, job.bound_only);
+         impl->replay_passes[slot] = nil;
+         if (!job.label.empty()) {
+             impl->render.label = @(job.label.c_str());
+@@ -514,27 +543,30 @@
+     }
+ }
+ 
+-void Scheduler::ComputeEncoder(const char* label) {
++void Scheduler::ComputeEncoder(const char* label, bool bound_only) {
+     JoinReplay();
+     if (holding && hoisting) {
+         // Before the held pass: one compute encoder for everything hoisted into this pass, after
+         // every encoder before it (the barrier Vulkan records before a hoisted dispatch).
+         if (!impl->compute) {
+             need_fence_wait = false; // (it waits for everything before it anyway)
+-            OpenPhysical(EncoderKind::Compute, nullptr, true);
++            OpenPhysical(EncoderKind::Compute, nullptr, true, false, bound_only);
+             hoisted = true;
+             if (label) {
+                 LabelEncoder(label);
+             }
+         }
++        // A later hoisted guest dispatch can reuse the host encoder: upgrade before it runs.
++        if(!bound_only && !impl->compute_guest_declared) {UseGuestChunks(*impl,EncoderKind::Compute);impl->compute_guest_declared=true;}
+         return;
+     }
+     if (open_encoder != EncoderKind::Compute) {
+-        BeginEncoder(EncoderKind::Compute, nullptr);
++        BeginEncoder(EncoderKind::Compute, nullptr, false, bound_only);
+         if (label) {
+             LabelEncoder(label);
+         }
+     }
++    if(!bound_only && !impl->compute_guest_declared) {UseGuestChunks(*impl,EncoderKind::Compute);impl->compute_guest_declared=true;}
+ }
+ 
+ void Scheduler::BlitEncoder(const char* label) {
+@@ -595,7 +627,7 @@
+     MTLRenderPassDescriptor* pass=impl->pending_clears;
+     impl->pending_clears=nil;impl->pending_clear_count=0;
+     const bool after=std::exchange(impl->pending_clear_barrier,false);
+-    OpenPhysical(EncoderKind::Render,(__bridge const void*)pass,std::exchange(need_fence_wait,false),false);
++    OpenPhysical(EncoderKind::Render,(__bridge const void*)pass,std::exchange(need_fence_wait,false),false,true);
+     impl->render.label=@"Scene proxy clear batch";
+     VideoCore::FrameCapture::NativeLabel("Scene proxy clear batch",(uintptr_t)this);
+     impl->profile->Label("Scene proxy clear batch");
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
+@@ -26,7 +26,9 @@
+     id<MTLCommandBuffer> cmdbuf; ///< open command buffer, nil until something is recorded
+     /// The open encoder (the one of Scheduler::OpenEncoder(), the others are nil).
+     id<MTLRenderCommandEncoder> render;
++    bool render_guest_declared = false;
+     id<MTLComputeCommandEncoder> compute;
++    bool compute_guest_declared = false; ///< upgrades reused host compute encoders before indirect access
+     id<MTLBlitCommandEncoder> blit;
+     /// The held render pass's descriptor (nil when none is held, Scheduler::ReleaseHeldPass).
+     MTLRenderPassDescriptor* held_pass;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+@@ -1090,7 +1090,7 @@
+                     vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
+     runtime.FlushBarriers();
+     // Debug view of the motion vectors (menu); the reactive mask has no counterpart here.
+-    scheduler.ComputeEncoder();
++    scheduler.ComputeEncoder(nullptr, true);
+     scheduler.LabelEncoder("Upscale merge");
+     id<MTLComputeCommandEncoder> compute = scheduler.GetImpl().compute;
+     const HostShaders::Shader& shader = HostShaders::UPSCALE_MERGE_COMP;
+@@ -1167,7 +1167,7 @@
+         pass.colorAttachments[0].texture = target;
+         pass.colorAttachments[0].loadAction = MTLLoadActionDontCare; // the triangle covers it
+         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+-        scheduler.RenderEncoder((__bridge const void*)pass);
++        scheduler.HostRenderEncoder((__bridge const void*)pass);
+         scheduler.LabelEncoder("UI background copy");
+         id<MTLRenderCommandEncoder> render = scheduler.GetImpl().render;
+         [render setRenderPipelineState:impl->CopyPipeline(target.pixelFormat)];
+@@ -1212,7 +1212,7 @@
+             pass.stencilAttachment.storeAction = MTLStoreActionStore;
+             pass.stencilAttachment.clearStencil = 0;
+         }
+-        scheduler.RenderEncoder((__bridge const void*)pass);
++        scheduler.HostRenderEncoder((__bridge const void*)pass);
+         scheduler.LabelEncoder("UI depth");
+         if (source) {
+             // The depth aspect of the whole game depth into the whole UI depth, nearest (the
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+@@ -216,7 +216,7 @@
+     }
+     impl->pending = 0; // reentrant EndEncoder calls must not replay this list twice
+     auto& s = impl->scheduler;
+-    s.RenderEncoder((__bridge const void*)pass); // host: never a guest visibility query
++    s.HostRenderEncoder((__bridge const void*)pass); // host: never a guest visibility query
+     s.LabelEncoder("Batched game velocity mirror");
+     impl->commands.Replay((__bridge void*)s.GetImpl().render);
+     impl->commands.End();
+@@ -230,7 +230,7 @@
+     if (!motion || motion.width != w || motion.height != h || motion.pixelFormat != MTLPixelFormatRG16Float) return;
+     auto& s = impl->scheduler;
+     s.EndWithBarrier();
+-    s.ComputeEncoder("Merge game object velocity into camera motion");
++    s.ComputeEncoder("Merge game object velocity into camera motion", true);
+     auto encoder = s.GetImpl().compute;
+     [encoder setComputePipelineState:impl->pipeline];
+     [encoder setTexture:impl->color atIndex:0];
+diff --git a/tests/test_mtl_scheduler.mm b/tests/test_mtl_scheduler.mm
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -750,6 +750,79 @@
+     std::filesystem::remove_all(root);
+ }
+ 
++static void TestPreciseHostResidency(Metal::Device& device,const Kernels& k) {
++    const bool enabled=[] {const char* v=std::getenv("BB_MTL_PRECISE_RESIDENCY");return v&&v[0]=='1';}();
++    auto gpu=device.GetImpl().device;
++    id<MTLBuffer> guest=[gpu newBufferWithLength:4096 options:MTLResourceStorageModeShared];
++    id<MTLBuffer> out=[gpu newBufferWithLength:64 options:MTLResourceStorageModeShared];
++    device.GetImpl().AddGuestBuffer(guest); // deliberately absent from the residency set
++    *static_cast<u32*>(guest.contents)=0x1937cafe;
++    auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:4 height:4 mipmapped:NO];
++    td.usage=MTLTextureUsageRenderTarget;td.storageMode=MTLStorageModeShared;
++    auto texture=[gpu newTextureWithDescriptor:td];
++    std::vector<id> lifetime; // retained through scheduler destruction / command-buffer retirement
++    Scheduler scheduler{device,"precise host residency"};
++    auto pass=[MTLRenderPassDescriptor renderPassDescriptor];pass.colorAttachments[0].texture=texture;
++    pass.colorAttachments[0].loadAction=MTLLoadActionClear;pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++    pass.colorAttachments[0].clearColor=MTLClearColorMake(1,0,0,1);
++    for(unsigned mode=0;mode<3;++mode) {
++        bool hoisted=mode==2 && !(std::getenv("BB_MTL_HOLD") && std::getenv("BB_MTL_HOLD")[0]=='0');
++        if(hoisted) {VideoCore::RenderState state{};scheduler.RenderEncoder((__bridge void*)pass,state);scheduler.BeginHoist();}
++        scheduler.ComputeEncoder("direct bindings only",true);
++        auto encoder=scheduler.GetImpl().compute;
++        CHECK(scheduler.GetImpl().compute_guest_declared==!enabled);
++        const u32 n=1;
++        [encoder setComputePipelineState:k.spin];[encoder setBuffer:out offset:0 atIndex:0];[encoder setBytes:&n length:4 atIndex:1];
++        [encoder dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];
++        // A guest raw pointer read in the SAME physical encoder must add guest residency first.
++        ReadWord(scheduler,k,guest,0,out);
++        CHECK(scheduler.GetImpl().compute==encoder);CHECK(scheduler.GetImpl().compute_guest_declared);
++        scheduler.ComputeEncoder("host after indirect",true);
++        CHECK(scheduler.GetImpl().compute==encoder);CHECK(scheduler.GetImpl().compute_guest_declared); // never downgrade a mixed pass
++        if(hoisted)scheduler.EndHoist();
++        scheduler.Finish();CHECK(*static_cast<u32*>(out.contents)==0x1937cafe);
++        scheduler.HostRenderEncoder((__bridge void*)pass);scheduler.Finish();
++        unsigned char pixels[64]{};[texture getBytes:pixels bytesPerRow:16 fromRegion:MTLRegionMake2D(0,0,4,4) mipmapLevel:0];
++        for(unsigned i=0;i<16;++i)CHECK(pixels[i*4]==255 && pixels[i*4+1]==0 && pixels[i*4+2]==0 && pixels[i*4+3]==255);
++    }
++    NSError* error=nil;
++    const char* graphics=R"(
++#include <metal_stdlib>
++using namespace metal;
++vertex float4 vp(uint v [[vertex_id]]) {float2 p=float2((v<<1u)&2u,v&2u);return float4(p*2-1,0,1);}
++fragment float4 fp(constant ulong& address [[buffer(0)]]) {
++ uint w=*reinterpret_cast<device const uint*>(address);
++ return float4(w&255u,(w>>8u)&255u,(w>>16u)&255u,w>>24u)/255.0f;
++}
++)";
++    auto library=[gpu newLibraryWithSource:[NSString stringWithUTF8String:graphics] options:nil error:&error];CHECK(library!=nil);
++    auto pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=[library newFunctionWithName:@"vp"];pd.fragmentFunction=[library newFunctionWithName:@"fp"];
++    pd.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++    auto pipeline=[gpu newRenderPipelineStateWithDescriptor:pd error:&error];CHECK(pipeline!=nil);
++    lifetime.push_back(library);lifetime.push_back(pipeline);
++    for(unsigned mode=0;mode<3;++mode) {
++        VideoCore::RenderState state{};
++        scheduler.RenderEncoder((__bridge void*)pass,state,false,true);
++        if(!scheduler.HoldingPass())CHECK(scheduler.GetImpl().render_guest_declared==!enabled);
++        scheduler.RequireGuestRender(); // union before draws, also carried through replay jobs
++        if(mode==0) {scheduler.ReleaseHeldPass();CHECK(scheduler.GetImpl().render_guest_declared);}
++        auto& list=scheduler.Commands();const uint64_t address=guest.gpuAddress;
++        list.SetRenderPipelineState((__bridge void*)pipeline);
++        list.SetBytes(Metal::RenderList::Stage::Fragment,&address,8,0);
++        const Metal::RenderList::Viewport viewport{0,0,4,4,0,1};list.SetViewports(&viewport,1);
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        if(mode==1) {
++            MTLRenderPassDescriptor* load=[pass copy];load.colorAttachments[0].loadAction=MTLLoadActionLoad;
++            scheduler.RenderEncoder((__bridge void*)load,state,false,true); // posts preceding held pass to replay
++        }
++        scheduler.Finish();
++        unsigned char pixels[64]{};[texture getBytes:pixels bytesPerRow:16 fromRegion:MTLRegionMake2D(0,0,4,4) mipmapLevel:0];
++        for(unsigned i=0;i<16;++i)CHECK(pixels[i*4]==254 && pixels[i*4+1]==202 && pixels[i*4+2]==55 && pixels[i*4+3]==25);
++    }
++    CHECK(!scheduler.HasFailed());
++    puts("precise residency: host/guest compute upgrade, mixed/hoisted access, held/direct/replayed guest-pointer draws and exact pixels passed");
++}
++
+ int main() {
+     @autoreleasepool {
+         Metal::Device device;
+@@ -768,6 +841,7 @@
+         k.write_word = Pipeline(device.GetImpl().device, library, @"write_word");
+         k.read_word = Pipeline(device.GetImpl().device, library, @"read_word");
+ 
++        if(std::getenv("BB_TEST_PRECISE_RESIDENCY_ONLY")) {TestPreciseHostResidency(device,k);return failures?1:0;}
+         if (std::getenv("BB_TEST_GPU_TIMING_ONLY")) {
+             TestGpuTiming(device,k);
+             std::printf(failures ? "FAILED: %d check(s)\n" : "all checks passed\n", failures);
