@@ -1,0 +1,247 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -798,3 +798,10 @@
+     target_link_options(mtl-bda-page-table-test PRIVATE -Wl,-export_dynamic)
+     target_link_libraries(mtl-bda-page-table-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+ endif()
++
++if(APPLE)
++    add_executable(mtl-fragment-uniforms-test EXCLUDE_FROM_ALL ../tests/test_mtl_fragment_uniforms.mm)
++    set_source_files_properties(../tests/test_mtl_fragment_uniforms.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc;-Wno-unguarded-availability-new")
++    target_include_directories(mtl-fragment-uniforms-test PRIVATE shadps4)
++    target_link_libraries(mtl-fragment-uniforms-test PRIVATE "-framework Metal" "-framework Foundation")
++endif()
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_fragment_uniforms.h b/gpu/shadps4/video_core/renderer_metal/mtl_fragment_uniforms.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_fragment_uniforms.h
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <algorithm>
++#include <cstdint>
++#include <regex>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace Metal {
++struct FragmentUniformRewrite { std::string source; unsigned buffers = 0; };
++
++/// Conservative address-space specialization of generated, read-only material parameters.
++/// Every access must have a statically bounded index (literal + optional uniform 8-bit offset),
++/// fit within 4 KiB, and use the original uint data[1] layout. No copies or new allocations.
++/// Sampling, arithmetic, resources, buffer slots and original canonical cache text are unchanged.
++inline FragmentUniformRewrite RewriteFragmentUniforms(const std::string& msl) {
++    FragmentUniformRewrite out{msl};
++    const auto fragment = msl.find("fragment ");
++    if (fragment == std::string::npos) return out;
++    const auto body = msl.find("\n{", fragment);
++    if (body == std::string::npos) return out;
++    // Pointer helpers/atomics or writable resources need original device semantics.
++    for (const auto* token : {"atomic", "reinterpret_cast", "const_cast", "access::write", "access::read_write", "memory_barrier", "spvPhysicalPointer"})
++        if (msl.find(token) != std::string::npos) return out;
++    const std::string head=msl.substr(fragment,body-fragment), code=msl.substr(body);
++    for(size_t p=0;(p=head.find("device ",p))!=std::string::npos;++p)
++        if(p<6 || head.substr(p-6,6)!="const ") return out;
++    static const std::regex arg(R"(const device ([_A-Za-z][_A-Za-z0-9]*)& (ssbo_[0-9]+) \[\[buffer\(([0-9]+)\)\]\])");
++    static const std::regex off(R"(uint (buf[0-9]+_(?:dword_)?off) = extract_bits\(push_data\.buf_offsets[0-9]+\.[xyzw], [0-9]+u, 8u\)( >> 2u)?;)");
++    static const std::regex shifted(R"(uint (buf[0-9]+_dword_off) = (buf[0-9]+_off) >> 2u;)");
++    std::unordered_map<std::string, unsigned> offsets;
++    for (std::sregex_iterator i(code.begin(),code.end(),off),end;i!=end;++i)
++        offsets[(*i)[1]]=(*i)[2].matched?63:255;
++    for (std::sregex_iterator i(code.begin(),code.end(),shifted),end;i!=end;++i)
++        if(offsets.contains((*i)[2])) offsets[(*i)[1]]=offsets[(*i)[2]]>>2;
++    // Uniform offset variables are immutable generated locals, never a varying or reassigned.
++    for(auto i=offsets.begin();i!=offsets.end();) {
++        const std::regex assign("\\b"+i->first+R"(\s*(?:=(?!=)|\+=|-=|\*=|/=|\+\+|--))");
++        if(std::distance(std::sregex_iterator(code.begin(),code.end(),assign),std::sregex_iterator())!=1) i=offsets.erase(i);else ++i;
++    }
++    struct Edit {size_t at;};std::vector<Edit> edits;
++    for(std::sregex_iterator i(head.begin(),head.end(),arg),end;i!=end;++i) {
++        const std::string type=(*i)[1], name=(*i)[2];
++        const std::regex layout("struct "+type+R"(\s*\{\s*uint data\[1\];\s*\};)");
++        if(!std::regex_search(msl,layout)) continue;
++        const std::regex use("\\b"+name+R"(\b)");
++        const std::regex access("^"+name+R"(\.data\[(?:([0-9]+)u)(?: \+ (buf[0-9]+_(?:dword_)?off))?\])");
++        bool valid=true;unsigned accesses=0;
++        for(std::sregex_iterator j(code.begin(),code.end(),use);j!=end;++j) {
++            const std::string tail=code.substr(j->position());std::smatch match;
++            if(!std::regex_search(tail,match,access)) {valid=false;break;}
++            std::uint64_t upper=0;
++            try {upper=std::stoull(match[1]);}catch(...) {valid=false;break;}
++            if(upper>=1024) {valid=false;break;}
++            if(match[2].matched) {const auto v=offsets.find(match[2]);if(v==offsets.end()) {valid=false;break;} upper+=v->second;}
++            if(upper>=1024) {valid=false;break;}
++            ++accesses;
++        }
++        if(valid && accesses) edits.push_back({fragment+size_t(i->position())});
++    }
++    for(auto i=edits.rbegin();i!=edits.rend();++i) out.source.replace(i->at,12,"constant");
++    out.buffers=unsigned(edits.size());return out;
++}
++} // namespace Metal
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+@@ -31,6 +31,7 @@
+ #include "video_core/renderer_metal/mtl_vertex_math.h"
+ #include "video_core/renderer_metal/mtl_spirv_geometry.h"
+ #include "video_core/renderer_metal/mtl_spirv_pervertex.h"
++#include "video_core/renderer_metal/mtl_fragment_uniforms.h"
+ 
+ #ifndef BB_SPIRV_CROSS_VERSION
+ #define BB_SPIRV_CROSS_VERSION "unknown"
+@@ -817,11 +818,14 @@
+ /// `relaxed_math`: MTLMathModeRelaxed instead of Safe (macOS 15 and later; below it the library is
+ /// always built without fast math). mathFloatingPointFunctions stays at its default (Fast).
+ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const std::string& entry,
+-                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr) {
++                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr) {
+     MetalObjects objects{};
+     std::string source=msl;
+     const auto helpers=inline_vertex?InlineStrictVertexMath(source):0;
+     if(inlined) *inlined=helpers;
++    unsigned uniforms=0;
++    if(fragment_uniforms) {auto rewritten=RewriteFragmentUniforms(source);uniforms=rewritten.buffers;source=std::move(rewritten.source);}
++    if(uniform_buffers) *uniform_buffers=uniforms;
+     @autoreleasepool {
+         MTLCompileOptions* options = [MTLCompileOptions new];
+         options.languageVersion = MTLLanguageVersion3_1;
+@@ -835,10 +839,11 @@
+             [device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()]
+                                  options:options
+                                    error:&error];
+-        if (!library && helpers) {
++        if (!library && (helpers || uniforms)) {
+             // Unsupported compiler/source combination keeps the original rendering path.
+-            std::printf("Metal vertex math: inline compile rejected; retaining original helper calls\n");
++            std::printf("Metal shader specialization rejected; retaining original source\n");
+             if(inlined) *inlined=0;
++            if(uniform_buffers) *uniform_buffers=0;
+             error=nil;
+             library=[device newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()]
+                                         options:options error:&error];
+@@ -971,6 +976,7 @@
+ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std::string_view name,
+                                       const CompileVariant& variant) {
+     CompileResult result;
++    unsigned fragment_uniform_buffers=0;
+     const SpirvScan scan = ScanSpirv(spirv);
+     result.stage = scan.stage;
+     const char* stage_name = ShaderStageName(scan.stage);
+@@ -1099,6 +1105,10 @@
+                               (scan.stage == ShaderStage::Compute ||
+                                (scan.stage == ShaderStage::Fragment && !scan.depth_replacing));
+ 
++    static const bool uniforms_enabled=[] {
++        const char* value=std::getenv("BB_MTL_FRAGMENT_UNIFORMS");return value && value[0]=='1';
++    }();
++    const bool fragment_uniforms=uniforms_enabled && scan.stage==ShaderStage::Fragment && variant.kind==VariantKind::Plain;
+     const bool inline_vertex=VertexMathInliningEnabled() && scan.stage==ShaderStage::Vertex &&
+                              variant.kind==VariantKind::Plain;
+     MetalObjects objects{};
+@@ -1110,7 +1120,7 @@
+             CompiledShader parsed;
+             std::string cached_msl;
+             if (ParseCache(text, parsed, cached_msl) && parsed.stage == scan.stage) {
+-                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined);
++                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers);
+                 if (objects.error.empty()) {
+                     shader->entry = std::move(parsed.entry);
+                     shader->bindings = std::move(parsed.bindings);
+@@ -1152,7 +1162,7 @@
+         } catch (const std::exception& e) {
+             return fail(CompileStatus::Failed, "SPIRV-Cross: " + FirstLine(e.what()));
+         }
+-        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined);
++        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers);
+         if (!objects.error.empty()) {
+             return fail(CompileStatus::Failed, objects.error);
+         }
+@@ -1162,6 +1172,7 @@
+     } else {
+         ++counters.cache_hits;
+     }
++    if (fragment_uniform_buffers) std::printf("Metal fragment uniforms: hash=%016llx, buffers=%u; bounded 4KiB reads, same textures and math\n", (unsigned long long)hash, fragment_uniform_buffers);
+     shader->from_disk_cache = cached;
+     shader->library = (__bridge_retained void*)objects.library;
+     shader->function = (__bridge_retained void*)objects.function;
+diff --git a/gpu/shim/window.cpp b/gpu/shim/window.cpp
+--- a/gpu/shim/window.cpp
++++ b/gpu/shim/window.cpp
+@@ -181,8 +181,14 @@
+     if (!text_active) {
+         BbOverlay::UpdateTextInput(window);
+     }
++    static const bool benchmark_input_only=[] {const char* v=std::getenv("BB_PAD_FILE_ONLY");return v && v[0]=='1';}();
+     SDL_Event event;
+     while (SDL_PollEvent(&event)) {
++        // Scripted benchmark input must not open overlays or capture the owner's mouse.
++        if (benchmark_input_only && (event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP ||
++            event.type==SDL_EVENT_TEXT_INPUT || event.type==SDL_EVENT_MOUSE_MOTION ||
++            event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP ||
++            event.type==SDL_EVENT_MOUSE_WHEEL)) continue;
+         if (event.type == SDL_EVENT_MOUSE_MOTION) {
+             last_mouse_motion_ms = SDL_GetTicks();
+             if (mouse_captured.load(std::memory_order_relaxed)) {
+diff --git a/tests/test_mtl_fragment_uniforms.mm b/tests/test_mtl_fragment_uniforms.mm
+new file mode 100644
+--- /dev/null
++++ b/tests/test_mtl_fragment_uniforms.mm
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#import <Metal/Metal.h>
++#include <array>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++#include "video_core/renderer_metal/mtl_fragment_uniforms.h"
++static void Check(bool b) { if(!b) {std::puts("FAIL fragment uniform test");std::abort();} }
++static const char* Source=R"(
++#include <metal_stdlib>
++using namespace metal;
++struct Params { uint4 buf_offsets0; };
++struct U { uint data[1]; };
++struct V { float4 p [[position]]; float2 uv; };
++vertex V vert(uint v [[vertex_id]]) {float2 p=float2((v<<1)&2,v&2);return {float4(p*2-1,0,1),p};}
++fragment float4 pixel(V in [[stage_in]], constant Params& push_data [[buffer(0)]], const device U& ssbo_1 [[buffer(1)]], texture2d<float> image [[texture(0)]], sampler samp [[sampler(0)]])
++{
++    uint buf0_dword_off = extract_bits(push_data.buf_offsets0.x, 0u, 8u) >> 2u;
++    float2 uv=in.uv*float2(as_type<float>(ssbo_1.data[0u + buf0_dword_off]),as_type<float>(ssbo_1.data[1u + buf0_dword_off]));
++    float4 color=image.sample(samp,uv,level(as_type<float>(ssbo_1.data[2u + buf0_dword_off])));
++    return float4(color.rgb*as_type<float>(ssbo_1.data[3u + buf0_dword_off]), color.a);
++}
++)";
++int main() { @autoreleasepool {
++    std::string original=Source;auto rewrite=Metal::RewriteFragmentUniforms(original);Check(rewrite.buffers==1);
++    auto bad=[&](std::string from,std::string to) {auto s=original;auto p=s.find(from);Check(p!=std::string::npos);s.replace(p,from.size(),to);Check(Metal::RewriteFragmentUniforms(s).buffers==0);};
++    bad("0u + buf0_dword_off","18446744073709551615u + buf0_dword_off");
++    bad("0u + buf0_dword_off","1020u + buf0_dword_off");bad("0u + buf0_dword_off","uint(in.uv.x)");
++    bad("const device U&","device U&");bad("uint data[1]","float data[1]");bad("return float4(color.rgb", "// atomic access is not eligible\n return float4(color.rgb");
++    bad("    float2 uv=", "    buf0_dword_off = 9000;\n    float2 uv=");
++    auto huge=original;huge.replace(huge.find("0u + buf0_dword_off"),std::string("0u + buf0_dword_off").size(),"999999999999999999999999999999u");Check(Metal::RewriteFragmentUniforms(huge).buffers==0);
++    Check(Metal::RewriteFragmentUniforms(rewrite.source).buffers==0);
++    id<MTLDevice>d=MTLCreateSystemDefaultDevice();Check(d!=nil);auto q=[d newCommandQueue];
++    std::array<id<MTLLibrary>,2>lib;std::array<id<MTLRenderPipelineState>,2>pso;
++    for(unsigned i=0;i<2;++i){auto options=[MTLCompileOptions new];options.languageVersion=MTLLanguageVersion3_1;options.mathMode=MTLMathModeSafe;NSError*error=nil;
++        lib[i]=[d newLibraryWithSource:[NSString stringWithUTF8String:(i?rewrite.source:original).c_str()] options:options error:&error];if(!lib[i])std::printf("%s\n",error.localizedDescription.UTF8String);Check(lib[i]!=nil);
++        auto p=[MTLRenderPipelineDescriptor new];p.vertexFunction=[lib[i] newFunctionWithName:@"vert"];p.fragmentFunction=[lib[i] newFunctionWithName:@"pixel"];p.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA32Float;pso[i]=[d newRenderPipelineStateWithDescriptor:p error:&error];Check(pso[i]!=nil);}
++    auto sampler=[MTLSamplerDescriptor new];sampler.minFilter=MTLSamplerMinMagFilterLinear;sampler.magFilter=MTLSamplerMinMagFilterLinear;sampler.mipFilter=MTLSamplerMipFilterLinear;sampler.sAddressMode=MTLSamplerAddressModeRepeat;sampler.tAddressMode=MTLSamplerAddressModeMirrorRepeat;auto samp=[d newSamplerStateWithDescriptor:sampler];
++    auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:64 height:64 mipmapped:NO];td.usage=MTLTextureUsageRenderTarget;td.storageMode=MTLStorageModePrivate;auto dst=[d newTextureWithDescriptor:td];
++    auto buffer=[d newBufferWithLength:4096 options:MTLResourceStorageModeShared];auto params=[d newBufferWithLength:256 options:MTLResourceStorageModeShared];
++    for(auto format:{MTLPixelFormatRGBA8Unorm,MTLPixelFormatRGBA8Unorm_sRGB}) {
++        td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:16 height:16 mipmapped:YES];td.usage=MTLTextureUsageShaderRead;td.storageMode=MTLStorageModeShared;auto input=[d newTextureWithDescriptor:td];
++        for(unsigned level=0;level<input.mipmapLevelCount;++level){unsigned size=16>>level;std::vector<uint8_t>data(size*size*4);for(unsigned i=0;i<data.size();++i)data[i]=uint8_t(i*73+level*31);[input replaceRegion:MTLRegionMake2D(0,0,size,size) mipmapLevel:level withBytes:data.data() bytesPerRow:size*4];}
++        for(unsigned offset:{0u,7u,63u})for(float lod:{0.f,.5f,1.25f,3.f}) {
++            float constants[]={1.371f,-.917f,lod,.717173f};std::memcpy(static_cast<char*>(buffer.contents)+offset*4,constants,sizeof(constants));std::memset(params.contents,0,256);*static_cast<uint32_t*>(params.contents)=offset*4;
++            std::array<std::vector<uint8_t>,2>pixels;
++            for(unsigned i=0;i<2;++i){auto cb=[q commandBuffer];auto pass=[MTLRenderPassDescriptor renderPassDescriptor];pass.colorAttachments[0].texture=dst;pass.colorAttachments[0].loadAction=MTLLoadActionDontCare;pass.colorAttachments[0].storeAction=MTLStoreActionStore;auto enc=[cb renderCommandEncoderWithDescriptor:pass];[enc setRenderPipelineState:pso[i]];[enc setFragmentBuffer:params offset:0 atIndex:0];[enc setFragmentBuffer:buffer offset:0 atIndex:1];[enc setFragmentTexture:input atIndex:0];[enc setFragmentSamplerState:samp atIndex:0];[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[enc endEncoding];auto output=[d newBufferWithLength:64*64*16 options:MTLResourceStorageModeShared];auto blit=[cb blitCommandEncoder];[blit copyFromTexture:dst sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(64,64,1) toBuffer:output destinationOffset:0 destinationBytesPerRow:64*16 destinationBytesPerImage:64*64*16];[blit endEncoding];[cb commit];[cb waitUntilCompleted];Check(cb.error==nil);auto bytes=static_cast<uint8_t*>(output.contents);pixels[i]={bytes,bytes+64*64*16};}
++            Check(pixels[0]==pixels[1]);
++        }
++    }
++    std::puts("PASS 24 byte-exact fragment sampling cases: linear/sRGB, mip filtering, repeat/mirror, uniform offsets; unsafe source falls back");
++} }

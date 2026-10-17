@@ -4,6 +4,9 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 die() { echo "STOP: $*" >&2; exit 1; }
+# Dedicated CLI entry only; normal Play always discards automation variables.
+benchmark=0
+if [[ ${1:-} == --benchmark ]]; then benchmark=1; shift; fi
 renderer=${BB_RENDERER:-metal}
 [[ $renderer == metal || $renderer == vulkan ]] || die "Unknown renderer: $renderer"
 if [[ $renderer == metal ]]; then
@@ -77,8 +80,13 @@ export BB_PIPE_PARK_WAITS=0
 [[ $renderer != vulkan ]] || export BB_MAC_UNIFIED_MEMORY=0
 export BB_CMDBUF_TRIM=${BB_CMDBUF_TRIM:-1} BB_KK_POOL_FIX=${BB_KK_POOL_FIX:-1}
 # These must never turn a normal Play click into an automated input/benchmark session.
-unset BB_PAD_FILE BB_PAD_REPLAY BB_PAD_RECORD BB_PRESET_FILE BB_TOGGLE_FILE
-unset BB_CAPTURE_TRIGGER BB_PRESENT_DUMP_TRIGGER BB_TIMEOUT BB_QUICKLOAD_PENDING
+if [[ $benchmark == 0 ]]; then
+    unset BB_PAD_FILE BB_PAD_FILE_ONLY BB_PAD_REPLAY BB_PAD_RECORD BB_PRESET_FILE BB_TOGGLE_FILE
+    unset BB_CAPTURE_TRIGGER BB_PRESENT_DUMP_TRIGGER BB_TIMEOUT BB_QUICKLOAD_PENDING
+else
+    [[ $renderer == metal && ${BB_PAD_FILE_ONLY:-} == 1 && -f ${BB_PAD_FILE:-} ]] || die "Benchmark requires Metal and isolated scripted input"
+    [[ ${BB_QUICKSAVE:-0} == 0 ]] || die "Benchmark does not restore live quicksaves"
+fi
 mkdir -p "$BB_DATA_DIR/out"
 export BB_FRAME_LOG=$BB_DATA_DIR/out/frames.csv
 log=$BB_DATA_DIR/out/last-run.log

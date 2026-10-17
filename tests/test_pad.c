@@ -3,7 +3,17 @@
 #include <unistd.h>
 #include "../src/runtime_pad.c"
 
+#ifdef realloc
+#undef realloc
+#endif
+extern void *realloc(void *ptr, size_t size);
+void *bb_low_realloc(void *ptr, size_t size) { return realloc(ptr,size); }
+const bool *bbgpu_keyboard_state(void) { static bool keys[SDL_SCANCODE_COUNT]; return keys; }
+int runtime_quicksave_enabled(void) { return 0; }
+void runtime_quicksave_keys(int save, int load, int blocked) { (void)save; (void)load; (void)blocked; }
+void runtime_quicksave_request(int load) { (void)load; }
 static int capture;
+int runtime_quicksave_autoconfirm(void) { return -1; }
 int bbgpu_overlay_captures_input(void) { return capture; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
@@ -18,7 +28,7 @@ static void inject(const char *path, const char *tokens) {
     usleep(25000);
 }
 
-int main(void) {
+static int normal_main(void) {
     char path[]="/tmp/bbport-pad-test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);
@@ -93,6 +103,13 @@ int main(void) {
     assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
+    // Benchmark-only mode drops real input but preserves deterministic injected input.
+    // Run this executable with BB_PAD_FILE_ONLY=1 separately; normal controls stay unchanged.
+    if (getenv("BB_PAD_FILE_ONLY")) {
+        inject(path,"square lx=128 ly=128 rx=128 ry=128");
+        assert(pad_read_state(1,&data)==0);
+        assert(data.buttons==BTN_SQUARE && data.left_x==128 && data.right_x==128);
+    }
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;
@@ -101,4 +118,17 @@ int main(void) {
     unlink(path);
     unlink(config);
     puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
+    return 0;
+}
+
+int main(void) {
+    if (!getenv("BB_PAD_FILE_ONLY")) return normal_main();
+    char path[]="/tmp/bbport-pad-only-XXXXXX"; int fd=mkstemp(path); assert(fd>=0);close(fd);
+    setenv("BB_PAD_FILE",path,1);setenv("SDL_VIDEODRIVER","dummy",1);
+    assert(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMEPAD));assert(pad_init()==0 && pad_open(1,0,0,NULL)==1);
+    PadData d={.buttons=BTN_CROSS,.left_x=0,.left_y=255,.right_x=0,.right_y=255,.l2=255,.r2=255,.touch_count=2};
+    drop_live_input(&d); assert(d.buttons==0 && d.left_x==128 && d.right_y==128 && d.touch_count==0 && d.l2==0);
+    inject(path,"square lx=128 ly=128 rx=128 ry=128");assert(pad_read_state(1,&d)==0 && d.buttons==BTN_SQUARE);
+    inject(path,""); assert(pad_read_state(1,&d)==0 && d.buttons==0 && d.touch_count==0);
+    SDL_Quit();unlink(path);puts("PASS benchmark input isolation and scripted controls");return 0;
 }

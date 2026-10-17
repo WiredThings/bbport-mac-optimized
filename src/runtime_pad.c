@@ -615,9 +615,22 @@ static void touch_ids(PadData *d) {
     else if (!since) since=d->timestamp;
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
+/* BB_PAD_FILE_ONLY=1 (benchmarks): the live keyboard, mouse and gamepad count for nothing, so
+ * someone using the machine cannot move the character; only BB_PAD_FILE drives the game. */
+static void drop_live_input(PadData *d) {
+    static int only=-1;
+    if (only<0) { const char *v=getenv("BB_PAD_FILE_ONLY"); only=v && *v=='1'; }
+    if (!only) return;
+    d->buttons=0;
+    d->left_x=d->left_y=d->right_x=d->right_y=128;
+    d->l2=d->r2=0;
+    d->touch_count=0;
+}
+
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
+    drop_live_input(d);
     record_sample(d);
     read_inject();
     replay_sample(d);

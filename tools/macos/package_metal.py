@@ -41,7 +41,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -85,7 +85,7 @@ def main():
             if cmd == 'LC_RPATH': subprocess.run(['install_name_tool', '-delete_rpath', value, str(probe)], check=True)
     else:
         assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
-    for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py']:
+    for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py', 'tools/macos/benchmark.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
     copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
@@ -123,6 +123,7 @@ def main():
     (engine / '.version').write_text(args.version + '\n')
     copy(ROOT / 'docs/release/METAL-PROXY-COMPRESSION.md', engine / 'METAL-PROXY-COMPRESSION.md')
     copy(ROOT / 'docs/release/METAL-ALPHA-MERGE.md', engine / 'METAL-ALPHA-MERGE.md')
+    copy(ROOT / 'docs/release/METAL-SAMPLING-BENCHMARK.md', engine / 'METAL-SAMPLING-BENCHMARK.md')
     patches = {p.name: sha(p) for p in sorted((ROOT / 'gpu/patches/metal').glob('*.patch'))}
     manifest = dict(version=args.version, source_commit=run('git', '-C', ROOT, 'rev-parse', 'HEAD'),
                     upstream_repository='https://github.com/Huax-1839/bloodborne-macos',
@@ -146,6 +147,8 @@ def main():
                     upscale_alpha_fusion_default=True, upscale_alpha_fallback='BB_MTL_UPSCALE_ALPHA=0',
                     upscale_alpha_diagnostic_control='BB_MTL_UPSCALE_ALPHA_FILE',
                     metal_quality_presets=[1.0, 1.5, 1.7, 2.0, 3.0, 1.25],
+                    fragment_uniform_specialization_default=False, fragment_uniform_specialization_enable='BB_MTL_FRAGMENT_UNIFORMS=1',
+                    benchmark_entry='tools/macos/benchmark.py', benchmark_input_isolated=True,
                     scene_proxy_lean_usage_default=True, scene_proxy_lean_usage_fallback='BB_MTL_PROXY_LEAN=0',
                     scene_proxy_format_promotion='on first compatible non-sRGB reinterpretation; old backing/views retired after GPU tick',
                     game_started_for_validation=False, gameplay_performance_verified=False)
