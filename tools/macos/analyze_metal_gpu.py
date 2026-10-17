@@ -14,10 +14,15 @@ def analyze(text, skip_windows=0):
     windows = []
     for line in text.splitlines():
         if 'Metal GPU timing: seconds=' in line:
-            windows.append(dict(fields(line), stages={}, transitions={}))
+            windows.append(dict(fields(line), stages={}, transitions={}, hot_passes=[]))
         elif 'Metal GPU stage: name=' in line and windows:
             name = re.search(r'name=([a-z-]+)', line)[1]
             windows[-1]['stages'][name] = fields(line)
+        elif 'Metal GPU hot pass: label=' in line and windows:
+            label = re.search(r'label=(.*?), samples=', line)[1]
+            windows[-1]['hot_passes'].append(dict(fields(line), label=label))
+        elif 'Metal GPU hot pass overflow:' in line and windows:
+            windows[-1]['hot_dropped'] = fields(line).get('samples', 0)
         elif 'Metal GPU transitions:' in line and windows:
             windows[-1]['transitions'] = {k: int(v) for k, v in re.findall(r'(\d>\d)=(\d+)', line)}
     selected = [w for w in windows[skip_windows:] if w.get('frames', 0) > 0]
@@ -31,10 +36,20 @@ def analyze(text, skip_windows=0):
             stage['samples'] += values['samples']
             stage['sampled_ms'] += values['sampled-ms']
             stage['weighted_ms'] += values['sampled-ms'] * w['every']
+    hot_passes = {}
+    for w in selected:
+        for h in w['hot_passes']:
+            entry = hot_passes.setdefault(h['label'], dict(samples=0, weighted_ms=0))
+            entry['samples'] += h['samples']
+            entry['weighted_ms'] += h['sampled-ms'] * w['every']
+    for h in hot_passes.values():
+        h['estimated_ms_per_frame'] = h['weighted_ms'] / frames
     for stage in stages.values():
         stage['estimated_ms_per_frame'] = stage['weighted_ms'] / frames
         stage['mean_us_per_encoder'] = stage['sampled_ms'] * 1000 / stage['samples']
     return dict(windows=selected, frames=frames,
+                hot_passes_by_span=sorted(hot_passes.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
+                hot_pass_dropped=sum(w.get('hot_dropped', 0) for w in selected),
                 stages_by_span=sorted(stages.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
                 cpu_boundary_ms_per_frame=sum(w['cpu-boundary-ms'] for w in selected) / frames,
                 cpu_commit_ms_per_frame=sum(w['cpu-commit-ms'] for w in selected) / frames,
@@ -46,6 +61,7 @@ def analyze(text, skip_windows=0):
                 capacity_drops=sum(w['capacity-drops'] for w in selected),
                 busy_drops=sum(w['busy-drops'] for w in selected),
                 notes=['GPU stage spans can overlap; their sum is not GPU frame time.',
+                       'Hot passes report the first pipeline of each pass, not isolated shader costs; only the top eight labels per window are printed.',
                        'Per-frame costs are sampling estimates; MetalFX boundary spans include two diagnostic probes and their fence dependency.',
                        'Uncovered command-buffer time includes dependencies, tile work and uninstrumented work; it is not a direct measurement of switching cost.',
                        'CPU boundary time measures native encoder creation/closing and setup, not all CPU draw encoding.',

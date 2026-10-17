@@ -12,10 +12,13 @@ class GpuReportTest(unittest.TestCase):
         def window(frames, every, ms, samples):
             return f'''Metal GPU timing: seconds=5.000, frames={frames}, sampled-cb=20, every={every}, invalid=0, capacity-drops=0, busy-drops=0, encoders=500, barriers=50, fence-waits=100, cpu-boundary-ms=10, cpu-commit-ms=2, probe-encoders=4, sampled-cb-ms=5, sampled-covered-ms=4, sampled-uncovered-ms=1; spans may overlap
 Metal GPU stage: name=velocity-depth, samples={samples}, sampled-ms={ms}, mean-us=1, max-us=2, estimated-ms/frame=99
+Metal GPU hot pass: label=960x540 C1 D vs abc ps def, samples=2, sampled-ms=0.5, estimated-ms/frame=0.4; first pipeline of pass
 Metal GPU transitions: 1>2=4 2>1=3 (1=render 2=compute 3=blit)
 '''
         report = module.analyze(window(10, 8, 1000, 1) + window(100, 8, 5, 20) + window(200, 4, 10, 40), 1)
         self.assertEqual(report['frames'], 300)
+        self.assertEqual(report['hot_passes_by_span'][0][0], '960x540 C1 D vs abc ps def')
+        self.assertAlmostEqual(report['hot_passes_by_span'][0][1]['estimated_ms_per_frame'], 6 / 300)
         stage = report['stages_by_span'][0]
         self.assertEqual(stage[0], 'velocity-depth')
         self.assertAlmostEqual(stage[1]['estimated_ms_per_frame'], 80 / 300)

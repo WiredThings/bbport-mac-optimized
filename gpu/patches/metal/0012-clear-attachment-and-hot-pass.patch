@@ -1,0 +1,456 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -323,6 +323,11 @@
+ target_compile_options(scene-targets-core-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(scene-targets-core-test PRIVATE shim shadps4 third_party/gcn/include)
+ target_link_libraries(scene-targets-core-test PRIVATE bbgpu)
++if (APPLE)
++    # The Metal dylib resolves its guest ABI from these standalone test executables.
++    target_link_options(scene-targets-core-test PRIVATE -Wl,-export_dynamic)
++    target_link_options(ui-compositor-test PRIVATE -Wl,-export_dynamic)
++endif()
+ add_executable(cp-decoder-test EXCLUDE_FROM_ALL ../tests/test_cp_decoder.cpp cp/cp_decoder.cpp)
+ target_compile_options(cp-decoder-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(cp-decoder-test PRIVATE cp)
+diff --git a/gpu/shadps4/video_core/rasterizer_core.cpp b/gpu/shadps4/video_core/rasterizer_core.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core.cpp
+@@ -864,7 +864,13 @@
+         attachment.is_clear = is_clear;
+ 
+         if (reduced) {
+-            const auto target = scene_targets->Attachment(image_id, desc.view_info);
++            // All reduced attachments were checked to share a complete proxy extent.
++            // Only pre-UI full-color clears opt in: no redirected UI/display surface can
++            // replace this proxy. Metal loadActionClear covers it regardless of scissors.
++            const bool discard_color = is_clear && !(upscaler->RedirectState() & 3u);
++            const auto target = discard_color
++                ? scene_targets->ClearColorAttachment(image_id, desc.view_info)
++                : scene_targets->Attachment(image_id, desc.view_info);
+             attachment.replacement_view = target.view;
+             attachment.replacement_layout = target.layout;
+         }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h b/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
+@@ -8,6 +8,8 @@
+ #include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <utility>
+ #include <memory>
+ #include <mutex>
+ #include <string_view>
+@@ -35,7 +37,13 @@
+         double cb_ns = 0, covered_ns = 0;
+     };
+ private:
+-    struct Entry { Stage stage; bool render = false, labeled = false, opaque = false; };
++    struct Entry {
++        Stage stage; bool render = false, labeled = false, opaque = false;
++        std::array<char,88> label{};
++    };
++    struct Hot { std::array<char,88> label{}; Stat stat; };
++    struct HotTable { std::array<Hot,128> entries{}; unsigned used=0, dropped=0; };
++    std::unique_ptr<HotTable> hot;
+     struct Batch {
+         id<MTLCounterSampleBuffer> buffer;
+         id<MTLFence> private_fence, opaque_fence;
+@@ -92,6 +100,7 @@
+         delta.cb_ns = std::max(0.0, cb.GPUEndTime-cb.GPUStartTime)*1e9;
+         std::array<std::pair<unsigned long long,unsigned long long>,MaxEntries> intervals{};
+         unsigned interval_count = 0;
++        std::array<double,MaxEntries> measured{};
+         if (data.length >= b->count * 4 * sizeof(MTLCounterResultTimestamp) && scale > 0) {
+             const auto* values = static_cast<const MTLCounterResultTimestamp*>(data.bytes);
+             for (unsigned i = 0; i < b->count; ++i) {
+@@ -127,6 +136,7 @@
+                     continue;
+                 }
+                 intervals[interval_count++]={start,end};
++                measured[i]=ns;
+                 auto& s = delta.stages[e.stage];
+                 ++s.count; s.ns += ns; s.max_ns = std::max(s.max_ns, ns);
+             }
+@@ -149,6 +159,18 @@
+                     s->stages[i].ns += delta.stages[i].ns;
+                     s->stages[i].max_ns = std::max(s->stages[i].max_ns, delta.stages[i].max_ns);
+                 }
++            }
++            for(unsigned i=0;i<b->count;++i) {
++                const auto& label=b->entries[i].label;
++                if(!label[0] || measured[i]<=0) continue;
++                unsigned at=0;
++                for(;at<hot->used;++at) if(hot->entries[at].label==label) break;
++                if(at==hot->used) {
++                    if(at==hot->entries.size()) { ++hot->dropped;continue; }
++                    hot->entries[at].label=label; ++hot->used;
++                }
++                auto& stat=hot->entries[at].stat; ++stat.count;stat.ns+=measured[i];
++                stat.max_ns=std::max(stat.max_ns,measured[i]);
+             }
+             ReportLocked(false);
+         }
+@@ -170,6 +192,16 @@
+                 Names[i], s.count, s.ns/1e6, s.ns/s.count/1e3, s.max_ns/1e3,
+                 frame > last_frame ? s.ns * every / 1e6 / (frame - last_frame) : 0);
+         }
++        std::array<unsigned,128> order{};
++        for(unsigned i=0;i<hot->used;++i) order[i]=i;
++        std::sort(order.begin(),order.begin()+hot->used,[&](unsigned a,unsigned b){return hot->entries[a].stat.ns>hot->entries[b].stat.ns;});
++        for(unsigned i=0;i<std::min(hot->used,8u);++i) {
++            const auto& h=hot->entries[order[i]];
++            std::printf("Metal GPU hot pass: label=%s, samples=%llu, sampled-ms=%.4f, estimated-ms/frame=%.4f; first pipeline of pass, not isolated shader time\n",
++                h.label.data(),h.stat.count,h.stat.ns/1e6,frame>last_frame?h.stat.ns*every/1e6/(frame-last_frame):0);
++        }
++        if(hot->dropped) std::printf("Metal GPU hot pass overflow: samples=%u; overall stage totals retained\n",hot->dropped);
++        *hot={};
+         std::printf("Metal GPU transitions:");
+         for (unsigned a = 1; a < 4; ++a) for (unsigned b = 1; b < 4; ++b) {
+             auto n = transitions[a*4+b].exchange(0);
+@@ -190,6 +222,7 @@
+             for (id<MTLCounterSet> s in d.counterSets)
+                 if ([s.name isEqualToString:MTLCommonCounterSetTimestamp]) { counter_set = s; break; }
+         enabled = counter_set != nil;
++        if(enabled) hot=std::make_unique<HotTable>();
+         std::printf("Metal GPU timing: %s, every=%u, max-slots=%u, max-encoders/slot=%u; stage boundaries, async resolve, bounded storage\n",
+             enabled ? "enabled" : "unavailable", every, Slots, MaxEntries);
+     }
+@@ -265,6 +298,15 @@
+         if (e.labeled && e.stage != stage) e.stage = Mixed;
+         else e.stage = stage;
+         e.labeled = true;
++        e.label={};
++        std::string_view key{label};
++        if(e.stage==GuestRender && key.starts_with("P")) {
++            const auto space=key.find(' ');
++            if(space==key.npos) return;
++            key.remove_prefix(space+1); // drop the monotonically increasing pass number
++        } else if(e.stage!=Compute || !key.starts_with("CS ")) return;
++        const auto bytes=std::min(key.size(),e.label.size()-1);
++        std::memcpy(e.label.data(),key.data(),bytes);e.label[bytes]=0;
+     }
+     void Close() { if (active) active->current = MaxEntries; }
+     void Barrier() { if (enabled) ++barriers; }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -62,7 +62,7 @@
+     };
+     /// The proxy of an image the pass draws into (created and filled when missing); the view is
+     /// the whole texture or a view in the attachment's format.
+-    Target Attachment(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
++    Target Attachment(VideoCore::ImageId, const VideoCore::ImageViewInfo&, bool clear_color = false);
+     /// The proxy of a sampled image when it holds the current content (else nullopt: the native
+     /// image is current); a view in the view's format and swizzle.
+     std::optional<Target> SampleProxy(const VideoCore::Image&, const VideoCore::ImageViewInfo&);
+@@ -132,6 +132,11 @@
+         const auto target = targets.Attachment(image, view_info);
+         return {target.view, target.layout};
+     }
++    VideoCore::ReplacementView ClearColorAttachment(VideoCore::ImageId image,
++                                                   const VideoCore::ImageViewInfo& view_info) override {
++        const auto target = targets.Attachment(image, view_info, true);
++        return {target.view, target.layout};
++    }
+     std::optional<VideoCore::ReplacementView> SampleProxy(
+         const VideoCore::Image& image, const VideoCore::ImageViewInfo& view_info) override {
+         if (const auto proxy = targets.SampleProxy(image, view_info)) {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -6,6 +6,8 @@
+ #import <Metal/Metal.h>
+ 
+ #include <cstdio>
++#include <chrono>
++#include <cstdlib>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -513,11 +515,47 @@
+     return NativeViewOf(texture);
+ }
+ 
++namespace {
++bool ColorClearDiscardEnabled() {
++    static const bool baseline=[] {
++        const char* env=std::getenv("BB_MTL_CLEAR_DISCARD");
++        return !env || env[0]!='0';
++    }();
++    static const char* control=std::getenv("BB_MTL_CLEAR_DISCARD_FILE");
++    if(!control || !*control) return baseline;
++    // Optional diagnostic A/B only. Poll at most once a second; the selected policy is
++    // used for a new attachment, never to reinterpret resources already recorded.
++    static bool enabled=baseline;
++    static auto next=std::chrono::steady_clock::time_point{};
++    const auto now=std::chrono::steady_clock::now();
++    if(now>=next) {
++        next=now+std::chrono::seconds(1);
++        if(FILE* f=std::fopen(control,"r")) {
++            const int value=std::fgetc(f);std::fclose(f);
++            if((value=='0'||value=='1') && enabled!=(value=='1')) {
++                enabled=value=='1';
++                std::printf("Metal scene clear mode: enabled=%d; diagnostic control, no cache reset\n",int(enabled));
++            }
++        }
++    }
++    return enabled;
++}
++} // namespace
++
+ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
+-                                              const VideoCore::ImageViewInfo& info) {
++                                              const VideoCore::ImageViewInfo& info, bool clear_color) {
+     auto& original = Original(id);
+     vk::ImageLayout layout;
+-    auto& entry = BeginAttachment(id, info, layout);
++    const auto before = SkippedClearFills();
++    auto& entry = BeginAttachment(id, info, layout, clear_color && ColorClearDiscardEnabled());
++    static auto reported = std::chrono::steady_clock::time_point{};
++    if (SkippedClearFills()!=before) {
++      const auto now = std::chrono::steady_clock::now();
++      if (now-reported>=std::chrono::seconds(5)) {
++        std::printf("Metal scene clear: skipped-fills=%llu; full color clears only, depth/stencil preserved\n", (unsigned long long)SkippedClearFills());
++        reported=now;
++      }
++    }
+     return {View(entry, original, info, true), layout};
+ }
+ 
+diff --git a/gpu/shadps4/video_core/scene_passes.h b/gpu/shadps4/video_core/scene_passes.h
+--- a/gpu/shadps4/video_core/scene_passes.h
++++ b/gpu/shadps4/video_core/scene_passes.h
+@@ -83,6 +83,11 @@
+     [[nodiscard]] virtual u64 Generation() const noexcept = 0;
+     /// The proxy of an image the pass draws into (created when missing).
+     virtual ReplacementView Attachment(ImageId image, const ImageViewInfo& view_info) = 0;
++    // A full color load-action clear replaces all old pixels. Backends opt in; the
++    // default keeps Vulkan and external scene adapters on their existing copy path.
++    virtual ReplacementView ClearColorAttachment(ImageId image, const ImageViewInfo& view_info) {
++        return Attachment(image, view_info);
++    }
+     /// The proxy view of a sampled image, when the image has a current proxy.
+     virtual std::optional<ReplacementView> SampleProxy(const Image& image,
+                                                        const ImageViewInfo& view_info) = 0;
+diff --git a/gpu/shadps4/video_core/scene_targets_core.cpp b/gpu/shadps4/video_core/scene_targets_core.cpp
+--- a/gpu/shadps4/video_core/scene_targets_core.cpp
++++ b/gpu/shadps4/video_core/scene_targets_core.cpp
+@@ -82,13 +82,15 @@
+     copying = false;
+ }
+ 
+-SceneTargetsCore::Entry& SceneTargetsCore::Get(ImageId id, u32 level) {
++SceneTargetsCore::Entry& SceneTargetsCore::Get(ImageId id, u32 level, bool fill) {
+     auto& original = *lookup(id, 0);
+     const u64 key = Key(original.image_uid, level);
+     // A draw has up to six targets, mostly the same as the previous draw's.
+     for (const auto& [recent_key, recent_entry] : recent) {
+         if (recent_entry && recent_key == key) {
+-            if (!recent_entry->state.valid) Copy(*recent_entry, original, false);
++            if (!recent_entry->state.valid) {
++                if (fill) Copy(*recent_entry, original, false); else ++skipped_clear_fills;
++            }
+             return *recent_entry;
+         }
+     }
+@@ -103,14 +105,18 @@
+         tracked.insert(original.image_uid);
+     }
+     recent[recent_next++ % recent.size()] = {key, entry.get()};
+-    if (!entry->state.valid) Copy(*entry, original, false);
++    if (!entry->state.valid) {
++        if (fill) Copy(*entry, original, false); else ++skipped_clear_fills;
++    }
+     return *entry;
+ }
+ 
+ SceneTargetsCore::Entry& SceneTargetsCore::BeginAttachment(ImageId id, const ImageViewInfo& info,
+-                                                           vk::ImageLayout& layout) {
++                                                           vk::ImageLayout& layout, bool clear_color) {
+     auto& original = Original(id);
+-    auto& entry = Get(id, info.range.base.level);
++    // Depth/stencil is always preserved, including depth-only or stencil-only clears.
++    const bool discard = clear_color && !original.info.props.is_depth;
++    auto& entry = Get(id, info.range.base.level, !discard);
+     layout = Prepare(entry, original, Use::Attachment);
+     entry.state.ProxyWrite();
+     return entry;
+diff --git a/gpu/shadps4/video_core/scene_targets_core.h b/gpu/shadps4/video_core/scene_targets_core.h
+--- a/gpu/shadps4/video_core/scene_targets_core.h
++++ b/gpu/shadps4/video_core/scene_targets_core.h
+@@ -77,6 +77,7 @@
+     /// when the use `writes`, invalidates the proxy.
+     void NativeAccess(Image&, bool writes);
+     void ResolveAll();
++    [[nodiscard]] u64 SkippedClearFills() const { return skipped_clear_fills; }
+     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
+ 
+ protected:
+@@ -85,10 +86,10 @@
+     }
+     /// The entry of mip `level` of the image, created on demand, filled from the native image
+     /// when not valid.
+-    Entry& Get(ImageId, u32 level = 0);
++    Entry& Get(ImageId, u32 level = 0, bool fill = true);
+     /// Get for a target the pass draws into: Prepare for the attachment use (`layout` is the
+     /// layout it returns), then the proxy is ahead of the native image.
+-    Entry& BeginAttachment(ImageId, const ImageViewInfo&, vk::ImageLayout& layout);
++    Entry& BeginAttachment(ImageId, const ImageViewInfo&, vk::ImageLayout& layout, bool clear_color = false);
+     /// The entry whose proxy samples `image` for this view (null: the native image is current),
+     /// prepared for sampling (`layout`).
+     Entry* BeginSample(const Image&, const ImageViewInfo&, vk::ImageLayout& layout);
+@@ -123,6 +124,7 @@
+     std::unordered_set<u64> tracked; ///< uids with proxies
+     bool copying = false;
+     u64 generation = 0;
++    u64 skipped_clear_fills = 0;
+     std::array<std::pair<u64, Entry*>, 8> recent{}; ///< last entries by Key
+     u32 recent_next = 0;
+ };
+diff --git a/tests/test_gpu_runtime_stubs.cpp b/tests/test_gpu_runtime_stubs.cpp
+--- a/tests/test_gpu_runtime_stubs.cpp
++++ b/tests/test_gpu_runtime_stubs.cpp
+@@ -7,7 +7,7 @@
+ // Renderer tests have no guest process. Clock/host-thread services work; guest accesses abort.
+ extern "C" {
+ __thread sigjmp_buf* runtime_fault_recover = nullptr;
+-uint32_t runtime_disabled_optimizations = 0;
++uint64_t runtime_disabled_optimizations = 0;
+ uint64_t runtime_experiment_bits = 0;
+ uint64_t runtime_tsc_frequency() { return 1000000000; }
+ int runtime_file_translate(const char*, char*, size_t) { std::abort(); }
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -853,6 +853,59 @@
+     Settle(f);
+ }
+ 
++static void TestFullColorClear(Fixture& f) {
++    std::printf("full color clear avoids old-content fill; loading path preserves contents\n");
++    World world{f};
++    const auto id=world.Add(MakeInfo(vk::Format::eR8G8B8A8Unorm,1920,1080));
++    auto& image=world.Get(id);
++    SceneTargets targets{f.device,f.scheduler,f.runtime,world.Lookup()};
++    targets.SetSize({960,540});
++    ImageViewInfo view{};view.format=vk::Format::eR8G8B8A8Unorm;
++    view.range.extent.levels=view.range.extent.layers=1;
++    const auto target=targets.Attachment(id,view,true);
++    auto proxy=TextureOf(target.view);
++    const char* disabled=std::getenv("BB_MTL_CLEAR_DISCARD");
++    CHECK(targets.SkippedClearFills()==((disabled && disabled[0]=='0')?0:1));
++    auto* pass=[MTLRenderPassDescriptor renderPassDescriptor];
++    pass.colorAttachments[0].texture=proxy;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
++    pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++    pass.colorAttachments[0].clearColor=MTLClearColorMake(0,1,0,1);
++    f.scheduler.RenderEncoder((__bridge const void*)pass);
++    [f.scheduler.GetImpl().render setScissorRect:MTLScissorRect{0,0,1,1}];
++    f.scheduler.EndWithBarrier();
++    auto data=ReadTexture(f,proxy,4);
++    for(size_t i=0;i<data.size();i+=4) CHECK(data[i]==0 && data[i+1]==255 && data[i+2]==0 && data[i+3]==255);
++    targets.NativeAccess(image,vk::AccessFlagBits2::eShaderRead);
++    data=ReadTexture(f,NativeOf(image),4);
++    for(size_t i=0;i<data.size();i+=4) CHECK(data[i]==0 && data[i+1]==255 && data[i+2]==0 && data[i+3]==255);
++    targets.NativeAccess(image,vk::AccessFlagBits2::eShaderWrite);
++    const std::vector<u8> original(1920*1080*4,0x35);
++    WriteTexture(f,NativeOf(image),4,original);
++    const auto load=targets.Attachment(id,view);
++    data=ReadTexture(f,TextureOf(load.view),4);
++    for(const auto b:data) CHECK(b==0x35);
++    if (const char* control=std::getenv("BB_MTL_CLEAR_DISCARD_FILE")) {
++        const auto skipped=targets.SkippedClearFills();
++        auto set_mode=[&](char value) { FILE* file=std::fopen(control,"w");CHECK(file!=nullptr);if(file){std::fputc(value,file);std::fclose(file);}std::this_thread::sleep_for(std::chrono::milliseconds(1100)); };
++        // Change policy on the same live proxy; no cache reset or object recreation.
++        targets.NativeAccess(image,vk::AccessFlagBits2::eShaderWrite);
++        set_mode('0');
++        auto loading=targets.Attachment(id,view,true);
++        CHECK(targets.SkippedClearFills()==skipped);
++        data=ReadTexture(f,TextureOf(loading.view),4);
++        for(const auto b:data) CHECK(b==0x35);
++        targets.NativeAccess(image,vk::AccessFlagBits2::eShaderWrite);
++        set_mode('1');
++        auto clearing=targets.Attachment(id,view,true);
++        CHECK(targets.SkippedClearFills()==skipped+1);
++        pass.colorAttachments[0].texture=TextureOf(clearing.view);
++        f.scheduler.RenderEncoder((__bridge const void*)pass);f.scheduler.EndWithBarrier();
++        data=ReadTexture(f,TextureOf(clearing.view),4);
++        for(size_t i=0;i<data.size();i+=4) CHECK(data[i]==0 && data[i+1]==255 && data[i+2]==0 && data[i+3]==255);
++    }
++    Settle(f);
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -864,6 +917,7 @@
+         TestDepthStencil(f);
+         TestEligibility(f);
+         TestLifetime(f);
++        TestFullColorClear(f);
+         TestGameVelocityMirror(f);
+         TestMotionBlurCopy(f);
+         TestVelocityBatch(f);
+diff --git a/tests/test_mtl_scheduler.mm b/tests/test_mtl_scheduler.mm
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -649,6 +649,13 @@
+         list.SetRenderPipelineState((__bridge void*)pipeline);
+         list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
+     }
++    for(unsigned i=0;i<2;++i) {
++        state.color_attachments[0].image_view=i+3;
++        scheduler.RenderEncoder((__bridge const void*)pass,state);
++        scheduler.LabelEncoder(i ? "P2 8x8 C1 vs a ps b" : "P1 8x8 C1 vs a ps b");
++        auto& list=scheduler.Commands();list.SetRenderPipelineState((__bridge void*)pipeline);
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++    }
+     scheduler.Finish();
+     for(unsigned i=0;i<1000 && profile->Stats().completed<1;++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+     const auto stats=profile->Stats();
+diff --git a/tests/test_scene_targets_core.cpp b/tests/test_scene_targets_core.cpp
+--- a/tests/test_scene_targets_core.cpp
++++ b/tests/test_scene_targets_core.cpp
+@@ -223,12 +223,40 @@
+     std::printf("set size ok\n");
+ }
+ 
++void TestFullColorClear() {
++    Fixture f;
++    const auto color=f.Add(1920,1080);
++    const auto depth=f.Add(1920,1080,1,true);
++    auto& t=f.targets;t.SetSize({960,540});t.Take();
++    ImageViewInfo view{};vk::ImageLayout layout{};
++    // The original contents are irrelevant only for a full color load-action clear.
++    t.BeginAttachment(color,view,layout,true);
++    assert(Eq(t.Take(),{"create 960x540","prepare attachment"}));
++    assert(t.fills==0 && t.SkippedClearFills()==1 && t.ProxyCurrent(*f.images[color.index]));
++    // A later native reader still resolves the newly cleared/drawn proxy.
++    t.NativeAccess(*f.images[color.index],false);
++    assert(Eq(t.Take(),{"resolve 0"}));
++    t.NativeAccess(*f.images[color.index],true);t.Take();
++    // Native writes invalidate; a loading attachment must refill, never reuse stale data.
++    t.BeginAttachment(color,view,layout);
++    assert(Eq(t.Take(),{"fill 0","prepare attachment"}));
++    t.NativeAccess(*f.images[color.index],true);t.Take();
++    t.BeginAttachment(color,view,layout,true);
++    assert(Eq(t.Take(),{"prepare attachment"}) && t.SkippedClearFills()==2);
++    // A depth-only or stencil-only clear must retain the other aspect.
++    t.BeginAttachment(depth,view,layout,true);
++    assert(Eq(t.Take(),{"create 960x540","fill 0","prepare attachment"}));
++    assert(t.SkippedClearFills()==2);
++    std::printf("full color clear preservation ok\n");
++}
++
+ } // namespace
+ 
+ int main() {
+     TestEligibility();
+     TestCoherence();
+     TestSetSizeAndMips();
++    TestFullColorClear();
+     std::printf("scene-targets-core-test passed\n");
+     return 0;
+ }

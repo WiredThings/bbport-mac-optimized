@@ -35,6 +35,14 @@ per-frame estimate; physical encoder transitions (including render-to-render), r
 actual fence waits, native encoder setup/closing CPU time and command-buffer commit CPU time.
 Sample selection hashes command-buffer numbers to avoid always selecting a fixed rendering phase.
 
+With adapter patch 0012, sampled guest render/compute passes also retain a bounded label:
+the first pipeline of the physical pass, with the monotonically increasing render-pass ID
+removed. Up to 128 labels are accumulated per report window; the top eight are printed as
+`Metal GPU hot pass`. Overflow is counted without dropping the overall stage totals.
+Labels identify pass families, not isolated shader execution times. The analyzer includes
+their sampled estimates; labels outside the top eight of a window are absent from its ranking.
+No additional passes, shader variants or resource references are created by label collection.
+
 Stage spans may overlap. Their sum is NOT frame time. An interval union measures covered GPU
 time within each sampled command buffer; remaining command-buffer time includes dependencies,
 tile work and uninstrumented work. It is NOT a direct measurement of switching overhead. CPU
