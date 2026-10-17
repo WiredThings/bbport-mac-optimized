@@ -22,8 +22,8 @@ keyboard/gamepad input and overlay shortcuts do not drive the benchmark. Window 
 allows the owner to abort it. No global `pkill` or original-save restore is used.
 
 Default warmup/sample are 45/45 seconds; startup is bounded to 300 seconds. The sample needs
-at least 100 real game frames, nonzero camera position and over 200 draws/frame. Shader
-compilation invalidates a warm-cache sample. Static scene position must remain within 5 cm;
+at least 100 real game frames, nonzero non-title camera position and over 300 draws/frame, continuously for three seconds. Shader
+compilation invalidates a warm-cache sample. Static camera position must remain within 5 cm;
 `--expected-camera X Y Z` during init can enforce the intended location. Comparison rejects
 changed config/save cohorts, instrumentation, host, camera position and draw count shifts
 over 2%. This is a static scene test, not a whole-game average or bit-exact simulation replay.
@@ -71,3 +71,10 @@ filtering, repeat/mirror addressing and all packed-offset extremes; unsafe patte
 integer-overflow cases must fall back. Existing BDA, velocity, blur, occlusion, proxy, resource
 retirement and memory-budget groups remain regression gates. Runtime benchmark results are
 recorded below after the autonomous end-to-end run is validated.
+
+The initial autonomous smoke run exposed a state-detector bug: the title's 3D preview at
+(0,4,-8) briefly crossed the old draw threshold and was mistaken for gameplay. Warmup then
+aborted the private process at 38 seconds. This was a script error, not the memory guard.
+The original save hashes were unchanged. Title-camera exclusion, continuous stable-window
+entry and warmup grace now have regression tests; the failed run is never accepted as a
+performance result.

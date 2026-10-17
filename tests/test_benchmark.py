@@ -24,6 +24,16 @@ class BenchmarkTests(unittest.TestCase):
                 for row in r:row.update(cam_x='0',cam_y='0',cam_z='0')
             else:r[0][key]=value
             with self.assertRaises(ValueError):b.metrics(r)
+    def test_3d_title_preview_is_not_a_game_scene(self):
+        r=self.rows()
+        for row in r:row.update(cam_x='0',cam_y='4',cam_z='-8',draws='550')
+        self.assertFalse(b.stable_scene(r));self.assertFalse(b.is_world(r[-1]))
+    def test_one_transition_frame_never_enters_warmup(self):
+        r=self.rows()
+        for row in r[:-1]:row.update(cam_x='0',cam_y='4',cam_z='-8')
+        self.assertFalse(b.stable_scene(r,[-9,-4,-18]))
+        self.assertTrue(b.stable_scene(self.rows(),[-9,-4,-18]))
+        self.assertFalse(b.stable_scene(self.rows(),[7,2,8]))
     def test_nonfinite_and_zero_frame_times_rejected(self):
         for invalid in ['nan','0','-1','inf']:
             r=self.rows();r[0]['frame_ms']=invalid

@@ -86,9 +86,22 @@ def frame_rows(path):
 
 def is_world(row):
     try:
-        return float(row['draws']) > 200 and all(math.isfinite(float(row[k])) for k in ('cam_x', 'cam_y', 'cam_z')) and sum(abs(float(row[k])) for k in ('cam_x', 'cam_y', 'cam_z')) > 0.1
+        camera=[float(row[k]) for k in ('cam_x','cam_y','cam_z')]
+        return float(row['draws']) > 300 and all(math.isfinite(v) for v in camera) and math.dist(camera,(0,0,0))>.1 and math.dist(camera,(0,4,-8))>.1
     except (KeyError, ValueError, TypeError):
         return False
+
+
+def scene_matches(row, expected=None):
+    if not is_world(row): return False
+    return not expected or math.dist([float(row[k]) for k in ('cam_x','cam_y','cam_z')],expected)<=.15
+
+
+def stable_scene(rows, expected=None, seconds=3):
+    if not rows: return False
+    end=float(rows[-1]['t_s'])
+    recent=[r for r in rows if end-seconds<=float(r['t_s'])<=end]
+    return len(recent)>=60 and end-float(recent[0]['t_s'])>=seconds-.1 and all(scene_matches(r,expected) for r in recent)
 
 
 def metrics(rows):
@@ -222,7 +235,7 @@ def run(args):
         env.update(BB_MTL_GPU_TIMING='1', BB_MTL_GPU_TIMING_EVERY='8')
     log_file = (folder/'run.log').open('w')
     source_before = inventory(manifest['source_save'])
-    process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False
+    process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0
     log_path=folder/'run.log';frames=folder/'data/out/frames.csv'
     def guard():
         nonlocal last_guard
@@ -251,11 +264,15 @@ def run(args):
         while time.monotonic()<deadline:
             guard();now=time.monotonic();rr=frame_rows(frames)
             if rr and is_world(rr[-1]):
+                # Stop title input on a plausible world frame; require a complete stable window
+                # before entering warmup. The title's 3D preview camera is explicitly excluded.
+                pad.write_text(NEUTRAL);held=False;input_pause_until=now+12
+            if stable_scene(rr,manifest['expected_camera']):
                 world=True;pad.write_text(NEUTRAL);break
             log=log_path.read_text(errors='replace')
             if 'Runtime: pad opened' in log and next_press is None:
                 next_press=now+15
-            if next_press is not None and now>=next_press:
+            if next_press is not None and now>=next_press and now>=input_pause_until:
                 if held:
                     pad.write_text(NEUTRAL);held=False;next_press=now+7
                 elif presses<32:
@@ -268,8 +285,13 @@ def run(args):
         warm_start=time.monotonic();quiet_since=warm_start
         while time.monotonic()-warm_start<args.warmup or time.monotonic()-quiet_since<15:
             guard();rr=frame_rows(frames)
-            if not rr or not is_world(rr[-1]):
-                raise RuntimeError('Left game scene during warmup')
+            if not stable_scene(rr,manifest['expected_camera']):
+                quiet_since=time.monotonic()
+                # Loading transitions restart the quiet window; one transient frame is not a failure.
+                if time.monotonic()-warm_start>args.warmup+90:
+                    raise RuntimeError('Scene did not settle during bounded warmup')
+                time.sleep(.5)
+                continue
             if float(rr[-1]['compiles'])>0:
                 quiet_since=time.monotonic()
             if time.monotonic()-warm_start>args.warmup+90:
