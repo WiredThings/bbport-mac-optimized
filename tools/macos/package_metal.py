@@ -31,12 +31,16 @@ def main():
     parser.add_argument('--spirv-cross-source', type=Path, required=True)
     parser.add_argument('--app', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--version', default=VERSION)
+    parser.add_argument('--verification-name', default='metal-backend')
     args = parser.parse_args()
+    assert re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', args.version)
+    assert re.fullmatch(r'[A-Za-z0-9-]+', args.verification_name)
     baseline, app = args.baseline.resolve(), args.app.resolve()
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] == '0.1.4', 'Expected verified mem1 baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -72,6 +76,8 @@ def main():
     for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
+    if args.version.startswith('0.2.1'):
+        copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
     assert run('git', '-C', args.spirv_cross_source, 'rev-parse', 'HEAD') == 'f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7'
@@ -87,16 +93,17 @@ def main():
     subprocess.run(['ditto', str(args.launcher / 'Contents/Resources' / resource),
                     str(app / 'Contents/Resources' / resource)], check=True)
     info = plistlib.loads((args.launcher / 'Contents/Info.plist').read_bytes())
-    info['CFBundleVersion'] = '200'
+    info['CFBundleShortVersionString'] = args.version.split('-')[0]
+    info['CFBundleVersion'] = ''.join(args.version.split('-')[0].split('.'))
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
-    (engine / '.version').write_text(VERSION + '\n')
+    (engine / '.version').write_text(args.version + '\n')
     patches = {p.name: sha(p) for p in sorted((ROOT / 'gpu/patches/metal').glob('*.patch'))}
-    manifest = dict(version=VERSION, source_commit=run('git', '-C', ROOT, 'rev-parse', 'HEAD'),
+    manifest = dict(version=args.version, source_commit=run('git', '-C', ROOT, 'rev-parse', 'HEAD'),
                     upstream_repository='https://github.com/Huax-1839/bloodborne-macos',
                     upstream_commit=UPSTREAM, adapter_patches=patches,
                     renderer_architecture='x86_64 under Rosetta, direct Metal API',
                     renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original),
-                    baseline='0.1.4-mem1', default_renderer='metal', fallback_renderer='vulkan',
+                    baseline=(baseline / 'Contents/Resources/bbport/.version').read_text().strip(), default_renderer='metal', fallback_renderer='vulkan',
                     game_started_for_validation=False, gameplay_performance_verified=False)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
@@ -115,10 +122,10 @@ def main():
                            text=True, capture_output=True, timeout=15)
     assert smoke.returncode == 1 and 'Usage:' in smoke.stderr, smoke.stderr
     manifest['packaged_dyld_smoke_test'] = 'passed, eager binding and usage exit'
-    archive = args.output / f'Bloodborne-Optimized-{VERSION}.zip'
+    archive = args.output / f'Bloodborne-Optimized-{args.version}.zip'
     subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(archive)], check=True)
     manifest['archive_sha256'] = sha(archive)
-    (args.output / 'metal-backend-verification.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    (args.output / f'{args.verification_name}-verification.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(archive)
 
 

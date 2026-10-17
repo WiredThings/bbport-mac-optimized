@@ -1,4 +1,6 @@
-# Metal backend, 0.2.0-metal1
+# Metal backend, 0.2.1-metal-mem1
+
+The memory-accounting follow-up is described in METAL-MEMORY-1.md.
 
 The existing Bloodborne Optimized app now defaults to Huax-1839/bloodborne-macos
 11992198df6306dacf6ec37de57ee920db1acc11. The renderer calls Metal directly; no
@@ -24,7 +26,8 @@ Vulkan pipeline/driver caches are preserved and are not imported into Metal.
 | Object motion vectors, RCAS, HDR | Unavailable; disabled in launcher and excluded from saved launch settings |
 | Ultrawide community patches | Existing native-resolution/Off behavior retained; gameplay not verified |
 | Compact Vulkan no-output shader, selective SPIR-V precision | Remain in Vulkan fallback; Metal uses its own shader translation and math policy |
-| Command pool trim, graphics ledger budget, KK pool fix | Remain in Vulkan fallback; do not apply to Metal resources |
+| Command pool trim, KK pool fix | Remain in Vulkan fallback; do not apply to Metal resources |
+| Graphics ledger budget | Adapted to Metal in 0.2.1; see METAL-MEMORY-1.md |
 | Asset/game mods | Existing mod preparation retained; arbitrary third-party mods need gameplay verification |
 
 These are source, configuration and interface compatibility results. Gameplay,

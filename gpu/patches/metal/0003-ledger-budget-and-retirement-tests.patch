@@ -1,0 +1,307 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+index d48aa45..4c8e20f 100644
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -289,6 +289,13 @@ else()
+ endif()
+ 
+ # Explicit test targets; neither launches the game nor needs a Vulkan device.
++add_executable(mtl-memory-budget-test EXCLUDE_FROM_ALL ../tests/test_mtl_memory_budget.cpp)
++target_compile_options(mtl-memory-budget-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(mtl-memory-budget-test PRIVATE shadps4)
++add_executable(texture-cache-gc-test EXCLUDE_FROM_ALL ../tests/test_texture_cache_gc.cpp)
++target_compile_options(texture-cache-gc-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(texture-cache-gc-test PRIVATE .. shadps4)
++
+ add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
+ target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(motion-history-test PRIVATE ..)
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.h b/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.h
+index 7a373b5..0152cbf 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.h
+@@ -39,6 +39,8 @@ bool Wanted();
+ void UseAsChunkProvider();
+ /// Whether Install handed the runtime's chunks to Metal.
+ bool Installed();
++/// Metal allocation bytes aliasing CPU-owned guest backing (not additional RAM).
++std::uint64_t ImportedBytes();
+ /// The chunk holding direct memory address `phys`, or null.
+ const Chunk* Find(std::uint64_t phys);
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.mm b/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.mm
+index 46e7d1f..d8c56e7 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_guest_memory.mm
+@@ -212,6 +212,8 @@ void UseAsChunkProvider() {
+     });
+ }
+ 
++std::uint64_t ImportedBytes() { return chunk_bytes.load(std::memory_order_relaxed); }
++
+ bool Installed() {
+     return device != nullptr;
+ }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+index 873057e..f6087dd 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -14,6 +14,7 @@
+ #include <cstring>
+ #include <memory>
+ #include <numeric>
++#include <mach/mach.h>
+ 
+ #include <boost/container/small_vector.hpp>
+ 
+@@ -25,6 +26,7 @@
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ #include "video_core/renderer_metal/mtl_image_usage_log.h"
+ #include "video_core/renderer_metal/mtl_runtime_impl.h"
++#include "video_core/renderer_metal/mtl_memory_budget.h"
+ #include "video_core/renderer_metal/mtl_scene_targets.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+@@ -713,12 +715,62 @@ BackendLimits MakeLimits(Device& device) {
+     return ViewCompatible(base, SubstituteFormat(view));
+ }
+ 
++// bmy/bbport-mac 4de5fd1: sampling is limited to four times a second.
++// Graphics allocations already include Metal/driver-owned memory. Subtracting
++// footprint minus currentAllocatedSize instead would misclassify those bytes as
++// non-graphics and shrink the cache as its own resources grow (bmy issue #6).
++static MemoryBudget::ProcessMemory CurrentProcessMemory() {
++    static std::atomic<u64> outside_cached{0}, graphics_cached{0};
++    static std::atomic<s64> sampled_ns{-1};
++    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
++    if (sampled < 0 || now - sampled >= 250'000'000) {
++        task_vm_info_data_t info{};
++        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
++        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
++                      &count) == KERN_SUCCESS && count >= TASK_VM_INFO_REV3_COUNT) {
++            const auto memory = MemoryBudget::FromLedger(info.phys_footprint,
++                info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed);
++            outside_cached.store(memory.outside_graphics, std::memory_order_relaxed);
++            graphics_cached.store(memory.graphics, std::memory_order_relaxed);
++            sampled_ns.store(now, std::memory_order_relaxed);
++        }
++    }
++    return {outside_cached.load(std::memory_order_relaxed),
++            graphics_cached.load(std::memory_order_relaxed),
++            sampled_ns.load(std::memory_order_relaxed) >= 0};
++}
++
+ u64 Runtime::DeviceMemoryUsage() const {
+-    return impl->dev.device.currentAllocatedSize;
++    return MemoryBudget::GraphicsUsage(impl->dev.device.currentAllocatedSize,
++                                      GuestMemory::ImportedBytes(), CurrentProcessMemory());
+ }
+ 
+ u64 Runtime::DeviceMemoryBudgetNow() const {
+-    return impl->dev.device.recommendedMaxWorkingSetSize;
++    const u64 limit = impl->dev.device.recommendedMaxWorkingSetSize;
++    const auto process = CurrentProcessMemory();
++    const u64 budget = MemoryBudget::Unified(limit, process);
++    static std::atomic<u64> printed_budget{0}, printed_graphics{0};
++    const auto moved = [](u64 a, u64 b) {
++        return (a > b ? a - b : b - a) >= (u64{1} << 30);
++    };
++    u64 last_budget = printed_budget.load(std::memory_order_relaxed);
++    u64 last_graphics = printed_graphics.load(std::memory_order_relaxed);
++    const bool budget_moved = moved(last_budget, budget) &&
++        printed_budget.compare_exchange_strong(last_budget, budget, std::memory_order_relaxed);
++    const bool graphics_moved = moved(last_graphics, process.graphics) &&
++        printed_graphics.compare_exchange_strong(last_graphics, process.graphics, std::memory_order_relaxed);
++    if (budget_moved || graphics_moved) {
++        std::printf("Metal memory budget: %llu MiB (recommended %llu MiB, outside graphics %llu MiB); "
++                    "graphics ledger %llu MiB, adjusted graphics %llu MiB, no-copy aliases %llu MiB; ledger %s\n",
++                    (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
++                    (unsigned long long)(process.outside_graphics >> 20),
++                    (unsigned long long)(process.graphics >> 20),
++                    (unsigned long long)(DeviceMemoryUsage() >> 20),
++                    (unsigned long long)(GuestMemory::ImportedBytes() >> 20), process.valid ? "valid" : "unavailable");
++    }
++    return budget;
+ }
+ 
+ bool Runtime::GuestMemoryUsable() {
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+index e88d290..7bf9d46 100644
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -287,6 +287,7 @@ static void TestLimitsAndFormats(Fixture& f) {
+     CHECK(limits.max_framebuffer_width == 16384 && limits.max_framebuffer_height == 16384);
+     CHECK(limits.total_memory_budget > 0 && limits.can_report_memory_usage);
+     CHECK(f.runtime.DeviceMemoryBudgetNow() > 0);
++    CHECK(f.runtime.DeviceMemoryBudgetNow() <= f.runtime.Limits().total_memory_budget);
+     CHECK(f.runtime.GetSparseArena() == nullptr);
+     CHECK(f.runtime.GetFastReadback() == nullptr);
+     CHECK(!f.runtime.IsRecordingDeferred());
+@@ -1067,6 +1068,29 @@ static void TestAccessAndStaging(Fixture& f) {
+     Settle(f);
+ }
+ 
++// Real Metal object lifetime: an aged allocation stays alive while held or
++// while its retirement tick has not completed. Idle expiry does not bypass fences.
++static void TestStagingRetirement(Fixture& f) {
++    std::printf("idle staging: held and unfinished allocations survive expiry\n");
++    __weak id<MTLBuffer> weak_buffer;
++    @autoreleasepool {
++        Metal::StagingPool pool{f.runtime};
++        auto span = pool.Request(2 << 20, MemoryType::HostCached, 0, true);
++        weak_buffer = (__bridge id<MTLBuffer>)span.buffer->buffer.native;
++        for (unsigned i = 0; i < 3001; ++i) pool.TickFrame();
++        CHECK(weak_buffer != nil); // held, despite expiry
++        pool.FreeDeferred(span);
++        for (unsigned i = 0; i < 3001; ++i) pool.TickFrame();
++        CHECK(weak_buffer != nil); // open tick, not GPU-complete
++        f.runtime.Finish();
++        f.runtime.RefreshTicks();
++        pool.TickFrame();
++        Settle(f); // DestroyBuffer defers the actual residency removal and release.
++    }
++    Settle(f);
++    CHECK(weak_buffer == nil);
++}
++
+ static void TestTicks(Fixture& f) {
+     std::printf("ticks and ordering\n");
+     const u64 tick = f.runtime.CurrentTick();
+@@ -1098,6 +1122,7 @@ int main() {
+         TestImageCopies(f);
+         TestKernels(f);
+         TestAccessAndStaging(f);
++        TestStagingRetirement(f);
+         TestTicks(f);
+         Settle(f);
+         CHECK(!f.scheduler.HasFailed());
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_memory_budget.h b/gpu/shadps4/video_core/renderer_metal/mtl_memory_budget.h
+new file mode 100644
+index 0000000..b30e4b5
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_budget.h
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Adapted from bmy/bbport-mac a923b61 + 4de5fd1: count only memory outside
++// the macOS graphics ledger against the process's unified-memory allowance.
++#pragma once
++#include <cstdint>
++
++namespace Metal::MemoryBudget {
++struct ProcessMemory {
++    std::uint64_t outside_graphics{};
++    std::uint64_t graphics{};
++    bool valid{};
++};
++
++inline ProcessMemory FromLedger(std::uint64_t footprint, std::int64_t graphics) {
++    const auto bytes = graphics > 0 ? std::uint64_t(graphics) : 0;
++    return {footprint > bytes ? footprint - bytes : 0, bytes, true};
++}
++
++// currentAllocatedSize includes no-copy wrappers over CPU-owned guest pages.
++// Those pages already occur in outside_graphics: do not charge them twice.
++// Match bmy's max(renderer usage, graphics ledger), after removing the alias.
++inline std::uint64_t GraphicsUsage(std::uint64_t allocated, std::uint64_t imported,
++                                   const ProcessMemory& process) {
++    if (!process.valid) return allocated;
++    const auto owned = allocated > imported ? allocated - imported : 0;
++    return owned > process.graphics ? owned : process.graphics;
++}
++
++inline std::uint64_t Unified(std::uint64_t limit, const ProcessMemory& process) {
++    if (!process.valid) return limit;
++    constexpr std::uint64_t Floor = std::uint64_t{2} << 30;
++    const auto floor = limit < Floor ? limit : Floor;
++    const auto remaining = limit > process.outside_graphics ? limit - process.outside_graphics : 0;
++    return remaining > floor ? remaining : floor;
++}
++} // namespace Metal::MemoryBudget
+diff --git a/tests/test_mtl_memory_budget.cpp b/tests/test_mtl_memory_budget.cpp
+new file mode 100644
+index 0000000..5813130
+--- /dev/null
++++ b/tests/test_mtl_memory_budget.cpp
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include <cassert>
++#include <cstdint>
++#include <limits>
++#include "video_core/renderer_metal/mtl_memory_budget.h"
++using namespace Metal::MemoryBudget;
++constexpr std::uint64_t GiB = std::uint64_t{1} << 30;
++int main() {
++    assert(Unified(12 * GiB, {}) == 12 * GiB); // OS sample unavailable
++    auto memory = FromLedger(8 * GiB, 5 * GiB);
++    assert(memory.outside_graphics == 3 * GiB);
++    assert(Unified(12 * GiB, memory) == 9 * GiB);
++    // More driver-owned graphics must not recursively shrink the cache budget.
++    assert(GraphicsUsage(8 * GiB, 3 * GiB, memory) == 5 * GiB);
++    assert(GraphicsUsage(12 * GiB, 7 * GiB, memory) == 5 * GiB);
++    assert(GraphicsUsage(2 * GiB, 3 * GiB, memory) == 5 * GiB);
++    assert(GraphicsUsage(8 * GiB, 3 * GiB, {}) == 8 * GiB);
++    const auto larger = FromLedger(12 * GiB, 9 * GiB);
++    assert(Unified(12 * GiB, larger) == Unified(12 * GiB, memory));
++    assert(Unified(12 * GiB, FromLedger(9 * GiB, 5 * GiB)) == 8 * GiB);
++    assert(Unified(12 * GiB, FromLedger(20 * GiB, 0)) == 2 * GiB);
++    assert(Unified(12 * GiB, FromLedger(8 * GiB, -1)) == 4 * GiB);
++    assert(Unified(12 * GiB, FromLedger(2 * GiB, 3 * GiB)) == 12 * GiB);
++    assert(Unified(1 * GiB, FromLedger(8 * GiB, 0)) == 1 * GiB);
++    assert(Unified(0, memory) == 0);
++    assert(Unified(12 * GiB, FromLedger(std::numeric_limits<std::uint64_t>::max(), 0)) == 2 * GiB);
++}
+diff --git a/tests/test_texture_cache_gc.cpp b/tests/test_texture_cache_gc.cpp
+new file mode 100644
+index 0000000..7e1d6ae
+--- /dev/null
++++ b/tests/test_texture_cache_gc.cpp
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Livio21/metalborne 6069d161 regression: a blocked LRU prefix must not starve eligible images.
++#include <cassert>
++#include <vector>
++
++#include "gpu/shadps4/common/lru_cache.h"
++
++int main() {
++    struct Image {
++        size_t lru_id;
++        bool blocked;
++        bool evicted = false;
++    };
++
++    Common::LeastRecentlyUsedCache<size_t, u64> lru;
++    std::vector<Image> images;
++    for (size_t i = 0; i < 300; ++i) {
++        images.push_back({lru.Insert(i, 0), true});
++    }
++    images.push_back({lru.Insert(images.size(), 0), false});
++
++    const auto collect = [&](u64 tick) {
++        size_t remaining = 10;
++        size_t visited = 0;
++        lru.ForEachItemBelow(tick - 20, [&](size_t index) {
++            if (remaining == 0 || visited == 256) {
++                return true;
++            }
++            ++visited;
++            auto& image = images[index];
++            if (image.blocked) {
++                lru.Touch(image.lru_id, tick);
++                return false;
++            }
++            --remaining;
++            image.evicted = true;
++            lru.Free(image.lru_id);
++            return false;
++        });
++        return visited;
++    };
++
++    assert(collect(100) == 256);
++    assert(!images.back().evicted);
++    assert(collect(101) == 45);
++    assert(images.back().evicted);
++}
