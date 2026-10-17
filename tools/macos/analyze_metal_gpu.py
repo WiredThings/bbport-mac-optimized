@@ -14,10 +14,20 @@ def analyze(text, skip_windows=0):
     windows = []
     for line in text.splitlines():
         if 'Metal GPU timing: seconds=' in line:
-            windows.append(dict(fields(line), stages={}, transitions={}, hot_passes=[]))
+            windows.append(dict(fields(line), stages={}, transitions={}, hot_passes=[], render_parts={}, scene_copies=[]))
         elif 'Metal GPU stage: name=' in line and windows:
             name = re.search(r'name=([a-z-]+)', line)[1]
             windows[-1]['stages'][name] = fields(line)
+        elif 'Metal GPU render parts: name=' in line and windows:
+            name = re.search(r'name=([a-z-]+)', line)[1]
+            windows[-1]['render_parts'][name] = fields(line)
+        elif 'Metal scene copy: uid=' in line and windows:
+            row = fields(line)
+            for key in ('direction', 'reason', 'source', 'target'):
+                row[key] = re.search(rf'{key}=([^, ]+)', line)[1]
+            windows[-1]['scene_copies'].append(row)
+        elif 'Metal overwrite discard: candidates=' in line and windows:
+            windows[-1]['overwrite'] = fields(line)
         elif 'Metal GPU hot pass: label=' in line and windows:
             label = re.search(r'label=(.*?), samples=', line)[1]
             windows[-1]['hot_passes'].append(dict(fields(line), label=label))
@@ -36,18 +46,51 @@ def analyze(text, skip_windows=0):
             stage['samples'] += values['samples']
             stage['sampled_ms'] += values['sampled-ms']
             stage['weighted_ms'] += values['sampled-ms'] * w['every']
+    def add_parts(entry, values, every):
+        for part in ('vertex', 'fragment'):
+            entry[part + '_samples'] = entry.get(part + '_samples', 0) + values.get(part + '-samples', 0)
+            entry['weighted_' + part + '_ms'] = entry.get('weighted_' + part + '_ms', 0) + values.get('sampled-' + part + '-ms', 0) * every
+        entry['paired_samples'] = entry.get('paired_samples', 0) + values.get('paired-samples', 0)
+        entry['weighted_overlap_ms'] = entry.get('weighted_overlap_ms', 0) + values.get('sampled-overlap-ms', 0) * every
+        entry['weighted_stage_gap_ms'] = entry.get('weighted_stage_gap_ms', 0) + values.get('sampled-stage-gap-ms', 0) * every
+        entry['render_parts_available'] = entry.get('render_parts_available', False) or 'vertex-samples' in values
+
+    def finish_parts(entry):
+        for part in ('vertex', 'fragment'):
+            entry['estimated_' + part + '_ms_per_frame'] = entry.get('weighted_' + part + '_ms', 0) / frames
+        entry['estimated_stage_gap_ms_per_frame'] = entry.get('weighted_stage_gap_ms', 0) / frames
+        entry['estimated_overlap_ms_per_frame'] = entry.get('weighted_overlap_ms', 0) / frames
+
+    render_parts = {}
+    for w in selected:
+        for name, values in w['render_parts'].items():
+            add_parts(render_parts.setdefault(name, {}), values, w['every'])
+    for entry in render_parts.values():
+        finish_parts(entry)
     hot_passes = {}
     for w in selected:
         for h in w['hot_passes']:
             entry = hot_passes.setdefault(h['label'], dict(samples=0, weighted_ms=0))
+            add_parts(entry, h, w['every'])
             entry['samples'] += h['samples']
             entry['weighted_ms'] += h['sampled-ms'] * w['every']
     for h in hot_passes.values():
         h['estimated_ms_per_frame'] = h['weighted_ms'] / frames
+        finish_parts(h)
     for stage in stages.values():
         stage['estimated_ms_per_frame'] = stage['weighted_ms'] / frames
         stage['mean_us_per_encoder'] = stage['sampled_ms'] * 1000 / stage['samples']
+    scene_copies = {}
+    for w in selected:
+        for r in w['scene_copies']:
+            key = (int(r['uid']), int(r['mip']), r['direction'], r['reason'], r['source'], r['target'], int(r['format']))
+            scene_copies[key] = scene_copies.get(key, 0) + r['calls']
+    copy_rows = [dict(uid=k[0], mip=k[1], direction=k[2], reason=k[3], source=k[4], target=k[5], format=k[6], calls=v) for k, v in scene_copies.items()]
+    overwrite = [w['overwrite'] for w in selected if 'overwrite' in w]
     return dict(windows=selected, frames=frames,
+                render_parts=render_parts,
+                scene_copy_rows=sorted(copy_rows, key=lambda x: x['calls'], reverse=True),
+                overwrite_last=overwrite[-1] if overwrite else None,
                 hot_passes_by_span=sorted(hot_passes.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
                 hot_pass_dropped=sum(w.get('hot_dropped', 0) for w in selected),
                 stages_by_span=sorted(stages.items(), key=lambda x: x[1]['estimated_ms_per_frame'], reverse=True),
@@ -61,6 +104,8 @@ def analyze(text, skip_windows=0):
                 capacity_drops=sum(w['capacity-drops'] for w in selected),
                 busy_drops=sum(w['busy-drops'] for w in selected),
                 notes=['GPU stage spans can overlap; their sum is not GPU frame time.',
+                       'Vertex and fragment counters time whole hardware stages, including dependencies and tile work, not shader ALU alone; missing samples are not zero cost.',
+                       'Scene copy counts are unsampled CPU events in independent bounded reporting windows; only twelve keys per report are printed.',
                        'Hot passes report the first pipeline of each pass, not isolated shader costs; only the top eight labels per window are printed.',
                        'Per-frame costs are sampling estimates; MetalFX boundary spans include two diagnostic probes and their fence dependency.',
                        'Uncovered command-buffer time includes dependencies, tile work and uninstrumented work; it is not a direct measurement of switching cost.',

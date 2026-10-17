@@ -41,7 +41,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -98,6 +98,7 @@ def main():
     copy(ROOT / 'docs/release/METAL-BDA-PAGE-TABLE.md', engine / 'METAL-BDA-PAGE-TABLE.md')
     copy(ROOT / 'docs/release/METAL-GPU-TIMING.md', engine / 'METAL-GPU-TIMING.md')
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-2.md', engine / 'METAL-PERFORMANCE-2.md')
+    copy(ROOT / 'docs/release/METAL-PERFORMANCE-3.md', engine / 'METAL-PERFORMANCE-3.md')
     copy(ROOT / 'tools/macos/analyze_metal_gpu.py', engine / 'tools/macos/analyze_metal_gpu.py')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
@@ -131,6 +132,8 @@ def main():
                     gpu_stage_timing_counter_bytes_per_slot=32768, gpu_stage_timing_max_slots=4,
                     scene_clear_discard_default=True, scene_clear_discard_fallback='BB_MTL_CLEAR_DISCARD=0',
                     scene_clear_diagnostic_control='BB_MTL_CLEAR_DISCARD_FILE',
+                    scene_full_copy_discard_default=True, scene_full_copy_discard_fallback='BB_MTL_OVERWRITE_DISCARD=0',
+                    scene_full_copy_diagnostic_control='BB_MTL_OVERWRITE_DISCARD_FILE',
                     game_started_for_validation=False, gameplay_performance_verified=False)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'

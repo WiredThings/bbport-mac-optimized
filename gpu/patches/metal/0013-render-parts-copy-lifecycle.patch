@@ -1,0 +1,478 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h b/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_gpu_profile.h
+@@ -31,8 +31,21 @@
+         "upscale-merge", "ui", "geometry", "tessellation", "metalfx-boundary", "host-copy", "mixed"};
+     static constexpr unsigned Slots = 4, MaxEntries = 1024, Samples = MaxEntries * 4;
+     struct Stat { unsigned long long count = 0; double ns = 0, max_ns = 0; };
++    struct RenderParts {
++        Stat vertex, fragment;
++        unsigned long long paired = 0;
++        double overlap_ns = 0, gap_ns = 0;
++        void Add(const RenderParts& r) {
++            for (auto pair : {std::pair{&vertex, &r.vertex}, std::pair{&fragment, &r.fragment}}) {
++                pair.first->count += pair.second->count; pair.first->ns += pair.second->ns;
++                pair.first->max_ns = std::max(pair.first->max_ns, pair.second->max_ns);
++            }
++            paired += r.paired; overlap_ns += r.overlap_ns; gap_ns += r.gap_ns;
++        }
++    };
+     struct Snapshot {
+         std::array<Stat, StageCount> stages{};
++        std::array<RenderParts, StageCount> render{};
+         unsigned long long completed = 0, invalid = 0, missing = 0, partial_render = 0;
+         double cb_ns = 0, covered_ns = 0;
+     };
+@@ -41,7 +54,7 @@
+         Stage stage; bool render = false, labeled = false, opaque = false;
+         std::array<char,88> label{};
+     };
+-    struct Hot { std::array<char,88> label{}; Stat stat; };
++    struct Hot { std::array<char,88> label{}; Stat stat; RenderParts render; };
+     struct HotTable { std::array<Hot,128> entries{}; unsigned used=0, dropped=0; };
+     std::unique_ptr<HotTable> hot;
+     struct Batch {
+@@ -101,6 +114,7 @@
+         std::array<std::pair<unsigned long long,unsigned long long>,MaxEntries> intervals{};
+         unsigned interval_count = 0;
+         std::array<double,MaxEntries> measured{};
++        std::array<RenderParts,MaxEntries> parts{};
+         if (data.length >= b->count * 4 * sizeof(MTLCounterResultTimestamp) && scale > 0) {
+             const auto* values = static_cast<const MTLCounterResultTimestamp*>(data.bytes);
+             for (unsigned i = 0; i < b->count; ++i) {
+@@ -137,6 +151,20 @@
+                 }
+                 intervals[interval_count++]={start,end};
+                 measured[i]=ns;
++                if (e.render) {
++                    auto& r=parts[i];
++                    if (pair_valid(0,1)) r.vertex={1,(v[1].timestamp-v[0].timestamp)*scale,0};
++                    if (pair_valid(2,3)) r.fragment={1,(v[3].timestamp-v[2].timestamp)*scale,0};
++                    r.vertex.max_ns=r.vertex.ns; r.fragment.max_ns=r.fragment.ns;
++                    if (r.vertex.count && r.fragment.count) {
++                        r.paired=1;
++                        const auto a=std::max(v[0].timestamp,v[2].timestamp);
++                        const auto z=std::min(v[1].timestamp,v[3].timestamp);
++                        r.overlap_ns=z>a?(z-a)*scale:0;
++                        r.gap_ns=std::max(0.0,ns-r.vertex.ns-r.fragment.ns+r.overlap_ns);
++                    }
++                    delta.render[e.stage].Add(r);
++                }
+                 auto& s = delta.stages[e.stage];
+                 ++s.count; s.ns += ns; s.max_ns = std::max(s.max_ns, ns);
+             }
+@@ -155,6 +183,7 @@
+                 s->missing += delta.missing; s->partial_render += delta.partial_render;
+                 s->cb_ns += delta.cb_ns; s->covered_ns += delta.covered_ns;
+                 for (unsigned i = 0; i < StageCount; ++i) {
++                    s->render[i].Add(delta.render[i]);
+                     s->stages[i].count += delta.stages[i].count;
+                     s->stages[i].ns += delta.stages[i].ns;
+                     s->stages[i].max_ns = std::max(s->stages[i].max_ns, delta.stages[i].max_ns);
+@@ -171,6 +200,7 @@
+                 }
+                 auto& stat=hot->entries[at].stat; ++stat.count;stat.ns+=measured[i];
+                 stat.max_ns=std::max(stat.max_ns,measured[i]);
++                hot->entries[at].render.Add(parts[i]);
+             }
+             ReportLocked(false);
+         }
+@@ -192,13 +222,20 @@
+                 Names[i], s.count, s.ns/1e6, s.ns/s.count/1e3, s.max_ns/1e3,
+                 frame > last_frame ? s.ns * every / 1e6 / (frame - last_frame) : 0);
+         }
++        for (unsigned i=0;i<StageCount;++i) {
++            const auto& r=window.render[i];
++            if(r.vertex.count || r.fragment.count)
++                std::printf("Metal GPU render parts: name=%s, vertex-samples=%llu, sampled-vertex-ms=%.4f, fragment-samples=%llu, sampled-fragment-ms=%.4f, paired-samples=%llu, sampled-overlap-ms=%.4f, sampled-stage-gap-ms=%.4f; stage spans include dependencies/tile work and can overlap\n",
++                    Names[i],r.vertex.count,r.vertex.ns/1e6,r.fragment.count,r.fragment.ns/1e6,r.paired,r.overlap_ns/1e6,r.gap_ns/1e6);
++        }
+         std::array<unsigned,128> order{};
+         for(unsigned i=0;i<hot->used;++i) order[i]=i;
+         std::sort(order.begin(),order.begin()+hot->used,[&](unsigned a,unsigned b){return hot->entries[a].stat.ns>hot->entries[b].stat.ns;});
+         for(unsigned i=0;i<std::min(hot->used,8u);++i) {
+             const auto& h=hot->entries[order[i]];
+-            std::printf("Metal GPU hot pass: label=%s, samples=%llu, sampled-ms=%.4f, estimated-ms/frame=%.4f; first pipeline of pass, not isolated shader time\n",
+-                h.label.data(),h.stat.count,h.stat.ns/1e6,frame>last_frame?h.stat.ns*every/1e6/(frame-last_frame):0);
++            std::printf("Metal GPU hot pass: label=%s, samples=%llu, sampled-ms=%.4f, estimated-ms/frame=%.4f, vertex-samples=%llu, sampled-vertex-ms=%.4f, fragment-samples=%llu, sampled-fragment-ms=%.4f, paired-samples=%llu, sampled-overlap-ms=%.4f, sampled-stage-gap-ms=%.4f; first pipeline of pass, not isolated shader time\n",
++                h.label.data(),h.stat.count,h.stat.ns/1e6,frame>last_frame?h.stat.ns*every/1e6/(frame-last_frame):0,
++                h.render.vertex.count,h.render.vertex.ns/1e6,h.render.fragment.count,h.render.fragment.ns/1e6,h.render.paired,h.render.overlap_ns/1e6,h.render.gap_ns/1e6);
+         }
+         if(hot->dropped) std::printf("Metal GPU hot pass overflow: samples=%u; overall stage totals retained\n",hot->dropped);
+         *hot={};
+@@ -304,7 +341,7 @@
+             const auto space=key.find(' ');
+             if(space==key.npos) return;
+             key.remove_prefix(space+1); // drop the monotonically increasing pass number
+-        } else if(e.stage!=Compute || !key.starts_with("CS ")) return;
++        } else if(!((e.stage==Compute && key.starts_with("CS ")) || e.stage==HostCopy || e.stage==BlurCopy)) return;
+         const auto bytes=std::min(key.size(),e.label.size()-1);
+         std::memcpy(e.label.data(),key.data(),bytes);e.label[bytes]=0;
+     }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_motion_blur.mm b/gpu/shadps4/video_core/renderer_metal/mtl_motion_blur.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_motion_blur.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_motion_blur.mm
+@@ -32,7 +32,7 @@
+         return BlurCopy::Blit;
+     }
+     if (!(a.usage & MTLTextureUsageShaderRead)) return BlurCopy::Usage;
+-    targets.CopyTextures(src,dst);
++    targets.CopyTextures(src,dst,"Copy scene without motion blur scale");
+     scheduler.EndWithBarrier();
+     return BlurCopy::Scale;
+ }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1663,12 +1663,6 @@
+     bool needs_flush = Transit(src, vk::ImageLayout::eTransferSrcOptimal,
+                                vk::PipelineStageFlagBits2::eCopy,
+                                vk::AccessFlagBits2::eTransferRead);
+-    needs_flush |= Transit(dst, vk::ImageLayout::eTransferDstOptimal,
+-                           vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+-    if (needs_flush) {
+-        FlushBarriers();
+-    }
+-
+     @autoreleasepool {
+         const vk::Format src_format = src->backing->image.image_ci.format;
+         const vk::Format dst_format = dst->backing->image.image_ci.format;
+@@ -1686,6 +1680,13 @@
+             }
+             return;
+         }
++        // Only after the source view is valid: a complete, disjoint destination overwrite
++        // makes its previous proxy pixels irrelevant. Partial/alias/failed copies retain them.
++        if(scene_targets && src!=dst && src->backing!=dst->backing)
++            scene_targets->FullCopyOverwrite(*dst,(__bridge const void*)src_texture,(__bridge const void*)dst_texture);
++        needs_flush |= Transit(dst, vk::ImageLayout::eTransferDstOptimal,
++                               vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
++        if(needs_flush) FlushBarriers();
+         scheduler.BlitEncoder(__func__);
+         id<MTLBlitCommandEncoder> blit = impl->sched.blit;
+         for (u32 mip = 0; mip < num_mips; ++mip) {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -71,6 +71,11 @@
+     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
+     /// Runtime::Transit: a use of the native image. Writes are the access bits of `access`.
+     void NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access);
++
++    /// Called only after validating a complete non-aliasing native CopyImage destination.
++    void FullCopyOverwrite(VideoCore::Image& image, const void* source, const void* target);
++
++    [[nodiscard]] u64 DiscardedCopyResolves() const;
+ 
+     /// Host-only nearest copy/scale. Caller owns coherence and ShaderRead/PixelFormatView usage.
+     /// Both textures must be single-sample 2D, level zero, with matching format classes.
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -6,6 +6,10 @@
+ #import <Metal/Metal.h>
+ 
+ #include <cstdio>
++#include <algorithm>
++#include <array>
++#include <string_view>
++#include <utility>
+ #include <chrono>
+ #include <cstdlib>
+ #include <unordered_map>
+@@ -162,6 +166,36 @@
+ 
+ /// The pipelines of the copy passes (made on first use, on the recording thread).
+ struct SceneTargets::Impl {
++    const char* copy_reason = "coherence";
++    struct CopyRow {
++        u64 uid=0, count=0; u32 level=0, sw=0, sh=0, tw=0, th=0, format=0;
++        bool resolve=false; const char* reason=nullptr;
++    };
++    struct CopyAudit {
++        std::array<CopyRow,128> rows{}; unsigned used=0; u64 dropped=0, total=0;
++        std::chrono::steady_clock::time_point reported=std::chrono::steady_clock::now();
++        void Record(CopyRow key) {
++            ++total;unsigned i=0;
++            for(;i<used;++i) { const auto& r=rows[i];
++                if(r.uid==key.uid && r.level==key.level && r.resolve==key.resolve && r.reason==key.reason &&
++                   r.sw==key.sw && r.sh==key.sh && r.tw==key.tw && r.th==key.th && r.format==key.format) break;
++            }
++            if(i==used) { if(used==rows.size()) ++dropped;else rows[used++]=key; }
++            if(i<used) ++rows[i].count;
++            const auto now=std::chrono::steady_clock::now();
++            if(now-reported<std::chrono::seconds(5)) return;
++            std::printf("Metal scene copies: calls=%llu, overflow=%llu; fixed 128 keys, top 12 counts\n",(unsigned long long)total,(unsigned long long)dropped);
++            std::sort(rows.begin(),rows.begin()+used,[](const auto& a,const auto& b){return a.count>b.count;});
++            for(unsigned j=0;j<std::min(used,12u);++j) {const auto& r=rows[j];
++                std::printf("Metal scene copy: uid=%llu, mip=%u, direction=%s, reason=%s, source=%ux%u, target=%ux%u, format=%u, calls=%llu\n",
++                    (unsigned long long)r.uid,r.level,r.resolve?"resolve":"fill",r.reason,r.sw,r.sh,r.tw,r.th,r.format,(unsigned long long)r.count);
++            }
++            rows={}; used=0;total=dropped=0;reported=now;
++        }
++    };
++    std::unique_ptr<CopyAudit> copy_audit;
++    u64 overwrite_candidates=0, overwrite_dirty=0, overwrite_discarded=0;
++    std::chrono::steady_clock::time_point overwrite_reported{};
+     Device::Impl& dev;
+     id<MTLLibrary> library = nil;
+     id<MTLDepthStencilState> depth_always = nil;   ///< writes every fragment's depth
+@@ -349,11 +383,19 @@
+ }
+ 
+ void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access) {
++    const char* reason="native-read";
++    if(access & vk::AccessFlagBits2::eTransferWrite) reason="transfer-write";
++    else if(access & vk::AccessFlagBits2::eTransferRead) reason="transfer-read";
++    else if(access & vk::AccessFlagBits2::eShaderWrite) reason="shader-write";
++    else if(access & (vk::AccessFlagBits2::eColorAttachmentWrite|vk::AccessFlagBits2::eDepthStencilAttachmentWrite)) reason="attachment-write";
++    else if(access & vk::AccessFlagBits2::eShaderRead) reason="shader-read";
++    const auto before=std::exchange(impl->copy_reason,reason);
+     constexpr auto writes = vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eTransferWrite |
+                             vk::AccessFlagBits2::eColorAttachmentWrite |
+                             vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
+                             vk::AccessFlagBits2::eMemoryWrite;
+     SceneTargetsCore::NativeAccess(image, bool(access & writes));
++    impl->copy_reason=before;
+ }
+ 
+ void SceneTargets::CopyProxy(Entry& e, VideoCore::Image& original, bool to_native) {
+@@ -409,7 +451,16 @@
+         id<MTLTexture> source = to_native ? proxy : level;
+         id<MTLTexture> target = to_native ? level : proxy;
+         if (level != native) scheduler.DeferOperation([level] { (void)level; });
+-        CopyTextures((__bridge const void*)source, (__bridge const void*)target);
++        char label[88];
++        const char* reason=to_native?impl->copy_reason:(impl->copy_reason==std::string_view{"upscaler-input"}?"upscaler-input":"attachment-load");
++        std::snprintf(label,sizeof(label),"Host texture copy %s %s %lux%lu>%lux%lu f%u m%u",
++            to_native?"resolve":"fill",reason,(unsigned long)source.width,(unsigned long)source.height,
++            (unsigned long)target.width,(unsigned long)target.height,unsigned(target.pixelFormat),e.level);
++        if(scheduler.GetImpl().profile->Enabled()) {
++            if(!impl->copy_audit) impl->copy_audit=std::make_unique<Impl::CopyAudit>();
++            impl->copy_audit->Record({original.image_uid,0,e.level,u32(source.width),u32(source.height),u32(target.width),u32(target.height),u32(target.pixelFormat),to_native,reason});
++        }
++        CopyTextures((__bridge const void*)source, (__bridge const void*)target,label);
+     }
+ }
+ 
+@@ -542,6 +593,44 @@
+ }
+ } // namespace
+ 
++u64 SceneTargets::DiscardedCopyResolves() const { return impl->overwrite_discarded; }
++
++void SceneTargets::FullCopyOverwrite(VideoCore::Image& image, const void* src, const void* dst) {
++    const auto source=(__bridge id<MTLTexture>)src, target=(__bridge id<MTLTexture>)dst;
++    if(!source || !target || source==target || target!=NativeTexture(image) ||
++       image.info.resources.levels!=1 || image.info.resources.layers!=1 ||
++       source.textureType!=MTLTextureType2D || target.textureType!=MTLTextureType2D ||
++       source.sampleCount!=1 || target.sampleCount!=1 ||
++       source.mipmapLevelCount!=1 || target.mipmapLevelCount!=1 ||
++       source.width!=target.width || source.height!=target.height || source.pixelFormat!=target.pixelFormat) return;
++    auto root=[](id<MTLTexture> t) { while(t.parentTexture) t=t.parentTexture;return t; };
++    if(root(source)==root(target) || (source.buffer && source.buffer==target.buffer) ||
++       (source.iosurface && source.iosurface==target.iosurface)) return;
++    static const bool baseline=[] { const char* v=std::getenv("BB_MTL_OVERWRITE_DISCARD");return !v || v[0]!='0'; }();
++    static const char* control=std::getenv("BB_MTL_OVERWRITE_DISCARD_FILE");
++    static bool enabled=baseline;
++    static auto next=std::chrono::steady_clock::time_point{};
++    const auto now=std::chrono::steady_clock::now();
++    if(control && *control && now>=next) {
++        next=now+std::chrono::seconds(1);
++        if(FILE* f=std::fopen(control,"r")) {
++            const int value=std::fgetc(f);std::fclose(f);
++            if((value=='0'||value=='1') && enabled!=(value=='1')) {
++                enabled=value=='1';
++                std::printf("Metal overwrite mode: enabled=%d; future complete CopyImage destinations only\n",int(enabled));
++            }
++        }
++    }
++    ++impl->overwrite_candidates;
++    impl->overwrite_dirty+=ProxyDirty(image,0);
++    if(enabled) impl->overwrite_discarded+=DiscardNativeContents(image,0);
++    if(now-impl->overwrite_reported>=std::chrono::seconds(5)) {
++        std::printf("Metal overwrite discard: candidates=%llu, dirty=%llu, skipped-resolves=%llu; cumulative, full nonalias CopyImage only\n",
++            (unsigned long long)impl->overwrite_candidates,(unsigned long long)impl->overwrite_dirty,(unsigned long long)impl->overwrite_discarded);
++        impl->overwrite_reported=now;
++    }
++}
++
+ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
+                                               const VideoCore::ImageViewInfo& info, bool clear_color) {
+     auto& original = Original(id);
+@@ -572,7 +661,9 @@
+ SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
+                                         const VideoCore::ImageViewInfo& info) {
+     auto& original = Original(id);
++    const auto before=std::exchange(impl->copy_reason,"upscaler-input");
+     auto& entry = Get(id);
++    impl->copy_reason=before;
+     return {View(entry, original, info, false), vk::ImageLayout::eGeneral};
+ }
+ 
+diff --git a/gpu/shadps4/video_core/scene_targets_core.cpp b/gpu/shadps4/video_core/scene_targets_core.cpp
+--- a/gpu/shadps4/video_core/scene_targets_core.cpp
++++ b/gpu/shadps4/video_core/scene_targets_core.cpp
+@@ -75,6 +75,21 @@
+     }
+ }
+ 
++bool SceneTargetsCore::ProxyDirty(const Image& image, u32 level) const {
++    if(copying || !image.scene_proxy) return false;
++    const auto it=entries.find(Key(image.image_uid,level));
++    return it!=entries.end() && it->second->state.dirty;
++}
++
++bool SceneTargetsCore::DiscardNativeContents(Image& image, u32 level) {
++    if(copying || !image.scene_proxy) return false;
++    const auto it=entries.find(Key(image.image_uid,level));
++    if(it==entries.end()) return false;
++    const bool dirty=it->second->state.dirty;
++    it->second->state.NativeWrite();
++    return dirty;
++}
++
+ void SceneTargetsCore::Copy(Entry& entry, Image& original, bool to_native) {
+     copying = true;
+     CopyProxy(entry, original, to_native);
+diff --git a/gpu/shadps4/video_core/scene_targets_core.h b/gpu/shadps4/video_core/scene_targets_core.h
+--- a/gpu/shadps4/video_core/scene_targets_core.h
++++ b/gpu/shadps4/video_core/scene_targets_core.h
+@@ -77,6 +77,10 @@
+     /// when the use `writes`, invalidates the proxy.
+     void NativeAccess(Image&, bool writes);
+     void ResolveAll();
++    // Only a caller proving a full overwrite of this mip may discard its old contents.
++    // Partial writes and read/modify/write accesses must continue through NativeAccess.
++    bool DiscardNativeContents(Image&, u32 level);
++    [[nodiscard]] bool ProxyDirty(const Image&, u32 level) const;
+     [[nodiscard]] u64 SkippedClearFills() const { return skipped_clear_fills; }
+     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
+ 
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -906,6 +906,61 @@
+     Settle(f);
+ }
+ 
++static void TestFullCopyOverwrite(Fixture& f) {
++    std::printf("native full copy skips obsolete resolve; partial copy preserves untouched pixels\n");
++    World world{f};
++    auto info=MakeInfo(vk::Format::eR8G8B8A8Unorm,1920,1080);
++    const auto dst=world.Add(info),src=world.Add(info);
++    auto& target=world.Get(dst);auto& source=world.Get(src);
++    SceneTargets targets{f.device,f.scheduler,f.runtime,world.Lookup()};targets.SetSize({960,540});
++    const auto previous=f.runtime.scene_targets;f.runtime.scene_targets=&targets;
++    ImageViewInfo view{};view.format=info.pixel_format;view.range.extent.levels=view.range.extent.layers=1;
++    auto clear_proxy=[&] {
++        const auto a=targets.Attachment(dst,view);
++        auto* pass=[MTLRenderPassDescriptor renderPassDescriptor];
++        pass.colorAttachments[0].texture=TextureOf(a.view);pass.colorAttachments[0].loadAction=MTLLoadActionClear;
++        pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++        pass.colorAttachments[0].clearColor=MTLClearColorMake(0,1,0,1);
++        f.scheduler.RenderEncoder((__bridge const void*)pass);f.scheduler.EndWithBarrier();
++    };
++    WriteTexture(f,NativeOf(source),4,std::vector<u8>(1920*1080*4,0x35));
++    clear_proxy();CHECK(targets.ProxyDirty(target,0));
++    // The source is a validated full image; old green pixels will all be replaced by 0x35.
++    f.runtime.CopyImage(&source,&target);
++    const char* env=std::getenv("BB_MTL_OVERWRITE_DISCARD");const bool enabled=!env||env[0]!='0';
++    CHECK(targets.DiscardedCopyResolves()==(enabled?1:0));
++    auto data=ReadTexture(f,NativeOf(target),4);for(auto b:data) CHECK(b==0x35);
++    const auto load=targets.Attachment(dst,view);
++    data=ReadTexture(f,TextureOf(load.view),4);for(auto b:data) CHECK(b==0x35);
++    // Same texture/view aliases and dimension mismatches must never discard dirty state.
++    clear_proxy();
++    targets.FullCopyOverwrite(target,(__bridge const void*)NativeOf(target),(__bridge const void*)NativeOf(target));
++    CHECK(targets.ProxyDirty(target,0));
++    const auto small_id=world.Add(MakeInfo(vk::Format::eR8G8B8A8Unorm,960,540));auto& small=world.Get(small_id);
++    WriteTexture(f,NativeOf(small),4,std::vector<u8>(960*540*4,0x77));
++    f.runtime.CopyImage(&small,&target);
++    CHECK(targets.DiscardedCopyResolves()==(enabled?1:0));
++    data=ReadTexture(f,NativeOf(target),4);
++    for(unsigned y=0;y<1080;++y) for(unsigned x=0;x<1920;++x) {
++        const auto* pixel=data.data()+(y*1920+x)*4;
++        if(x<960 && y<540) {for(unsigned c=0;c<4;++c) CHECK(pixel[c]==0x77);}
++        else {CHECK(pixel[0]==0 && pixel[1]==255 && pixel[2]==0 && pixel[3]==255);}
++    }
++    // Unsupported source format must not invalidate a live proxy or throw away its result.
++    clear_proxy();
++    const auto bad_id=world.Add(MakeInfo(vk::Format::eR16G16B16A16Sfloat,1920,1080));auto& bad=world.Get(bad_id);
++    f.runtime.CopyImage(&bad,&target);CHECK(targets.ProxyDirty(target,0));
++    CHECK(targets.DiscardedCopyResolves()==(enabled?1:0));
++    if(const char* control=std::getenv("BB_MTL_OVERWRITE_DISCARD_FILE")) {
++        const auto skipped=targets.DiscardedCopyResolves();
++        auto set=[&](char mode) {FILE* file=std::fopen(control,"w");CHECK(file!=nullptr);if(file){std::fputc(mode,file);std::fclose(file);}std::this_thread::sleep_for(std::chrono::milliseconds(1100));};
++        set('0');f.runtime.CopyImage(&source,&target);CHECK(targets.DiscardedCopyResolves()==skipped);
++        clear_proxy();set('1');f.runtime.CopyImage(&source,&target);CHECK(targets.DiscardedCopyResolves()==skipped+1);
++        data=ReadTexture(f,NativeOf(target),4);for(auto b:data) CHECK(b==0x35);
++    }
++    f.runtime.scene_targets=previous;Settle(f);
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -918,6 +973,7 @@
+         TestEligibility(f);
+         TestLifetime(f);
+         TestFullColorClear(f);
++        TestFullCopyOverwrite(f);
+         TestGameVelocityMirror(f);
+         TestMotionBlurCopy(f);
+         TestVelocityBatch(f);
+diff --git a/tests/test_mtl_scheduler.mm b/tests/test_mtl_scheduler.mm
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -664,6 +664,13 @@
+         CHECK(stats.stages[stage].count>0);CHECK(stats.stages[stage].ns>0);
+     }
+     CHECK(stats.stages[Metal::GpuProfile::VelocityDraw].count==2);
++    const auto& render=stats.render[Metal::GpuProfile::GuestRender];
++    CHECK(render.vertex.count==2);CHECK(render.vertex.ns>0);
++    CHECK(render.fragment.count>0);CHECK(render.fragment.ns>0);
++    CHECK(render.paired<=render.vertex.count && render.paired<=render.fragment.count);
++    CHECK(render.overlap_ns>=0 && render.overlap_ns<=std::min(render.vertex.ns,render.fragment.ns));
++    CHECK(render.gap_ns>=0);
++    CHECK(std::abs(stats.stages[Metal::GpuProfile::GuestRender].ns-(render.vertex.ns+render.fragment.ns-render.overlap_ns+render.gap_ns))<1);
+     CHECK(*static_cast<const uint32_t*>(out.contents)==value);
+     uint8_t pixel[4]{};[texture getBytes:pixel bytesPerRow:4 fromRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0];
+     CHECK(pixel[0]>=127 && pixel[0]<=128);CHECK(pixel[3]==255);
+diff --git a/tests/test_scene_targets_core.cpp b/tests/test_scene_targets_core.cpp
+--- a/tests/test_scene_targets_core.cpp
++++ b/tests/test_scene_targets_core.cpp
+@@ -250,6 +250,25 @@
+     std::printf("full color clear preservation ok\n");
+ }
+ 
++void TestDiscardOverwrite() {
++    Fixture f;const auto chain=f.Add(960,540,3);
++    auto& t=f.targets;auto& image=*f.images[chain.index];
++    t.SetSize({960,540});t.Take();
++    ImageViewInfo view{};vk::ImageLayout layout{};
++    for(u32 i=0;i<3;++i) {view.range.base.level=i;t.BeginAttachment(chain,view,layout);}
++    t.Take();
++    assert(t.ProxyDirty(image,0) && t.ProxyDirty(image,1) && t.ProxyDirty(image,2));
++    assert(t.DiscardNativeContents(image,1));
++    assert(!t.ProxyDirty(image,1) && !t.ProxyCurrent(image,1));
++    // Overwriting one mip must not discard or resolve a different dirty level.
++    t.NativeAccess(image,false);
++    assert(Eq(t.Take(),{"resolve 0","resolve 2"}));
++    view.range.base.level=1;t.BeginAttachment(chain,view,layout);
++    assert(Eq(t.Take(),{"fill 1","prepare attachment"}));
++    assert(!t.DiscardNativeContents(image,9));
++    std::printf("complete overwrite invalidation is mip-local ok\n");
++}
++
+ } // namespace
+ 
+ int main() {
+@@ -257,6 +276,7 @@
+     TestCoherence();
+     TestSetSizeAndMips();
+     TestFullColorClear();
++    TestDiscardOverwrite();
+     std::printf("scene-targets-core-test passed\n");
+     return 0;
+ }

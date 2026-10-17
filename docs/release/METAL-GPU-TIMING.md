@@ -43,6 +43,15 @@ Labels identify pass families, not isolated shader execution times. The analyzer
 their sampled estimates; labels outside the top eight of a window are absent from its ranking.
 No additional passes, shader variants or resource references are created by label collection.
 
+Adapter patch 0013 separately accumulates the existing vertex and fragment timestamps,
+their overlap and the gap between their intervals, both per stage and per hot-pass label.
+These are whole hardware-stage spans, including dependencies and tile work, not isolated
+shader ALU durations. Missing fragment/vertex samples are counted separately from zero duration.
+Stage gaps are not a direct measure of CPU encoder-switching overhead. Bounded hot labels
+also distinguish scene-copy direction, triggering native access, dimensions, format and mip.
+The copy audit prints unsampled counts for at most 128 UID/mip/reason/shape keys, top twelve
+per independent reporting window. It retains numeric metadata only, never Metal resources.
+
 Stage spans may overlap. Their sum is NOT frame time. An interval union measures covered GPU
 time within each sampled command buffer; remaining command-buffer time includes dependencies,
 tile work and uninstrumented work. It is NOT a direct measurement of switching overhead. CPU
