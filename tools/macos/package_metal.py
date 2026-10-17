@@ -41,7 +41,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -121,6 +121,7 @@ def main():
     info['CFBundleVersion'] = ''.join(args.version.split('-')[0].split('.'))
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     (engine / '.version').write_text(args.version + '\n')
+    copy(ROOT / 'docs/release/METAL-PROXY-COMPRESSION.md', engine / 'METAL-PROXY-COMPRESSION.md')
     patches = {p.name: sha(p) for p in sorted((ROOT / 'gpu/patches/metal').glob('*.patch'))}
     manifest = dict(version=args.version, source_commit=run('git', '-C', ROOT, 'rev-parse', 'HEAD'),
                     upstream_repository='https://github.com/Huax-1839/bloodborne-macos',
@@ -141,6 +142,8 @@ def main():
                     vertex_strict_math_inline_default=True, vertex_strict_math_fallback='BB_MTL_VERTEX_MATH=0',
                     vertex_strict_math_diagnostic_control='BB_MTL_VERTEX_MATH_FILE',
                     vertex_strict_math_reference_library_limit=32, vertex_strict_math_reference_pso_limit=32,
+                    scene_proxy_lean_usage_default=True, scene_proxy_lean_usage_fallback='BB_MTL_PROXY_LEAN=0',
+                    scene_proxy_format_promotion='on first compatible non-sRGB reinterpretation; old backing/views retired after GPU tick',
                     game_started_for_validation=False, gameplay_performance_verified=False)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'

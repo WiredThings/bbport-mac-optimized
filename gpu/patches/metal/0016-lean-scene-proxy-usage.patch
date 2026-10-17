@@ -1,0 +1,237 @@
+diff --git a/gpu/shadps4/video_core/rasterizer_core.cpp b/gpu/shadps4/video_core/rasterizer_core.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core.cpp
+@@ -1201,6 +1201,7 @@
+     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
+     std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
+     bool set_ok = set_slot != nullptr;
++    const u64 scene_generation_before = scene_targets->Generation();
+     // SampleSceneProxies: bindings that may read a reduced scene proxy instead of the native
+     // image (normalized sampling only; see Shader::ImageResource::needs_native).
+     boost::container::small_vector<bool, 16> binding_proxy_ok;
+@@ -1434,7 +1435,8 @@
+             }
+         }
+     }
+-    if (set_ok && image_bindings.size() == stage.images.size()) {
++    if (set_ok && image_bindings.size() == stage.images.size() &&
++        scene_targets->Generation() == scene_generation_before) {
+         // Remember the set: the same T#s resolve the same way while no image is (un)registered.
+         set_slot->generation = texture_cache.RegistryGeneration();
+         set_slot->scene_generation = scene_targets->Generation();
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -79,6 +79,10 @@
+     /// Full single-level color clear of an existing proxy; lazy native resolve preserves readers.
+     bool ClearProxy(VideoCore::Image&, const VideoCore::SubresourceRange&, const vk::ClearValue&);
+     [[nodiscard]] u64 ProxyClearCount() const;
++    /// Descriptor memos must not retain views of a backing replaced on first format need.
++    [[nodiscard]] u64 Generation() const noexcept {
++        return SceneTargetsCore::Generation() + view_generation;
++    }
+ 
+     /// Host-only nearest copy/scale. Caller owns coherence and ShaderRead/PixelFormatView usage.
+     /// Both textures must be single-sample 2D, level zero, with matching format classes.
+@@ -105,6 +109,7 @@
+     Scheduler& scheduler;
+     Runtime& runtime;
+     std::unique_ptr<Impl> impl;
++    u64 view_generation = 0;
+ };
+ 
+ /// The scene targets behind the core's interface (as Vulkan::SceneTargetsAdapter): the views the
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -93,6 +93,15 @@
+     return cls == Class::Depth || cls == Class::DepthStencil;
+ }
+ 
++bool LeanProxyUsage() {
++    static const bool enabled = [] {
++        const char* full = std::getenv("BB_MTL_FULL_USAGE");
++        const char* lean = std::getenv("BB_MTL_PROXY_LEAN");
++        return !(full && full[0] == '1') && !(lean && lean[0] == '0');
++    }();
++    return enabled;
++}
++
+ /// What the copy passes draw with: a fullscreen triangle (vertex 0, 1, 2 cover the clip space) and
+ /// per format class a fragment shader that reads the source texel under the destination pixel,
+ /// scaled: `scale` is source size / destination size, `position.xy` the pixel centre, so a
+@@ -167,6 +176,7 @@
+ /// The pipelines of the copy passes (made on first use, on the recording thread).
+ struct SceneTargets::Impl {
+     const char* copy_reason = "coherence";
++    u64 lean_created = 0, full_created = 0, format_promotions = 0;
+     struct CopyRow {
+         u64 uid=0, count=0; u32 level=0, sw=0, sh=0, tw=0, th=0, format=0;
+         bool resolve=false; const char* reason=nullptr;
+@@ -360,13 +370,19 @@
+     ci.usage = vk::ImageUsageFlagBits::eSampled |
+                (depth ? vk::ImageUsageFlagBits::eDepthStencilAttachment
+                       : vk::ImageUsageFlagBits::eColorAttachment);
+-    // (Views: the formats of the passes' pipelines, the stencil of a combined depth format.)
+-    ci.flags = vk::ImageCreateFlagBits::eMutableFormat;
++    // Colour targets retain lossless compression until a non-sRGB format view is needed.
++    // Depth/stencil keeps its stencil view usage, as in the texture-cache policy (P10.1).
++    const bool lean = !depth && LeanProxyUsage();
++    ci.flags = lean ? vk::ImageCreateFlags{} : vk::ImageCreateFlagBits::eMutableFormat;
+     runtime.CreateImage(data->image, ci);
+     runtime.AssociateGuestImage(data->image,original.info.guest_address,original.info.guest_size);
+     data->base_format = ci.format;
+     runtime.SetImageName(data->image, fmt::format("Scene proxy {}x{} {}", size.width, size.height,
+                                                   vk::to_string(original.info.pixel_format)));
++    ++(lean ? impl->lean_created : impl->full_created);
++    std::printf("Metal proxy usage: lean-created=%llu, full-created=%llu, format-promotions=%llu; no storage usage, no extra cache\n",
++                (unsigned long long)impl->lean_created, (unsigned long long)impl->full_created,
++                (unsigned long long)impl->format_promotions);
+     return data;
+ }
+ 
+@@ -524,7 +540,7 @@
+     }
+ }
+ 
+-VideoCore::NativeView SceneTargets::View(Entry& e, const VideoCore::Image&,
++VideoCore::NativeView SceneTargets::View(Entry& e, const VideoCore::Image& original,
+                                          const VideoCore::ImageViewInfo& info, bool) {
+     auto& proxy = Of(e);
+     id<MTLTexture> base = TextureOf(proxy.image);
+@@ -536,14 +552,43 @@
+             return NativeViewOf(view.texture);
+         }
+     }
++    const vk::Format format = runtime.SupportedFormat(info.format, {});
++    const u32 view_format = VkToMtl::PixelFormat(format);
++    const bool compatible = runtime.ViewFormatCompatible(proxy.base_format, info.format);
++    if (compatible && !(base.usage & MTLTextureUsagePixelFormatView) &&
++        VkToMtl::ViewNeedsPixelFormatUsage(proxy.base_format, format)) {
++        // First real reinterpretation: preserve exact bits and existing old-view users.
++        // The old backing/views are retired after this tick, never retained as a second cache.
++        scheduler.EndWithBarrier();
++        auto ci = proxy.image.image_ci;
++        ci.pNext = nullptr;
++        ci.flags |= vk::ImageCreateFlagBits::eMutableFormat;
++        VideoCore::UniqueImage fresh;
++        runtime.CreateImage(fresh, ci);
++        runtime.AssociateGuestImage(fresh, original.info.guest_address, original.info.guest_size);
++        runtime.SetImageName(fresh, fmt::format("Scene proxy {}x{} {} (format view)",
++                                              base.width, base.height, vk::to_string(proxy.base_format)));
++        scheduler.BlitEncoder("Promote scene proxy format usage");
++        [scheduler.GetImpl().blit copyFromTexture:base toTexture:TextureOf(fresh)];
++        scheduler.EndWithBarrier();
++        if (!proxy.views.empty()) {
++            scheduler.DeferOperation([views = std::move(proxy.views)] { (void)views; });
++            proxy.views.clear();
++        }
++        proxy.image = std::move(fresh); // Runtime::DestroyImage defers the old backing.
++        base = TextureOf(proxy.image);
++        ++view_generation;
++        ++impl->format_promotions;
++        std::printf("Metal proxy usage: lean-created=%llu, full-created=%llu, format-promotions=%llu; copied existing bits once, retired old backing/views\n",
++                    (unsigned long long)impl->lean_created, (unsigned long long)impl->full_created,
++                    (unsigned long long)impl->format_promotions);
++    }
+     // The view's pixel format and swizzle as Runtime::CreateImageView derives them for the
+     // native image, so that a pass finds the format its pipeline was made for.
+     MTLPixelFormat pixel_format = base.pixelFormat;
+-    const vk::Format format = runtime.SupportedFormat(info.format, {});
+-    const u32 view_format = VkToMtl::PixelFormat(format);
+     if (view_format != 0 && view_format != u32(base.pixelFormat) &&
+-        (base.usage & MTLTextureUsagePixelFormatView) &&
+-        runtime.ViewFormatCompatible(proxy.base_format, info.format)) {
++        compatible && ((base.usage & MTLTextureUsagePixelFormatView) ||
++                       !VkToMtl::ViewNeedsPixelFormatUsage(proxy.base_format, format))) {
+         pixel_format = MTLPixelFormat(view_format);
+     }
+     const VkToMtl::TextureSwizzle swizzle = VkToMtl::ComposeSwizzle(info.mapping, format);
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -485,6 +485,75 @@
+ /// The proxies and their views go through the deferred operations: nothing is released before
+ /// the command buffers that use them completed (the debug layer reports otherwise), also when
+ /// the size changes while copies are pending.
++static void TestLeanProxyViews(Fixture& f, vk::Format format, vk::Format integer, u32 bytes) {
++    std::printf("lean proxy views: %s, exact format promotion and old backing retirement\n",
++                vk::to_string(format).c_str());
++    const char* full = std::getenv("BB_MTL_FULL_USAGE");
++    const char* lean = std::getenv("BB_MTL_PROXY_LEAN");
++    const bool expected_lean = !(full && full[0] == '1') && !(lean && lean[0] == '0');
++    World world{f};
++    SceneTargets targets{f.device, f.scheduler, f.runtime, world.Lookup()};
++    targets.SetSize({960, 540});
++    const auto image_id = world.Add(MakeInfo(format, 1920, 1080));
++    auto& image = world.Get(image_id);
++    ImageViewInfo view{};
++    view.format = format;
++    view.range.extent.levels = view.range.extent.layers = 1;
++    auto target = targets.Attachment(image_id, view, true);
++    id<MTLTexture> old = TextureOf(target.view);
++    __weak id<MTLTexture> retired = old;
++    CHECK(bool(old.usage & MTLTextureUsagePixelFormatView) == !expected_lean);
++    CHECK(!(old.usage & MTLTextureUsageShaderWrite));
++    auto clear = [&](id<MTLTexture> texture, MTLClearColor color) {
++        auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
++        pass.colorAttachments[0].texture = texture;
++        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
++        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
++        pass.colorAttachments[0].clearColor = color;
++        f.scheduler.RenderEncoder((__bridge const void*)pass);
++        f.scheduler.EndRendering();
++    };
++    std::optional<SceneTargets::Target> bits;
++    std::vector<u8> copied;
++    u64 promoted_generation = 0;
++    auto reinterpreted = view;
++    reinterpreted.format = integer;
++    @autoreleasepool {
++    clear(old, MTLClearColorMake(0, 1, 0, 1)); // pending GPU write, no CPU settle before promotion
++    const auto generation = targets.Generation();
++    if (format == vk::Format::eR8G8B8A8Unorm) {
++        auto srgb = view;
++        srgb.format = vk::Format::eR8G8B8A8Srgb;
++        const auto twin = targets.SampleProxy(image, srgb);
++        CHECK(twin && TextureOf(twin->view).pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB);
++        CHECK(targets.Generation() == generation); // sRGB-only views need no promotion
++    }
++    bits = targets.SampleProxy(image, reinterpreted);
++    CHECK(bits.has_value());
++    CHECK(TextureOf(bits->view).usage & MTLTextureUsagePixelFormatView);
++    CHECK(targets.Generation() == generation + (expected_lean ? 1 : 0));
++    copied = ReadTexture(f, TextureOf(bits->view), bytes);
++    const auto original = ReadTexture(f, old, bytes);
++    CHECK(copied == original); // integer view checks the original bits, not float tolerance
++    promoted_generation = targets.Generation();
++    CHECK(targets.SampleProxy(image, reinterpreted)->view == bits->view);
++    CHECK(targets.Generation() == promoted_generation);
++    } // Drain test descriptors/readback command buffers before checking real destruction.
++    old = nil;
++    Settle(f);
++    if (expected_lean) CHECK(retired == nil); // not a second retained backing or view cache
++
++    target = targets.Attachment(image_id, view);
++    clear(TextureOf(target.view), MTLClearColorMake(0, 0, 1, 1));
++    const auto newest = ReadTexture(f, TextureOf(bits->view), bytes);
++    CHECK(newest != copied); // a later write uses the new backing for every cached view
++    CHECK(targets.Generation() == promoted_generation);
++    targets.NativeAccess(image, vk::AccessFlagBits2::eTransferRead);
++    CHECK(ProxyMatches(ReadTexture(f, NativeOf(image), bytes), 1920, 1080,
++                       newest, 960, 540, bytes));
++    Settle(f);
++}
++
+ static void TestLifetime(Fixture& f) {
+     std::printf("lifetime\n");
+     World world{f};
+@@ -1025,6 +1094,8 @@
+         TestDepthStencil(f);
+         TestEligibility(f);
+         TestLifetime(f);
++        TestLeanProxyViews(f, vk::Format::eR8G8B8A8Unorm, vk::Format::eR8G8B8A8Uint, 4);
++        TestLeanProxyViews(f, vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16B16A16Uint, 8);
+         TestFullColorClear(f);
+         TestFullCopyOverwrite(f);
+         TestDirectProxyClear(f);
