@@ -9,6 +9,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import tempfile
 
 from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loads, minimum, run, sha
 
@@ -41,7 +42,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -87,6 +88,7 @@ def main():
         assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
     for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py', 'tools/macos/benchmark.py']:
         copy(ROOT / relative, engine / relative)
+    copy(ROOT / 'docs/release/METAL-FRAME-CAPTURE.md', engine / 'METAL-FRAME-CAPTURE.md')
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
     copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-1.md', engine / 'METAL-PERFORMANCE-1.md')
@@ -101,6 +103,7 @@ def main():
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-3.md', engine / 'METAL-PERFORMANCE-3.md')
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-4.md', engine / 'METAL-PERFORMANCE-4.md')
     copy(ROOT / 'docs/release/METAL-VERTEX-MATH.md', engine / 'METAL-VERTEX-MATH.md')
+    copy(ROOT / 'tools/macos/analyze_metal_attachments.py', engine / 'tools/macos/analyze_metal_attachments.py')
     copy(ROOT / 'tools/macos/analyze_metal_gpu.py', engine / 'tools/macos/analyze_metal_gpu.py')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
@@ -148,6 +151,8 @@ def main():
                     upscale_alpha_diagnostic_control='BB_MTL_UPSCALE_ALPHA_FILE',
                     metal_quality_presets=[1.0, 1.5, 1.7, 2.0, 3.0, 1.25],
                     fragment_uniform_specialization_default=False, fragment_uniform_specialization_enable='BB_MTL_FRAGMENT_UNIFORMS=1',
+                    color_clear_batching_default=False,color_clear_batching_enable='BB_MTL_BATCH_CLEARS=1',
+                    attachment_metadata_capture='--capture-native',attachment_metadata_max_bytes=2097152,
                     benchmark_entry='tools/macos/benchmark.py', benchmark_input_isolated=True,
                     scene_proxy_lean_usage_default=True, scene_proxy_lean_usage_fallback='BB_MTL_PROXY_LEAN=0',
                     scene_proxy_format_promotion='on first compatible non-sRGB reinterpretation; old backing/views retired after GPU tick',
@@ -167,8 +172,13 @@ def main():
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app)], check=True)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     # No arguments exits with usage before guest memory/window/GPU initialization.
-    smoke = subprocess.run([str(probe)], env=dict(os.environ, DYLD_BIND_AT_LAUNCH='1'),
-                           text=True, capture_output=True, timeout=15)
+    with tempfile.TemporaryDirectory(prefix='bbport-isolated-link-check-') as directory:
+        # Even the usage-only link check gets no access to normal game/user configuration.
+        env={k:v for k,v in os.environ.items() if not k.startswith(('BB_','MTLCAPTURE_')) and k not in ('MTL_CAPTURE_ENABLED','DYLD_INSERT_LIBRARIES','DYLD_LIBRARY_PATH')}
+        env.update(DYLD_BIND_AT_LAUNCH='1',BB_GAME_DIR=directory+'/no-game',
+                   BB_USER_DIR=directory+'/user',BB_DATA_DIR=directory+'/data',
+                   BB_GPU_USER_DIR=directory+'/cache',BB_CONFIG=directory+'/missing.ini')
+        smoke = subprocess.run([str(probe)], env=env,text=True,capture_output=True,timeout=15)
     assert smoke.returncode == 1 and 'Usage:' in smoke.stderr, smoke.stderr
     manifest['packaged_dyld_smoke_test'] = 'passed, eager binding and usage exit'
     archive = args.output / f'Bloodborne-Optimized-{args.version}.zip'

@@ -19,6 +19,13 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
+The `0.2.18-metal-perf9` preview adds bounded, single-frame attachment diagnostics and
+an optional independent color-clear batching experiment. Batching remains disabled after
+matched gameplay runs showed no FPS benefit. The preview retains
+resolution, sampling, effects and cache budgets. The direct Metal GPU backend and game
+runtime are x86-64 under Rosetta; the launcher is native Apple Silicon. See the
+[capture scope, compatibility checks and benchmark results](docs/release/METAL-FRAME-CAPTURE.md).
+
 The `0.1.4-mem1` preview adds upstream idle command-buffer trimming, corrected macOS
 graphics-memory budgeting and a pinned KosmicKrisp command-memory fix. It preserves the
 Chinese launcher and perf1 shader caches. See [provenance and validation limits](docs/release/MEMORY-FIX-1.md).

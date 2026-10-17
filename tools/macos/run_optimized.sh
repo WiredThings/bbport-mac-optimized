@@ -82,6 +82,7 @@ export BB_CMDBUF_TRIM=${BB_CMDBUF_TRIM:-1} BB_KK_POOL_FIX=${BB_KK_POOL_FIX:-1}
 # These must never turn a normal Play click into an automated input/benchmark session.
 if [[ $benchmark == 0 ]]; then
     unset BB_PAD_FILE BB_PAD_FILE_ONLY BB_PAD_REPLAY BB_PAD_RECORD BB_PRESET_FILE BB_TOGGLE_FILE
+    unset BB_CAPTURE_NATIVE BB_CAPTURE_DIR
     unset BB_CAPTURE_TRIGGER BB_PRESENT_DUMP_TRIGGER BB_TIMEOUT BB_QUICKLOAD_PENDING
 else
     [[ $renderer == metal && ${BB_PAD_FILE_ONLY:-} == 1 && -f ${BB_PAD_FILE:-} ]] || die "Benchmark requires Metal and isolated scripted input"

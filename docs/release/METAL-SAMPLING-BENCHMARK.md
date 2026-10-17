@@ -1,5 +1,9 @@
 # Automated Metal gameplay benchmark and fragment sampling audit (0.2.17)
 
+This report describes the historical 0.2.17 cohort. The owner's newer save enters
+Central Yharnam directly; its separate cohort and measurements are documented in
+[the attachment audit](METAL-FRAME-CAPTURE.md). Do not mix scores between these saves.
+
 ## Reusable benchmark
 
 `tools/macos/benchmark.py` builds a private test cohort from the owner's installed assets,

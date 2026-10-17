@@ -26,7 +26,7 @@ from datetime import datetime
 DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
-OVERRIDES = {'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
+OVERRIDES = {'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
 
 
@@ -136,7 +136,8 @@ def stable_scene(rows, expected=None, seconds=3):
     # Validate the window, retain all frame times, and never count the title camera as gameplay.
     try: recent,_=camera_telemetry(recent)
     except ValueError: return False
-    return all(scene_matches(r,expected) for r in recent) and sum(float(r['draws'])>300 for r in recent)/len(recent)>=.99
+    stationary=all(max(float(r[k]) for r in recent)-min(float(r[k]) for r in recent)<=.05 for k in ('cam_x','cam_y','cam_z'))
+    return stationary and all(scene_matches(r,expected) for r in recent) and sum(float(r['draws'])>300 for r in recent)/len(recent)>=.95
 
 
 def metrics(rows):
@@ -220,12 +221,74 @@ def stop_owned(process):
         return
     if os.getpgid(process.pid) != process.pid:
         raise RuntimeError('Unexpected process group; refusing broad termination')
-    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait(timeout=5)
+        return
+    except PermissionError:
+        # Capture tooling may add protected helper processes to the group. The
+        # Popen-owned leader is still ours; never broaden termination to helpers.
+        if process.poll() is not None:
+            return
+        os.kill(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=12)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except PermissionError:
+            if process.poll() is None: os.kill(process.pid,signal.SIGKILL)
         process.wait(timeout=5)
+
+
+def capture_frame(process, folder, guard, max_swap_growth_mib=1024, shared_memory=False):
+    """Capture one layer frame of the owned game; never score capture-instrumented FPS."""
+    if process.pid not in game_pids() or os.getpgid(process.pid) != process.pid:
+        raise ValueError('Capture target is not the private game process')
+    tool = shutil.which('gpucapture')
+    if not tool:
+        raise ValueError('Apple gpucapture is unavailable')
+    boundaries = command([tool, 'boundaries', '--pid', str(process.pid)])
+    (folder/'capture-boundaries.txt').write_text(boundaries)
+    # The default selects a unique CAMetalLayer; without a layer it captures only one
+    # command buffer, which must never be mistaken for a complete frame.
+    if not re.search(r'\b(?:Layer|CAMetalLayer)\b', boundaries, re.I):
+        raise ValueError('No layer boundary: refusing a partial command-buffer capture')
+    config=command([tool,'config','--pid',str(process.pid)]) if shared_memory else ''
+    if shared_memory:
+        config+='\n'+command([tool,'config','--pid',str(process.pid),'--shared-mem-opt','enabled'])
+        (folder/'capture-config.txt').write_text(config)
+    output=folder/'gpu-frame.gputrace'
+    args=[tool,'start','--pid',str(process.pid),'--count','1','--disable-unused-recording',
+          '--disable-backtrace-recording','--output',str(output)]
+    initial=pressure();started=time.monotonic();worker=None;limit=min(max_swap_growth_mib,1024)
+    try:
+        with (folder/'capture-tool.log').open('w') as log:
+            worker=subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            while worker.poll() is None:
+                guard()
+                p=pressure()
+                if p['level']>=4 or p['swap_mib']-initial['swap_mib']>limit:
+                    raise RuntimeError('Capture memory guard stopped this diagnostic')
+                if time.monotonic()-started>45:
+                    raise RuntimeError('Single-frame capture timed out')
+                time.sleep(.5)
+            if worker.returncode:
+                raise RuntimeError('gpucapture failed; see capture-tool.log')
+        guard()
+        final=pressure()
+        if final['level']>=4 or final['swap_mib']-initial['swap_mib']>limit:
+            raise RuntimeError('Capture exceeded its memory guard')
+        if not output.exists():
+            raise RuntimeError('gpucapture did not produce a trace')
+        return dict(valid=False,kind='single-layer-frame',trace=str(output),seconds=time.monotonic()-started,shared_memory_optimized=shared_memory,
+                    command=args,notes=['Diagnostic only; not an FPS result.','Unused resources and backtraces omitted.'])
+    finally:
+        if worker is not None and worker.poll() is None:
+            # Stop only this game's capture and the CLI process group we created.
+            try: subprocess.run([tool,'stop','--pid',str(process.pid)],capture_output=True,timeout=5)
+            finally: stop_owned(worker)
 
 
 def run(args):
@@ -255,7 +318,7 @@ def run(args):
     shutil.copytree(root/'seed-user', folder/'user')
     (folder/'data').mkdir();shutil.copy2(root/'settings.ini', folder/'data/bbport.ini')
     pad = folder/'pad.txt';pad.write_text(NEUTRAL)
-    env = {k:v for k,v in os.environ.items() if not k.startswith('BB_') and k not in ('DYLD_LIBRARY_PATH','PYTHONHOME','PYTHONPATH','VK_DRIVER_FILES','VK_ICD_FILENAMES')}
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('BB_','MTLCAPTURE_')) and k not in ('MTL_CAPTURE_ENABLED','DYLD_LIBRARY_PATH','PYTHONHOME','PYTHONPATH','VK_DRIVER_FILES','VK_ICD_FILENAMES')}
     env.update(manifest['environment'])
     variants = {}
     for item in args.env:
@@ -269,6 +332,10 @@ def run(args):
                BB_TIMEOUT=str(args.startup_timeout+args.warmup+args.seconds+90))
     if args.profile_gpu:
         env.update(BB_MTL_GPU_TIMING='1', BB_MTL_GPU_TIMING_EVERY='8')
+    if args.capture_frame:
+        env['MTL_CAPTURE_ENABLED']='1'
+    if args.capture_native:
+        env.update(BB_CAPTURE_NATIVE='1',BB_CAPTURE_DIR=str(folder),BB_CAPTURE_TRIGGER=str(folder/'capture.trigger'),BB_PASS_LABELS='1')
     log_file = (folder/'run.log').open('w')
     source_before = inventory(manifest['source_save'])
     process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
@@ -333,6 +400,32 @@ def run(args):
             if time.monotonic()-warm_start>args.warmup+90:
                 raise RuntimeError('Shader warmup did not settle')
             time.sleep(.5)
+        if args.capture_native:
+            print('Recording one decoded GPU frame: bounded attachment metadata only',flush=True)
+            (folder/'capture.trigger').write_text('1')
+            capture_deadline=time.monotonic()+10
+            while time.monotonic()<capture_deadline:
+                guard()
+                captures=list(folder.glob('frame_*.txt'))
+                if captures and 'passes written to' in log_path.read_text(errors='replace'):break
+                time.sleep(.1)
+            else:raise RuntimeError('Native attachment capture timed out')
+            native=[json.loads(line[7:]) for line in captures[0].read_text().splitlines() if line.startswith('NATIVE ')]
+            if not native or native[0].get('truncated',True) or not any(row.get('op')=='attachment' for row in native):
+                raise RuntimeError('Native metadata is incomplete')
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Native attachments/encoders and semantic guest resources; no texture or buffer contents.','Not a performance result.']))
+            print(f'Attachment metadata captured: {captures[0]}',flush=True)
+            return
+        if args.capture_frame:
+            print('Capturing one layer frame; diagnostic FPS is not scored',flush=True)
+            captured=capture_frame(process,folder,guard,args.max_swap_growth_mib,args.capture_shared_memory)
+            if args.capture_shared_memory:
+                captured['notes'].append('Forced shared-memory optimization: API/attachment metadata audit only; syscall-written resource contents may be incomplete. Do not treat replay pixels or profiling as validated.')
+            captured.update(scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
+                            renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'))
+            write_json(folder/'capture.json',captured)
+            print(f"Single frame captured: {captured['trace']}",flush=True)
+            return
         first_t=float(frame_rows(frames)[-1]['t_s']);measure_start=time.monotonic()
         write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds))
         print(f'Measuring {args.seconds}s; GPU stage timing={args.profile_gpu}',flush=True)
@@ -365,21 +458,32 @@ def run(args):
         raise
     finally:
         pad.write_text(NEUTRAL)
-        if process is not None:
-            stop_owned(process)
-        log_file.close()
-        for sig, handler in old_signals.items(): signal.signal(sig,handler)
-        if inventory(manifest['source_save'])!=source_before:
+        stop_error=None
+        try:
+            if process is not None: stop_owned(process)
+        except Exception as error:
+            stop_error=str(error)
+        finally:
+            log_file.close()
+            for sig, handler in old_signals.items(): signal.signal(sig,handler)
+        unchanged=inventory(manifest['source_save'])==source_before
+        write_json(folder/'cleanup.json',dict(own_process_stopped=stop_error is None,stop_error=stop_error,original_saves_unchanged=unchanged,launcher_preferences_written=False))
+        if not unchanged:
             (folder/'result.json').unlink(missing_ok=True)
+            (folder/'capture.json').unlink(missing_ok=True)
             raise RuntimeError('Original save changed externally; result invalidated')
-        write_json(folder/'cleanup.json',dict(own_process_stopped=True,original_saves_unchanged=True,launcher_preferences_written=False))
-        if (folder/'result.json').exists():
-            completed=json.loads((folder/'result.json').read_text());completed['valid']=True;write_json(folder/'result.json',completed)
+        if stop_error:
+            raise RuntimeError(f'Process cleanup incomplete; results invalid: {stop_error}')
+        for name in ('result.json','capture.json'):
+            if (folder/name).exists():
+                completed=json.loads((folder/name).read_text());completed['valid']=True;write_json(folder/name,completed)
         print('Own process stopped; original saves and launcher preferences untouched',flush=True)
 
 
 def compare(args):
     a=json.loads(args.before.read_text());b=json.loads(args.after.read_text())
+    if 'metrics' not in a or 'metrics' not in b:
+        raise ValueError('Diagnostic captures are not performance results')
     if not a['valid'] or not b['valid'] or a['cohort_fingerprint']!=b['cohort_fingerprint'] or a['profile_gpu']!=b['profile_gpu'] or a['system']!=b['system']:
         raise ValueError('Unmatched workloads, instrumentation or host; refusing comparison')
     if math.dist(a['camera'],b['camera'])>.05:
@@ -394,11 +498,15 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('init');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--launcher-data',type=Path,default=DEFAULT_DATA);p.add_argument('--expected-camera',nargs=3,type=float);p.set_defaults(func=init)
-    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
+    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
     p=sub.add_parser('compare');p.add_argument('before',type=Path);p.add_argument('after',type=Path);p.set_defaults(func=compare)
     args=parser.parse_args()
     if args.command=='run' and not (15<=args.warmup<=180 and 15<=args.seconds<=180 and 30<=args.startup_timeout<=600 and 256<=args.max_swap_growth_mib<=2048):
         parser.error('Use bounded warmup/sample (15..180s), startup (30..600s), and swap growth (256..2048 MiB)')
+    if args.command=='run' and (args.capture_frame and args.capture_native):
+        parser.error('Choose either resource capture or native attachment metadata')
+    if args.command=='run' and args.capture_shared_memory and not args.capture_frame:
+        parser.error('--capture-shared-memory requires --capture-frame')
     try: args.func(args)
     except Exception as e:
         print(f'Benchmark failed: {e}',file=sys.stderr);return 1

@@ -7,11 +7,32 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 spec=importlib.util.spec_from_file_location('benchmark',Path(__file__).parents[1]/'tools/macos/benchmark.py')
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 
 class BenchmarkTests(unittest.TestCase):
+    def test_capture_refuses_unowned_target(self):
+        with patch.object(b,'game_pids',return_value=[]), tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError): b.capture_frame(Mock(pid=1234),Path(d),Mock())
+    def test_capture_requires_frame_boundary(self):
+        with patch.object(b,'game_pids',return_value=[1234]), patch.object(b.os,'getpgid',return_value=1234), patch.object(b.shutil,'which',return_value='/usr/bin/gpucapture'), patch.object(b,'command',return_value='Device id=1\nQueue id=2'), tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError): b.capture_frame(Mock(pid=1234),Path(d),Mock())
+    def test_capture_one_frame_command_and_no_fps_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'gpu-frame.gputrace').mkdir();worker=Mock(returncode=0);worker.poll.return_value=0
+            with patch.object(b,'game_pids',return_value=[1234]), patch.object(b.os,'getpgid',return_value=1234), patch.object(b.shutil,'which',return_value='/usr/bin/gpucapture'), patch.object(b,'command',return_value='Layer id=3'), patch.object(b,'pressure',return_value=dict(level=2,swap_mib=100)), patch.object(b.subprocess,'Popen',return_value=worker) as popen:
+                result=b.capture_frame(Mock(pid=1234),folder,Mock());args=popen.call_args.args[0]
+                self.assertEqual(args[args.index('--pid')+1],'1234');self.assertEqual(args[args.index('--count')+1],'1')
+                self.assertIn('--disable-unused-recording',args);self.assertIn('--disable-backtrace-recording',args);self.assertNotIn('--all',args)
+                self.assertFalse(result['valid']);self.assertNotIn('metrics',result);self.assertFalse((folder/'result.json').exists())
+    def test_capture_guard_stops_only_owned_capture(self):
+        with tempfile.TemporaryDirectory() as d:
+            worker=Mock();worker.poll.return_value=None
+            with patch.object(b,'game_pids',return_value=[1234]), patch.object(b.os,'getpgid',return_value=1234), patch.object(b.shutil,'which',return_value='/usr/bin/gpucapture'), patch.object(b,'command',return_value='Layer id=3'), patch.object(b,'pressure',return_value=dict(level=2,swap_mib=100)), patch.object(b.subprocess,'Popen',return_value=worker), patch.object(b.subprocess,'run') as stop, patch.object(b,'stop_owned') as owned:
+                with self.assertRaisesRegex(RuntimeError,'guard'):b.capture_frame(Mock(pid=1234),Path(d),Mock(side_effect=RuntimeError('guard')))
+                self.assertEqual(stop.call_args.args[0],['/usr/bin/gpucapture','stop','--pid','1234']);owned.assert_called_once_with(worker)
     def rows(self):
         return [dict(t_s=str(i*.02),frame_ms='20',draws='800',dispatches='5',compiles='0',gpu_ms='17',rec_busy_ms='9',present_wait_ms='0',tick_wait_ms='0',cam_x='-9',cam_y='-4',cam_z='-18') for i in range(1000)]
     def test_warm_game_metrics_and_one_percent_low(self):
@@ -79,6 +100,9 @@ class BenchmarkTests(unittest.TestCase):
             return json.loads(output.getvalue())
     def test_compare_same_workload(self):
         a=self.result();c=self.result();c['renderer_sha256']='new binary';self.assertEqual(self.compare(a,c)['fps_delta_percent'],0)
+    def test_capture_diagnostic_cannot_be_compared_as_fps(self):
+        with self.assertRaisesRegex(ValueError,'Diagnostic captures'):
+            self.compare(self.result(),dict(valid=True,kind='single-layer-frame'))
     def test_compare_rejects_different_modes_or_save_or_host(self):
         for key,value in [('valid',False),('cohort_fingerprint','different'),('profile_gpu',True),('system',{'model':'other'})]:
             a=self.result();c=self.result();c[key]=value
@@ -94,6 +118,12 @@ class BenchmarkTests(unittest.TestCase):
         try:
             b.stop_owned(own);self.assertIsNotNone(own.poll());self.assertIsNone(other.poll())
         finally:b.stop_owned(other)
+    def test_protected_capture_helpers_use_only_owned_pid_fallback(self):
+        own=Mock(pid=1234);own.poll.return_value=None
+        with patch.object(b.os,'getpgid',return_value=1234), patch.object(b.os,'killpg',side_effect=PermissionError), patch.object(b.os,'kill') as kill:
+            b.stop_owned(own)
+            kill.assert_called_once_with(1234,b.signal.SIGTERM)
+            own.wait.assert_called_once_with(timeout=12)
     def test_cohort_fingerprint_ignores_renderer_and_detects_config(self):
         m=dict(seed_files={},ini_sha256='ini',game_eboot_sha256='game',environment={},expected_camera=None,external_configs={})
         old=b.cohort_fingerprint(m);m['renderer_sha256']='new';self.assertEqual(old,b.cohort_fingerprint(m));m['ini_sha256']='changed';self.assertNotEqual(old,b.cohort_fingerprint(m))
