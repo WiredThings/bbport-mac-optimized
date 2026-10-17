@@ -1,0 +1,180 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -28,13 +28,15 @@
+ class BufferAccessTracker {
+ public:
+     enum Access : u8 { Read = 1, Write = 2 };
++    BufferAccessTracker();
++    ~BufferAccessTracker();
++    struct AuditStats {u64 inserts{},collapses{},mixed{},queries{},false_reads{},false_writes{},unknown{},missed{};};
++    AuditStats AuditSnapshot() const;
+ 
+     void Insert(const void* resource, u64 start, u64 end, u8 access);
+     /// Whether a range overlapping [start, end] was inserted with one of the `access` bits.
+     [[nodiscard]] bool Find(const void* resource, u64 start, u64 end, u8 access) const;
+-    void Clear() {
+-        entries.clear();
+-    }
++    void Clear();
+ 
+ private:
+     struct Range {
+@@ -42,6 +44,8 @@
+         u8 access;
+     };
+     static constexpr size_t MaxRanges = 16;
++    struct Audit;
++    std::unique_ptr<Audit> audit; // diagnostic only, <400 KiB bounded exact reference, no GPU resource
+     std::unordered_map<const void*, std::vector<Range>> entries;
+ };
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -467,7 +467,65 @@
+ 
+ // ---- BufferAccessTracker ----------------------------------------------------------------------
+ 
++struct BufferAccessTracker::Audit {
++    static constexpr size_t Resources=64, Intervals=256;
++    struct Ref {const void* key;std::array<Range,Intervals> ranges;size_t size;bool complete;};
++    std::array<Ref,Resources> refs;
++    size_t used=0;
++    AuditStats stats{};
++    unsigned printed=0;
++    std::chrono::steady_clock::time_point reported{};
++    Ref* Lookup(const void* key) {for(size_t i=0;i<used;++i)if(refs[i].key==key)return &refs[i];return nullptr;}
++    void Insert(const void* key,u64 start,u64 end,u8 access) {
++        ++stats.inserts;
++        Ref* ref=Lookup(key);
++        if(!ref) {
++            if(used==Resources)return;
++            ref=&refs[used++];ref->key=key;ref->size=0;ref->complete=true;
++        }
++        if(!ref->complete)return;
++        // Exact union of overlapping/adjacent intervals of the SAME access class only.
++        for(size_t i=0;i<ref->size;) {
++            const auto& r=ref->ranges[i];
++            if(r.start<=start && end<=r.end && (r.access&access)==access)return;
++            const bool separate=(end<r.start && r.start-end>1) || (r.end<start && start-r.end>1);
++            if(r.access==access && !separate) {
++                start=std::min(start,r.start);end=std::max(end,r.end);
++                ref->ranges[i]=ref->ranges[--ref->size];i=0;
++            } else ++i;
++        }
++        if(ref->size==Intervals){ref->complete=false;return;}
++        ref->ranges[ref->size++]={start,end,access};
++    }
++    void Query(const void* key,u64 start,u64 end,u8 access,bool actual) {
++        ++stats.queries;const auto* ref=Lookup(key);
++        if(!ref || !ref->complete)++stats.unknown;
++        else {
++            bool exact=false;
++            for(size_t i=0;i<ref->size;++i){const auto& r=ref->ranges[i];if((r.access&access) && r.start<=end && start<=r.end){exact=true;break;}}
++            if(!actual && exact)++stats.missed;
++            if(actual && !exact) {
++                if(access==Write)++stats.false_reads;else ++stats.false_writes;
++                if(printed<8) {++printed;std::printf("Metal buffer range false-hit: resource=%p start=%llu end=%llu access=%u exact-intervals=%zu\n",key,(unsigned long long)start,(unsigned long long)end,unsigned(access),ref->size);}
++            }
++        }
++        const auto now=std::chrono::steady_clock::now();
++        if(now-reported>=std::chrono::seconds(5)) {
++            std::printf("Metal buffer range audit: frame=%llu inserts=%llu collapses=%llu mixed=%llu queries=%llu false-read-queries=%llu false-write-queries=%llu unknown=%llu missed=%llu; bounded exact reference, diagnostic only\n",(unsigned long long)BbStats::frame_number.load(std::memory_order_relaxed),(unsigned long long)stats.inserts,(unsigned long long)stats.collapses,(unsigned long long)stats.mixed,(unsigned long long)stats.queries,(unsigned long long)stats.false_reads,(unsigned long long)stats.false_writes,(unsigned long long)stats.unknown,(unsigned long long)stats.missed);reported=now;
++        }
++    }
++};
++BufferAccessTracker::BufferAccessTracker() {
++    static_assert(sizeof(Audit)<400*1024);
++    const char* flag=std::getenv("BB_MTL_BUFFER_RANGE_AUDIT");
++    if(flag && flag[0]=='1')audit=std::make_unique<Audit>();
++}
++BufferAccessTracker::~BufferAccessTracker()=default;
++void BufferAccessTracker::Clear() {entries.clear();if(audit)audit->used=0;}
++BufferAccessTracker::AuditStats BufferAccessTracker::AuditSnapshot() const {return audit?audit->stats:AuditStats{};}
++
+ void BufferAccessTracker::Insert(const void* resource, u64 start, u64 end, u8 access) {
++    if(audit)audit->Insert(resource,start,end,access);
+     auto& ranges = entries[resource];
+     for (Range& range : ranges) {
+         if (range.start <= start && end <= range.end && (range.access & access) == access) {
+@@ -475,6 +533,7 @@
+         }
+     }
+     if (ranges.size() >= MaxRanges) {
++        if(audit) {++audit->stats.collapses;u8 classes=access;for(const auto& r:ranges)classes|=r.access;if(classes==(Read|Write))++audit->stats.mixed;}
+         Range bound{start, end, access};
+         for (const Range& range : ranges) {
+             bound.start = std::min(bound.start, range.start);
+@@ -488,16 +547,12 @@
+ }
+ 
+ bool BufferAccessTracker::Find(const void* resource, u64 start, u64 end, u8 access) const {
+-    const auto it = entries.find(resource);
+-    if (it == entries.end()) {
+-        return false;
+-    }
+-    for (const Range& range : it->second) {
+-        if ((range.access & access) && range.start <= end && start <= range.end) {
+-            return true;
+-        }
+-    }
+-    return false;
++    bool found=false;
++    if(const auto it=entries.find(resource);it!=entries.end())
++        for(const auto& range:it->second)
++            if((range.access&access) && range.start<=end && start<=range.end){found=true;break;}
++    if(audit)audit->Query(resource,start,end,access,found);
++    return found;
+ }
+ 
+ // ---- StagingPool ------------------------------------------------------------------------------
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1400,6 +1400,37 @@
+     CHECK(!f.scheduler.HasFailed());
+ }
+ 
++static void TestBufferRangeAudit() {
++    using T=Metal::BufferAccessTracker;
++    const auto key=reinterpret_cast<const void*>(0x1000);
++    T tracker;
++    for(u64 i=0;i<16;++i)tracker.Insert(key,i*100,i*100+7,T::Read);
++    tracker.Insert(key,5000,5007,T::Write);
++    CHECK(tracker.Find(key,2500,2507,T::Write)); // original conservative result is unchanged
++    CHECK(tracker.Find(key,201,202,T::Write)); // old read-only bytes now lie inside a mixed bound
++    CHECK(tracker.Find(key,201,202,T::Read|T::Write));
++    auto stats=tracker.AuditSnapshot();CHECK(stats.false_reads==2 && stats.false_writes==0 && stats.missed==0);
++    tracker.Insert(key,2500,2507,T::Write); // old tracker short-circuits; exact observer must still record it
++    CHECK(tracker.Find(key,2501,2502,T::Write));
++    CHECK(tracker.AuditSnapshot().false_reads==2);
++    CHECK(tracker.Find(key,2600,2601,T::Read|T::Write));
++    CHECK(tracker.Find(key,5000,5001,T::Write));
++    CHECK(tracker.AuditSnapshot().false_writes==1);
++    tracker.Clear();CHECK(!tracker.Find(key,2600,2601,T::Write));
++    CHECK(tracker.AuditSnapshot().false_reads==2);
++    T limited;
++    for(u64 i=0;i<300;++i)limited.Insert(key,4*i,4*i+1,T::Read);
++    limited.Insert(key,2048,2049,T::Write);
++    for(u64 i=0;i<32;++i)limited.Insert(key,3000+4*i,3001+4*i,T::Read);
++    CHECK(limited.Find(key,1500,1501,T::Write));
++    auto unknown=limited.AuditSnapshot();CHECK(unknown.unknown==1 && unknown.false_reads==0 && unknown.missed==0);
++    T resources;
++    for(uintptr_t i=0;i<65;++i)resources.Insert(reinterpret_cast<const void*>(0x1000+8*i),0,7,T::Write);
++    CHECK(resources.Find(reinterpret_cast<const void*>(0x1000+8*64),0,1,T::Write));
++    CHECK(resources.AuditSnapshot().unknown==1 && resources.AuditSnapshot().false_reads==0);
++    std::puts("buffer range audit: unchanged conservative results, independently exact false-hit qualification, contained insertions, clears and bounded unknown fallback passed");
++}
++
+ static void TestTextureTiling(Fixture& f) {
+     namespace Stats=Metal::MemoryStats;
+     const bool enabled=[] {const char* v=std::getenv("BB_MTL_TEXTURE_TILING");return v&&v[0]=='1';}();
+@@ -1529,6 +1560,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_BUFFER_RANGE_AUDIT_ONLY")) {TestBufferRangeAudit();Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_TEXTURE_TILING_ONLY")) {TestTextureTiling(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_ADAPTIVE_STAGING_ONLY")) {TestAdaptiveStaging(f);Settle(f);return failures?1:0;}
+         TestOcclusion(f);

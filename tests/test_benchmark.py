@@ -125,6 +125,11 @@ class BenchmarkTests(unittest.TestCase):
             p.unlink();target=Path(d)/'actual';target.write_bytes(bytes(16))
             p=Path(d)/'f000_present_2x2_rgba.raw';p.symlink_to(target)
             with self.assertRaises(ValueError):b.display_snapshot(Path(d))
+    def test_compare_rejects_legacy_scored_audits(self):
+        for flag in b.DIAGNOSTIC_OVERRIDES:
+            a=self.result();c=self.result();c['variants']={flag:'1'}
+            with self.assertRaisesRegex(ValueError,'Audit overhead'):self.compare(a,c)
+            c['variants'][flag]='0';self.assertEqual(self.compare(a,c)['fps_delta_percent'],0)
     def test_compare_rejects_audio_backend_change(self):
         a=self.result();c=self.result();c['audio_driver']='dummy'
         with self.assertRaisesRegex(ValueError,'audio backends'):self.compare(a,c)

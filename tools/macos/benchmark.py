@@ -26,7 +26,8 @@ from datetime import datetime
 DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
-OVERRIDES = {'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
+DIAGNOSTIC_OVERRIDES = {'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_COPY_AUDIT', 'BB_MTL_STAGING_AUDIT'}
+OVERRIDES = {'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
 
 
@@ -358,6 +359,8 @@ def run(args):
         if not sep or key not in OVERRIDES or value not in ('0','1'):
             raise ValueError(f'Unsupported benchmark override: {item}')
         variants[key] = value
+    if any(variants.get(key)=='1' for key in DIAGNOSTIC_OVERRIDES) and not args.capture_native:
+        raise ValueError('Audit overhead is diagnostic only; use --capture-native, not a scored FPS run')
     env.update(variants)
     env.update(BB_USER_DIR=str(folder/'user'), BB_DATA_DIR=str(folder/'data'), BB_CONFIG=str(folder/'data/bbport.ini'),
                BB_GPU_USER_DIR=str(root/'cache'), BB_PAD_FILE=str(pad), BB_PAD_FILE_ONLY='1', BB_FRAME_STATS='1',
@@ -460,7 +463,7 @@ def run(args):
                 raise RuntimeError('Native metadata is incomplete')
             check_gpu_faults(log_path.read_text(errors="replace"))
             snapshot=display_snapshot(folder) if args.capture_display else None
-            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',display=snapshot,trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata',display=snapshot,trace=str(captures[0]),scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute,notes=['Decoded guest GPU frame, not a replayable GPUTools trace.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
             print(f'Attachment metadata captured: {captures[0]}',flush=True)
             return
         if args.capture_frame:
@@ -469,7 +472,7 @@ def run(args):
             if args.capture_shared_memory:
                 captured['notes'].append('Forced shared-memory optimization: API/attachment metadata audit only; syscall-written resource contents may be incomplete. Do not treat replay pixels or profiling as validated.')
             captured.update(scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
-                            renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'))
+                            renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute)
             write_json(folder/'capture.json',captured)
             print(f"Single frame captured: {captured['trace']}",flush=True)
             return
@@ -530,6 +533,8 @@ def compare(args):
     a=json.loads(args.before.read_text());b=json.loads(args.after.read_text())
     if 'metrics' not in a or 'metrics' not in b:
         raise ValueError('Diagnostic captures are not performance results')
+    if any(result.get('variants',{}).get(key)=='1' for result in (a,b) for key in DIAGNOSTIC_OVERRIDES):
+        raise ValueError('Audit overhead is diagnostic only; refusing FPS comparison')
     if not a['valid'] or not b['valid'] or a['cohort_fingerprint']!=b['cohort_fingerprint'] or a['profile_gpu']!=b['profile_gpu'] or a['system']!=b['system']:
         raise ValueError('Unmatched workloads, instrumentation or host; refusing comparison')
     if a.get('telemetry_mode','full')!=b.get('telemetry_mode','full'):
