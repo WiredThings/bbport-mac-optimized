@@ -1,0 +1,535 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <array>
++#include <cstdint>
++namespace Metal::MemoryStats {
++enum class Kind { Buffer, Staging, Texture, Target, SceneProxy, Velocity, Upscaler, Occlusion, Count };
++struct Counters {
++    std::uint64_t bytes{}, objects{}, retired{}, discarded{}, released{}, peak{};
++};
++using Snapshot = std::array<Counters, static_cast<unsigned>(Kind::Count)>;
++// Unique owned allocations only; guest no-copy aliases and texture views are not allocations.
++// Released advances on the real Metal object's destruction, including references from views.
++void Track(const void* resource, Kind kind);
++void Reclassify(const void* resource, Kind kind);
++void Retire(const void* resource);
++bool IsDiscarded(const void* resource);
++void Discarded(const void* resource, bool discarded);
++Snapshot Read();
++void Report(const void* device, bool force = false);
++} // namespace Metal::MemoryStats
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+@@ -0,0 +1,110 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#import <Metal/Metal.h>
++#import <objc/runtime.h>
++#include <chrono>
++#include <cstdio>
++#include <dlfcn.h>
++#include <mach/mach.h>
++#include <mutex>
++#include <unordered_map>
++#include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "video_core/renderer_metal/mtl_guest_memory.h"
++namespace Metal::MemoryStats {
++namespace {
++struct Entry { std::uint64_t bytes; Kind kind; bool retired = false, discarded = false; };
++struct Ledger {
++    std::mutex mutex;
++    std::unordered_map<const void*, Entry> entries;
++    Snapshot totals{};
++};
++// Metal deallocations may run during global teardown. This small ledger outlives them.
++Ledger& Get() { static auto* value = new Ledger; return *value; }
++void Remove(const void* key) {
++    auto& l = Get(); std::scoped_lock lock{l.mutex};
++    auto it = l.entries.find(key); if (it == l.entries.end()) return;
++    auto e = it->second; auto& c = l.totals[unsigned(e.kind)];
++    c.bytes -= e.bytes; --c.objects; c.released += e.bytes;
++    if (e.retired) c.retired -= e.bytes;
++    if (e.discarded) c.discarded -= e.bytes;
++    l.entries.erase(it);
++}
++}
++}
++@interface BBMetalMemoryLifetime : NSObject { @public const void* key; }
++@end
++@implementation BBMetalMemoryLifetime
++- (void)dealloc { Metal::MemoryStats::Remove(key); }
++@end
++namespace Metal::MemoryStats {
++namespace { char lifetime_key; }
++void Track(const void* pointer, Kind kind) {
++    if (!pointer) return;
++    id<MTLResource> resource = (__bridge id<MTLResource>)pointer;
++    if (objc_getAssociatedObject(resource, &lifetime_key)) return;
++    {
++        auto& l = Get(); std::scoped_lock lock{l.mutex};
++        auto [it, added] = l.entries.emplace(pointer, Entry{resource.allocatedSize, kind});
++        if (!added) return;
++        auto& c = l.totals[unsigned(kind)]; c.bytes += it->second.bytes; ++c.objects;
++        c.peak = std::max(c.peak, c.bytes);
++    }
++    auto token = [BBMetalMemoryLifetime new]; token->key = pointer;
++    objc_setAssociatedObject(resource, &lifetime_key, token, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++}
++void Reclassify(const void* pointer, Kind kind) {
++    auto& l = Get(); std::scoped_lock lock{l.mutex};
++    auto it = l.entries.find(pointer); if (it == l.entries.end() || it->second.kind == kind) return;
++    auto& e = it->second; auto& old = l.totals[unsigned(e.kind)]; auto& now = l.totals[unsigned(kind)];
++    old.bytes -= e.bytes; --old.objects; now.bytes += e.bytes; ++now.objects;
++    if (e.retired) { old.retired -= e.bytes; now.retired += e.bytes; }
++    if (e.discarded) { old.discarded -= e.bytes; now.discarded += e.bytes; }
++    now.peak = std::max(now.peak, now.bytes); e.kind = kind;
++}
++void Retire(const void* pointer) {
++    auto& l = Get(); std::scoped_lock lock{l.mutex};
++    auto it = l.entries.find(pointer); if (it == l.entries.end() || it->second.retired) return;
++    it->second.retired = true; l.totals[unsigned(it->second.kind)].retired += it->second.bytes;
++}
++bool IsDiscarded(const void* pointer) {
++    auto& l = Get(); std::scoped_lock lock{l.mutex}; auto it = l.entries.find(pointer);
++    return it != l.entries.end() && it->second.discarded;
++}
++void Discarded(const void* pointer, bool value) {
++    auto& l = Get(); std::scoped_lock lock{l.mutex};
++    auto it = l.entries.find(pointer); if (it == l.entries.end() || it->second.discarded == value) return;
++    auto& c = l.totals[unsigned(it->second.kind)];
++    if (value) c.discarded += it->second.bytes; else c.discarded -= it->second.bytes;
++    it->second.discarded = value;
++}
++Snapshot Read() { auto& l = Get(); std::scoped_lock lock{l.mutex}; return l.totals; }
++void Report(const void* pointer, bool force) {
++    using Clock = std::chrono::steady_clock;
++    static auto last = Clock::time_point{};
++    const auto now = Clock::now();
++    if (!force && now - last < std::chrono::seconds(5)) return;
++    last = now;
++    const auto snapshot = Read();
++    constexpr const char* names[] = {"buffers", "staging", "sampled-textures", "render-targets", "scene-proxies", "velocity", "upscaler-owned", "occlusion"};
++    std::uint64_t owned = 0;
++    for (unsigned i = 0; i < snapshot.size(); ++i) {
++        const auto& c = snapshot[i]; owned += c.bytes;
++        std::printf("Metal memory category %s: allocated=%llu bytes, objects=%llu, retired=%llu bytes, discarded-capacity=%llu bytes, released=%llu bytes, peak=%llu bytes\n", names[i], (unsigned long long)c.bytes, (unsigned long long)c.objects, (unsigned long long)c.retired, (unsigned long long)c.discarded, (unsigned long long)c.released, (unsigned long long)c.peak);
++    }
++    task_vm_info_data_t vm{}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
++    const bool valid = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count) == KERN_SUCCESS && count >= TASK_VM_INFO_REV3_COUNT;
++    id<MTLDevice> device = (__bridge id<MTLDevice>)pointer;
++    // Opaque allocations include MetalFX internals, pipelines, drawables and driver metadata.
++    // This is reconciliation, not a fabricated exact total for any of those components.
++    const auto aliases = GuestMemory::ImportedBytes();
++    const auto allocated = std::uint64_t(device.currentAllocatedSize);
++    const auto accounted = aliases + owned;
++    std::printf("Metal memory totals: footprint=%llu bytes, graphics-ledger=%llu bytes, metal-allocated=%llu bytes, owned=%llu bytes, guest-alias-capacity=%llu bytes, unclassified-metal=%llu bytes, ledger-valid=%d; aliases overlap guest CPU pages, discarded capacity is not resident usage\n", (unsigned long long)vm.phys_footprint, (unsigned long long)(vm.ledger_tag_graphics_footprint > 0 ? vm.ledger_tag_graphics_footprint : 0), (unsigned long long)allocated, (unsigned long long)owned, (unsigned long long)aliases, (unsigned long long)(allocated > accounted ? allocated - accounted : 0), valid);
++    // Optional ABI: old probes still work, but cannot supply direct-allocation liveness.
++    using GuestStats = int (*)(std::uint64_t*, std::uint64_t);
++    static const auto guest = reinterpret_cast<GuestStats>(dlsym(RTLD_DEFAULT, "runtime_memory_snapshot_v1"));
++    std::uint64_t g[16]{};
++    if (guest && guest(g, 16))
++        std::printf("Guest memory categories: direct-live=%llu bytes (type0=%llu, type3=%llu, other=%llu), flexible-live=%llu bytes, imported-capacity=%llu bytes, imported-live=%llu bytes, imported-free-retained=%llu bytes, direct-release-calls=%llu, direct-released-total=%llu bytes, gpu-release-zeroed-total=%llu bytes, mapped-direct-alias-bytes=%llu, free-chunks=%llu; allocation capacity is not resident usage\n", (unsigned long long)g[0], (unsigned long long)g[1], (unsigned long long)g[2], (unsigned long long)g[3], (unsigned long long)g[4], (unsigned long long)g[5], (unsigned long long)g[6], (unsigned long long)g[7], (unsigned long long)g[8], (unsigned long long)g[9], (unsigned long long)g[10], (unsigned long long)g[11], (unsigned long long)g[12]);
++    else std::printf("Guest memory categories: snapshot ABI unavailable; imported liveness unknown\n");
++}
++}
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -2,6 +2,7 @@
+ // The scale, counter sharing and max-of-three history follow Awakenchan's OcclusionModel
+ // (BloodBorneButPc 4f93643e); Metal counting, GPU snapshots and retirement are implemented here.
+ #import <Metal/Metal.h>
++#include "video_core/renderer_metal/mtl_memory_stats.h"
+ #include <algorithm>
+ #include <array>
+ #include <cstring>
+@@ -114,6 +115,7 @@
+     ASSERT_MSG(impl->results && impl->total && impl->history, "Metal occlusion buffer allocation failed");
+     for (id<MTLBuffer> buffer in @[impl->results, impl->total, impl->history]) {
+         std::memset(buffer.contents, 0, buffer.length);
++        MemoryStats::Track((__bridge const void*)buffer, MemoryStats::Kind::Occlusion);
+         d.AddResident(buffer);
+     }
+     impl->drop_count = Impl::Drops();
+@@ -126,6 +128,7 @@
+     auto* device = &impl->device.GetImpl();
+     NSArray* buffers = @[impl->results, impl->total, impl->history];
+     id<MTLComputePipelineState> pipeline = impl->pipeline;
++    for (id<MTLBuffer> buffer in buffers) MemoryStats::Retire((__bridge const void*)buffer);
+     impl->scheduler.DeferOperation([device, buffers, pipeline] {
+         for (id<MTLBuffer> buffer in buffers) device->RemoveResident(buffer);
+         (void)pipeline; // keep it alive until the command buffer's completed handler, too
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -21,6 +21,7 @@
+ class Device;
+ class Scheduler;
+ class SceneTargets;
++class Runtime;
+ 
+ /// Pending buffer accesses between two FlushBarriers (the Vulkan runtime's BarrierTracker, cut
+ /// down: a few ranges per buffer, merged into one bounding range when there are more).
+@@ -49,7 +50,7 @@
+ /// shared host memory on Metal; the types only keep the callers' pools apart.
+ class StagingPool {
+ public:
+-    explicit StagingPool(VideoCore::CacheBackend& backend);
++    explicit StagingPool(Runtime& backend);
+     ~StagingPool();
+ 
+     StagingPool(const StagingPool&) = delete;
+@@ -65,6 +66,7 @@
+     struct Block {
+         std::unique_ptr<VideoCore::StreamBuffer> buffer;
+         u64 last_used_frame;
++        bool discarded = false;
+     };
+     struct Ring {
+         std::vector<Block> blocks;
+@@ -84,7 +86,7 @@
+     void TrimRing(Ring& ring);
+     void TrimLarge(std::vector<LargeBuffer>& cache);
+ 
+-    VideoCore::CacheBackend& backend;
++    Runtime& backend;
+     std::array<Ring, NumTypes> rings;
+     std::array<std::vector<LargeBuffer>, NumTypes> large_caches;
+     u64 keep_blocks = 0;
+@@ -119,6 +121,8 @@
+ 
+     /// Releases idle staging memory; once per frame.
+     void TickFrame() override;
++    bool DiscardIdleStaging(const VideoCore::Buffer& buffer);
++    void WakeStaging(const VideoCore::Buffer& buffer);
+ 
+     /// bbport (P7.5 L2): the reduced scene targets, set by their constructor (as
+     /// Vulkan::Runtime::scene_targets): Transit makes every native use of a proxied image resolve
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -27,6 +27,7 @@
+ #include "video_core/renderer_metal/mtl_image_usage_log.h"
+ #include "video_core/renderer_metal/mtl_runtime_impl.h"
+ #include "video_core/renderer_metal/mtl_memory_budget.h"
++#include "video_core/renderer_metal/mtl_memory_stats.h"
+ #include "video_core/renderer_metal/mtl_scene_targets.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+@@ -494,7 +495,7 @@
+ 
+ // ---- StagingPool ------------------------------------------------------------------------------
+ 
+-StagingPool::StagingPool(CacheBackend& backend_) : backend{backend_} {
++StagingPool::StagingPool(Runtime& backend_) : backend{backend_} {
+     const char* env = std::getenv("BB_STAGING_KEEP_MB");
+     keep_blocks = (env ? std::strtoull(env, nullptr, 10) : 512) * 1_MB / StagingBlockSize;
+ }
+@@ -532,6 +533,11 @@
+         best_offset = *best->buffer->Reserve(size, alignment, false);
+     }
+     auto& buffer = *best->buffer;
++    if (best->discarded) {
++        backend.WakeStaging(buffer);
++        best->discarded = false;
++    }
++    MemoryStats::Reclassify(buffer.buffer.native, MemoryStats::Kind::Staging);
+     best->last_used_frame = frame;
+     StagingSpan span{
+         .buffer = &buffer,
+@@ -570,6 +576,7 @@
+             .held = false,
+         });
+     }
++    MemoryStats::Reclassify(best->buffer->buffer.native, MemoryStats::Kind::Staging);
+     best->tick = backend.CurrentTick();
+     best->last_used_frame = frame;
+     best->held = deferred;
+@@ -610,9 +617,13 @@
+ void StagingPool::TrimRing(Ring& ring) {
+     auto& blocks = ring.blocks;
+     for (size_t i = blocks.size(); i-- > 0;) {
+-        const Block& block = blocks[i];
+-        if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RingIdleFrames ||
++        Block& block = blocks[i];
++        if (frame - block.last_used_frame < RingIdleFrames ||
+             !backend.IsFreeKnown(block.buffer->LastTick())) {
++            continue;
++        }
++        if (blocks.size() <= keep_blocks) {
++            if (!block.discarded) block.discarded = backend.DiscardIdleStaging(*block.buffer);
+             continue;
+         }
+         blocks.erase(blocks.begin() + i);
+@@ -651,6 +662,7 @@
+ void Runtime::TickFrame() {
+     staging_pool.TickFrame();
+     ImageUsageLog::Tick();
++    MemoryStats::Report((__bridge const void*)impl->dev.device);
+     BbStats::metal_allocated_bytes.store(impl->dev.device.currentAllocatedSize,
+                                          std::memory_order_relaxed);
+ }
+@@ -938,6 +950,7 @@
+         creation_stats.Note(false, size);
+         ASSERT_MSG(buffer, "Failed allocating a Metal buffer of {} bytes (type {})", size,
+                    static_cast<int>(type));
++        MemoryStats::Track((__bridge const void*)buffer, MemoryStats::Kind::Buffer);
+         const bool with_bda = bool(info.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
+         if (with_bda || ResidentAll()) {
+             // Device addresses read and write nothing without residency (D6).
+@@ -974,7 +987,7 @@
+ void Runtime::DestroyBuffer(UniqueBuffer& buffer) {
+     void* native = std::exchange(buffer.native, nullptr);
+     // Buffers with a device address (or all, ResidentAll) were made resident (CreateBuffer).
+-    const bool resident = ResidentAll() || buffer.bda_addr != 0;
++    const bool resident = (ResidentAll() || buffer.bda_addr != 0) && !MemoryStats::IsDiscarded(native);
+     buffer.buffer = VK_NULL_HANDLE;
+     buffer.allocation = VK_NULL_HANDLE;
+     buffer.bda_addr = 0;
+@@ -988,12 +1001,33 @@
+     }
+     // D6: nothing retains the buffer for the GPU. It goes after the command buffer that may use
+     // it completed, together with its place in the residency set.
++    if (!imported) MemoryStats::Retire(native);
+     scheduler.DeferOperation([dev = &impl->dev, native, imported, resident] {
+         id<MTLBuffer> buffer = (__bridge_transfer id<MTLBuffer>)native;
+         if (resident && !imported) {
+             dev->RemoveResident(buffer);
+         }
+     });
++}
++
++bool Runtime::DiscardIdleStaging(const Buffer& buffer) {
++    // Only StagingPool calls this, after idle expiry AND a completed last-use tick.
++    // Never apply to guest imports, textures or held readbacks; no GPU wait is introduced.
++    static const bool enabled = [] { const char* e = std::getenv("BB_MTL_IDLE_STAGING_DISCARD"); return !(e && e[0] == '0'); }();
++    if (!enabled) return false;
++    { std::scoped_lock lock{impl->imported_mutex}; if (impl->imported.contains(buffer.buffer.native)) return false; }
++    id<MTLBuffer> native = NativeBuffer(buffer);
++    if (ResidentAll() || buffer.buffer.bda_addr) impl->dev.RemoveResident(native);
++    [native setPurgeableState:MTLPurgeableStateEmpty];
++    MemoryStats::Discarded(buffer.buffer.native, true);
++    return true;
++}
++
++void Runtime::WakeStaging(const Buffer& buffer) {
++    id<MTLBuffer> native = NativeBuffer(buffer);
++    [native setPurgeableState:MTLPurgeableStateNonVolatile];
++    if (ResidentAll() || buffer.buffer.bda_addr) impl->dev.AddResident(native);
++    MemoryStats::Discarded(buffer.buffer.native, false);
+ }
+ 
+ void Runtime::FlushBuffer(const UniqueBuffer&, u64, u64) {
+@@ -1049,6 +1083,10 @@
+         }
+         out.owner = this;
+         out.image_ci = ci;
++        MemoryStats::Track((__bridge const void*)texture,
++            bool(ci.usage & (vk::ImageUsageFlagBits::eColorAttachment |
++                             vk::ImageUsageFlagBits::eDepthStencilAttachment))
++                ? MemoryStats::Kind::Target : MemoryStats::Kind::Texture);
+         out.size_bytes = texture.allocatedSize;
+         out.native = (__bridge_retained void*)texture;
+         // The handle the caches pass on in vk::ImageViewCreateInfo::image (CreateImageView).
+@@ -1076,6 +1114,7 @@
+     if (ImageUsageLog::Enabled()) {
+         ImageUsageLog::Destroyed(native);
+     }
++    MemoryStats::Retire(native);
+     scheduler.DeferOperation([dev = &impl->dev, native] {
+         id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)native;
+         if (ResidentAll()) {
+@@ -1318,6 +1357,8 @@
+     if (ImageUsageLog::Enabled()) {
+         ImageUsageLog::Named(image.native, name);
+     }
++    if (name.starts_with("Scene proxy "))
++        MemoryStats::Reclassify(image.native, MemoryStats::Kind::SceneProxy);
+     id<MTLTexture> native = (__bridge id<MTLTexture>)image.native;
+     native.label = [[NSString alloc] initWithBytes:name.data()
+                                             length:name.size()
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+@@ -3,6 +3,7 @@
+ // its temporal background, RunScaled; MetalFX instead of FSR 3, no FSR 4, TAA or DLSS: D10).
+ 
+ #import <Metal/Metal.h>
++#include "video_core/renderer_metal/mtl_memory_stats.h"
+ #import <MetalFX/MetalFX.h>
+ 
+ #include <atomic>
+@@ -90,6 +91,7 @@
+     descriptor.storageMode = MTLStorageModePrivate;
+     id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+     ASSERT_MSG(texture, "Failed allocating the {}x{} {} texture", width, height, label.UTF8String);
++    MemoryStats::Track((__bridge const void*)texture, MemoryStats::Kind::Upscaler);
+     texture.label = label;
+     return texture;
+ }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+@@ -3,6 +3,7 @@
+ // 149f63645bbb40fa587daa68fbf003b1f6dbcd7d. Camera fallback, Metal hazards/residency and
+ // completed-handler retirement are integrated with this backend; no vertex history cache.
+ #import <Metal/Metal.h>
++#include "video_core/renderer_metal/mtl_memory_stats.h"
+ #include <bit>
+ #include <cstdio>
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+@@ -46,6 +47,7 @@
+     void Retire(id<MTLResource> resource) {
+         if (!resource) return;
+         auto* d = &device.GetImpl();
++        MemoryStats::Retire((__bridge const void*)resource);
+         scheduler.DeferOperation([d, resource] { d->RemoveResident(resource); });
+     }
+     id<MTLTexture> Texture(MTLPixelFormat format, u32 w, u32 h, NSString* label) {
+@@ -53,7 +55,7 @@
+         desc.storageMode = MTLStorageModePrivate;
+         desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+         id<MTLTexture> t = [device.GetImpl().device newTextureWithDescriptor:desc];
+-        if (t) { t.label = label; device.GetImpl().AddResident(t); }
++        if (t) { MemoryStats::Track((__bridge const void*)t, MemoryStats::Kind::Velocity); t.label = label; device.GetImpl().AddResident(t); }
+         return t;
+     }
+     void Fail() {
+@@ -71,7 +73,7 @@
+     auto library = [d.GetImpl().device newLibraryWithSource:source options:options error:&error];
+     if (library) impl->pipeline = [d.GetImpl().device newComputePipelineStateWithFunction:[library newFunctionWithName:@"merge_velocity"] error:&error];
+     impl->packing = [d.GetImpl().device newBufferWithLength:8 options:MTLResourceStorageModePrivate];
+-    if (impl->packing) d.GetImpl().AddResident(impl->packing);
++    if (impl->packing) { MemoryStats::Track((__bridge const void*)impl->packing, MemoryStats::Kind::Velocity); d.GetImpl().AddResident(impl->packing); }
+     if (!impl->pipeline || !impl->packing) {
+         if (error) std::printf("Metal object motion error: %s\n", error.localizedDescription.UTF8String);
+         impl->Fail();
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -15,6 +15,7 @@
+ #include "video_core/renderer_metal/mtl_occlusion.h"
+ #include "video_core/render_state.h"
+ #include <sys/mman.h>
++#include <mach/mach.h>
+ 
+ #include <algorithm>
+ #include <array>
+@@ -33,6 +34,7 @@
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ #include "video_core/renderer_metal/mtl_runtime.h"
++#include "video_core/renderer_metal/mtl_memory_stats.h"
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ 
+@@ -1106,6 +1108,95 @@
+     }
+     Settle(f);
+     CHECK(weak_buffer == nil);
++}
++
++static void TestMemoryCategoriesAndIdleBacking(Fixture& f) {
++    namespace Stats = Metal::MemoryStats;
++    std::printf("memory categories: real allocation lifetime, views, retired bytes and idle staging backing\n");
++    Settle(f);
++    const auto initial = Stats::Read();
++    const auto bi = unsigned(Stats::Kind::Buffer), ti = unsigned(Stats::Kind::Target);
++    __weak id<MTLBuffer> weak;
++    @autoreleasepool {
++        auto buffer = std::make_unique<Buffer>(f.runtime, 0, 1 << 20, MemoryType::DeviceLocal, "ledger test");
++        weak = (__bridge id<MTLBuffer>)buffer->buffer.native;
++        CHECK(Stats::Read()[bi].bytes >= initial[bi].bytes + (1 << 20));
++        buffer.reset();
++        CHECK(weak != nil);
++        CHECK(Stats::Read()[bi].retired >= initial[bi].retired + (1 << 20));
++    }
++    Settle(f);
++    CHECK(weak == nil);
++    CHECK(Stats::Read()[bi].released >= initial[bi].released + (1 << 20));
++    CHECK(Stats::Read()[bi].retired == initial[bi].retired);
++    // A real texture view retains its allocation even after the renderer drops the parent.
++    __weak id<MTLTexture> parent;
++    id<MTLTexture> view;
++    const auto before_image = Stats::Read();
++    @autoreleasepool {
++        UniqueImage image;
++        vk::ImageCreateInfo ci{}; ci.imageType = vk::ImageType::e2D;
++        ci.format = vk::Format::eR8G8B8A8Unorm; ci.extent = {64,64,1};
++        ci.mipLevels = ci.arrayLayers = 1; ci.samples = vk::SampleCountFlagBits::e1;
++        ci.flags = vk::ImageCreateFlagBits::eMutableFormat;
++        ci.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment;
++        f.runtime.CreateImage(image,ci);
++        parent = (__bridge id<MTLTexture>)image.native;
++        view = [parent newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
++        CHECK(view != nil);
++        f.runtime.DestroyImage(image);
++    }
++    Settle(f);
++    CHECK(parent != nil);
++    CHECK(Stats::Read()[ti].bytes > before_image[ti].bytes);
++    view = nil;
++    Settle(f);
++    CHECK(parent == nil);
++    CHECK(Stats::Read()[ti].bytes == before_image[ti].bytes);
++    // Expired ring capacity remains reusable, but backing contents are discarded only after GPU completion.
++    constexpr u64 Bytes = 16ull << 20;
++    auto output = MakeBuffer(f.runtime, Bytes, MemoryType::HostCached, "idle copy verification");
++    const auto staging = unsigned(Stats::Kind::Staging);
++    const auto before_pool = Stats::Read()[staging];
++    @autoreleasepool {
++        Metal::StagingPool pool{f.runtime};
++        auto first = pool.Request(Bytes, MemoryType::HostUncached);
++        id<MTLBuffer> native = (__bridge id<MTLBuffer>)first.buffer->buffer.native;
++        const auto address = native.gpuAddress;
++        std::memset(first.mapped,0xA5,Bytes);
++        const vk::BufferCopy copy{first.offset,0,Bytes};
++        f.runtime.CopyBuffer(first.buffer,output.get(),std::span{&copy,1});
++        for (unsigned i=0;i<3001;++i) pool.TickFrame();
++        CHECK(!Stats::IsDiscarded(first.buffer->buffer.native)); // unfinished tick
++        Settle(f);
++        task_vm_info_data_t before_vm{}, after_vm{};
++        mach_msg_type_number_t vm_count=TASK_VM_INFO_COUNT;
++        task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&before_vm,&vm_count);
++        pool.TickFrame();
++        vm_count=TASK_VM_INFO_COUNT;
++        task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&after_vm,&vm_count);
++        std::printf("idle staging backing: footprint before=%llu after=%llu bytes; kept capacity=%llu bytes\n",(unsigned long long)before_vm.phys_footprint,(unsigned long long)after_vm.phys_footprint,(unsigned long long)Bytes);
++        CHECK(Stats::IsDiscarded(first.buffer->buffer.native));
++        CHECK([native setPurgeableState:MTLPurgeableStateKeepCurrent] == MTLPurgeableStateEmpty);
++        CHECK(Stats::Read()[staging].discarded >= before_pool.discarded + Bytes);
++        CHECK(native != nil); // object/capacity and GPU address kept, no allocation/rebuild
++        auto second = pool.Request(Bytes,MemoryType::HostUncached);
++        CHECK(second.buffer == first.buffer);
++        CHECK(native.gpuAddress == address);
++        CHECK(!Stats::IsDiscarded(second.buffer->buffer.native));
++        CHECK([native setPurgeableState:MTLPurgeableStateKeepCurrent] == MTLPurgeableStateNonVolatile);
++        std::memset(second.mapped,0x3C,Bytes);
++        const vk::BufferCopy next{second.offset,0,Bytes};
++        f.runtime.CopyBuffer(second.buffer,output.get(),std::span{&next,1});
++        Settle(f);
++        CHECK(output->mapped_data[0] == 0x3C && output->mapped_data[Bytes-1] == 0x3C);
++        // Hot ring capacity does not get discarded before the existing 3000-frame idle expiry.
++        for (unsigned i=0;i<2999;++i) pool.TickFrame();
++        CHECK(!Stats::IsDiscarded(second.buffer->buffer.native));
++        CHECK([native setPurgeableState:MTLPurgeableStateKeepCurrent] == MTLPurgeableStateNonVolatile);
++    }
++    Settle(f);
++    CHECK(Stats::Read()[staging].discarded == before_pool.discarded);
+ }
+ 
+ static void TestTicks(Fixture& f) {
+@@ -1285,6 +1376,7 @@
+         TestKernels(f);
+         TestAccessAndStaging(f);
+         TestStagingRetirement(f);
++        TestMemoryCategoriesAndIdleBacking(f);
+         TestTicks(f);
+         Settle(f);
+         CHECK(!f.scheduler.HasFailed());

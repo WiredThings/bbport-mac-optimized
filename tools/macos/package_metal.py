@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline', type=Path, required=True)
     parser.add_argument('--gpu-build', type=Path, required=True)
+    parser.add_argument('--metal-probe', type=Path, help='Optional rebuilt Metal-only probe with memory snapshot ABI')
     parser.add_argument('--launcher', type=Path, required=True)
     parser.add_argument('--spirv-cross-source', type=Path, required=True)
     parser.add_argument('--app', type=Path, required=True)
@@ -40,7 +41,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -68,11 +69,22 @@ def main():
             subprocess.run(['install_name_tool', '-delete_rpath', value, str(lib)], check=True)
     probe = engine / 'bin/bb-probe-metal'
     original = engine / 'bin/bb-probe'
-    copy(original, probe)
-    old_gpu = next(x for x in loads(probe) if x.endswith('/gpu/libbbgpu.dylib'))
+    copy(args.metal_probe or original, probe)
+    old_gpu = next(x for x in loads(probe) if x.endswith('/libbbgpu.dylib'))
     subprocess.run(['install_name_tool', '-change', old_gpu,
                     '@loader_path/gpu-metal/libbbgpu.dylib', str(probe)], check=True)
-    assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
+    if args.metal_probe:
+        assert run('lipo', '-archs', probe) == 'x86_64'
+        assert '_runtime_memory_snapshot_v1' in run('nm', '-g', probe), 'Missing memory snapshot ABI'
+        for ref in loads(probe):
+            if ref.startswith(SYSTEM) or ref.startswith('@loader_path/'): continue
+            target = engine / 'deps-x86_64/lib' / Path(ref).name
+            assert target.is_file(), f'Unexpected probe dependency: {ref}'
+            subprocess.run(['install_name_tool', '-change', ref, '@loader_path/' + os.path.relpath(target, probe.parent), str(probe)], check=True)
+        for cmd, value in commands(probe):
+            if cmd == 'LC_RPATH': subprocess.run(['install_name_tool', '-delete_rpath', value, str(probe)], check=True)
+    else:
+        assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
     for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
@@ -81,6 +93,7 @@ def main():
     copy(ROOT / 'docs/release/METAL-OCCLUSION-1.md', engine / 'METAL-OCCLUSION-1.md')
     copy(ROOT / 'docs/release/METAL-GAME-MOTION-1.md', engine / 'METAL-GAME-MOTION-1.md')
     copy(ROOT / 'docs/release/METAL-GAME-MOTION-2.md', engine / 'METAL-GAME-MOTION-2.md')
+    copy(ROOT / 'docs/release/METAL-MEMORY-2.md', engine / 'METAL-MEMORY-2.md')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
     assert run('git', '-C', args.spirv_cross_source, 'rev-parse', 'HEAD') == 'f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7'
@@ -105,7 +118,8 @@ def main():
                     upstream_repository='https://github.com/Huax-1839/bloodborne-macos',
                     upstream_commit=UPSTREAM, adapter_patches=patches,
                     renderer_architecture='x86_64 under Rosetta, direct Metal API',
-                    renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original),
+                    renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original), metal_probe_text_sha256=text_hash(probe),
+                    metal_probe_snapshot_abi=bool(args.metal_probe),
                     baseline=(baseline / 'Contents/Resources/bbport/.version').read_text().strip(), default_renderer='metal', fallback_renderer='vulkan',
                     game_started_for_validation=False, gameplay_performance_verified=False)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')

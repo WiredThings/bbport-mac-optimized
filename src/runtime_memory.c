@@ -150,6 +150,7 @@ typedef struct { int kind; uintptr_t address; uint64_t size; } PendingHook;
 static PendingHook pending[64]; static size_t pending_count;
 static size_t allocations, maps, flexible_maps, protects, queries;
 static uint64_t live_bytes, flexible_bytes;
+static uint64_t direct_release_calls, direct_released_total, gpu_release_zeroed_total;
 
 static int valid_alignment(uint64_t a) { return a >= PAGE && a <= POOL_SIZE && !(a & (a-1)); }
 static uint64_t align_up(uint64_t n, uint64_t a) { return (n+a-1) & ~(a-1); }
@@ -263,13 +264,13 @@ static void zero_phys(uint64_t phys, uint64_t size) {
             uint64_t next;
             const Region *r=region_at(at,&next);
             const uint64_t room=r ? r->phys+r->size-at : next-at, n=size-done<room ? size-done : room;
-            if (r && GPU_CHUNK(r->fd)) memset(backing_base+at,0,n);
+            if (r && GPU_CHUNK(r->fd)) { memset(backing_base+at,0,n); gpu_release_zeroed_total += n; }
             else pool_discard(at,n); /* bbport: hole punching, or a clear on macOS */
             done+=n;
             continue;
         }
         const uint64_t c=at/CHUNK, room=c*CHUNK+chunk_size(c)-at, n=size-done<room ? size-done : room;
-        if (GPU_CHUNK(chunk_fds[c])) memset(backing_base+at,0,n);
+        if (GPU_CHUNK(chunk_fds[c])) { memset(backing_base+at,0,n); gpu_release_zeroed_total += n; }
         else pool_discard(at,n);
         done+=n;
     }
@@ -577,6 +578,7 @@ static ABI int32_t direct_release(uint64_t start, uint64_t size) {
         if (right.size) for (int j=0;j<LIMIT;++j) if (!blocks[j].used) { blocks[j]=right; break; }
         live_bytes-=e-a;
     }
+    ++direct_release_calls; direct_released_total += size;
     zero_phys(start,size); /* zero on reuse */
     write_unlock();
     flush_hooks();
@@ -1180,6 +1182,38 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
     int result=covered(address,address+size,0);
     read_unlock();
     return result;
+}
+/* Versioned, bounded snapshot. Bytes are logical capacity, not resident/physical memory.
+ * Entries 0..12 are fixed for v1. A newer renderer can still run with an older probe. */
+int runtime_memory_snapshot_v1(uint64_t *out, uint64_t count) {
+    if (!out || count < 16) return 0;
+    uint64_t s[16]={0};
+    read_lock();
+    s[0]=live_bytes; s[4]=flexible_bytes; s[8]=direct_release_calls;
+    s[9]=direct_released_total; s[10]=gpu_release_zeroed_total;
+    for (int i=0;i<LIMIT;++i) if (blocks[i].used) {
+        const Block b=blocks[i];
+        s[b.type==0 ? 1 : b.type==3 ? 2 : 3] += b.size;
+    }
+    for (size_t i=0;i<vma_count;++i) if (vmas[i].kind==KIND_DIRECT) s[11]+=vmas[i].end-vmas[i].start;
+    const size_t n=whole_chunks ? region_count : (chunk_fds ? (size_t)((POOL_SIZE+CHUNK-1)/CHUNK) : 0);
+    for (size_t c=0;c<n;++c) {
+        int fd=whole_chunks ? regions[c].fd : chunk_fds[c];
+        if (fd!=CHUNK_IMPORTED) continue;
+        const uint64_t a=whole_chunks ? regions[c].phys : c*CHUNK;
+        const uint64_t e=a+(whole_chunks ? regions[c].size : chunk_size(c));
+        uint64_t used=0;
+        for (int i=0;i<LIMIT;++i) if (blocks[i].used) {
+            const uint64_t lo=blocks[i].start>a ? blocks[i].start : a;
+            const uint64_t end=blocks[i].start+blocks[i].size;
+            const uint64_t hi=end<e ? end : e;
+            if (hi>lo) used+=hi-lo;
+        }
+        s[5]+=e-a; s[6]+=used; if (!used) ++s[12];
+    }
+    s[7]=s[5]-s[6];
+    read_unlock();
+    memcpy(out,s,sizeof(s)); return 1;
 }
 void runtime_memory_report(void) {
     printf("Runtime: direct memory allocations=%zu, maps=%zu, live=%" PRIu64 ", budget=%" PRIu64 "\n",
