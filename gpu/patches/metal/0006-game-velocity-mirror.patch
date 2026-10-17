@@ -1,0 +1,872 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.h
+@@ -20,6 +20,7 @@
+ class SceneTargets;
+ class SceneTargetsAdapter;
+ class Upscaler;
++class VelocityMirror;
+ 
+ /// bbport: the Metal backend's rasterizer (plan P4.3b): the recording hooks of the shared
+ /// VideoCore::RasterizerCore (stage A/B protocol, signals, memory, caches and resource selection
+@@ -145,6 +146,9 @@
+     /// A tessellated direct draw (mtl_tessellation.h): the vertex and control kernels in a
+     /// compute encoder, then the render pass of `state` (loading, not clearing, whatever the
+     /// kernels interrupted) with the evaluation shader's patch draw.
++    void ReplayVelocity(const GraphicsPipeline&, const RenderState&, const DrawCall&,
++                        const DynamicDrawState&);
++    bool BypassMotionBlur(const GraphicsPipeline&, const RenderState&, const DynamicDrawState&);
+     void RecordTessellationDraw(const GraphicsPipeline& pipeline, const RenderState& state,
+                                 const DrawCall& draw, const DynamicDrawState& dynamic);
+     /// A geometry direct draw (mtl_geometry.h): per chunk of primitives the export and geometry
+@@ -175,6 +179,7 @@
+     std::unique_ptr<SceneTargetsAdapter> scene_adapter;
+     /// After the core's texture cache it reads, destroyed before the scheduler it defers to.
+     std::unique_ptr<Upscaler> metal_upscaler;
++    std::unique_ptr<VelocityMirror> velocity_mirror;
+     std::unique_ptr<Impl> impl;
+ };
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -8,11 +8,14 @@
+ #include <atomic>
+ #include <bit>
+ #include <chrono>
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <unordered_map>
+ 
++#include "bbport_settings.h"
++#include "video_core/renderer_metal/mtl_velocity_mirror.h"
+ #include "bbport_sections.h"
+ #include "bbport_timeline.h"
+ #include "common/assert.h"
+@@ -96,6 +99,12 @@
+     /// Pipelines without depth/stencil formats for passes without a depth buffer (recording
+     /// thread only).
+     std::unordered_map<const RenderPipeline*, const RenderPipeline*> no_depth_variants;
++    bool velocity_replaying = false;
++    const RenderPipeline* velocity_pipeline = nullptr;
++    bool velocity_requested = false;
++    u64 blur_copies = 0;
++    bool late_velocity_logged = false;
++    bool blur_fallback_logged = false;
+     const bool frame_stats{std::getenv("BB_FRAME_STATS") != nullptr};
+     /// BB_PASS_LABELS=1: the label of the render pass SetupDraw begins next, and passes so far.
+     std::string next_pass_label;
+@@ -170,6 +179,11 @@
+     scene_adapter = std::make_unique<SceneTargetsAdapter>(*metal_scene_targets);
+     metal_upscaler = std::make_unique<Upscaler>(device, scheduler, runtime, texture_cache,
+                                                 *camera_motion, *metal_scene_targets);
++    const char* velocity = std::getenv("BB_METAL_OBJECT_MOTION");
++    impl->velocity_requested = velocity && std::strcmp(velocity, "1") == 0;
++    velocity_mirror = std::make_unique<VelocityMirror>(device, scheduler, *metal_scene_targets,
++                                                     impl->velocity_requested);
++    metal_upscaler->SetVelocityMirror(velocity_mirror.get());
+     SetSceneServices(scene_adapter.get(), metal_upscaler.get(), camera_motion.get(), nullptr);
+     if (!EmulatorSettings.IsNullGPU()) {
+         liverpool->BindRasterizer(this);
+@@ -194,6 +208,8 @@
+     ShutdownThreads();
+     draw_prep.reset();
+     scheduler.SetSubmitCallback({});
++    metal_upscaler->SetVelocityMirror(nullptr);
++    velocity_mirror.reset();
+     occlusion.reset(); // detach the replay hook and retire query buffers before Metal members die
+ }
+ 
+@@ -959,7 +975,7 @@
+     // state (WithoutClears): the draws after it continue it instead of clearing again.
+     if (!scheduler.IsRenderingWith(state) && !scheduler.IsRenderingWith(WithoutClears(state))) {
+         MTLRenderPassDescriptor* desc = MakePassDescriptor(state, pipeline.Render());
+-        scheduler.RenderEncoder((__bridge const void*)desc, state);
++        scheduler.RenderEncoder((__bridge const void*)desc, state, !impl->velocity_replaying);
+         if (scheduler.PassLabels()) {
+             scheduler.LabelEncoder(impl->next_pass_label.c_str());
+         }
+@@ -1057,7 +1073,8 @@
+ 
+     // ---- Encoder state ----
+     RenderList& list = impl->commands;
+-    list.SetRenderPipelineState(PipelineForPass(pipeline, pass_state).state);
++    list.SetRenderPipelineState(impl->velocity_pipeline ? impl->velocity_pipeline->state
++                                                     : PipelineForPass(pipeline, pass_state).state);
+ 
+     const DepthStencilState& ds = dynamic.depth_stencil;
+     const auto face = [](const VideoCore::StencilOps& ops, u32 compare_mask, u32 write_mask) {
+@@ -1622,10 +1639,117 @@
+     MaybePrintStats();
+ }
+ 
++namespace {
++u32 FragmentBindingBase(const GraphicsPipeline& pipeline) {
++    u32 base = 0;
++    const auto* fragment = pipeline.GetStages()[u32(Shader::SwStage::Fragment)];
++    for (const auto* stage : pipeline.GetStages()) {
++        if (stage == fragment) break;
++        if (stage) base += stage->buffers.size() + stage->images.size() + stage->samplers.size();
++    }
++    return base;
++}
++bool ReadOnlyStages(const GraphicsPipeline& pipeline) {
++    for (const auto* stage : pipeline.GetStages()) {
++        if (!stage) continue;
++        for (const auto& buffer : stage->buffers) if (buffer.is_written) return false;
++        for (const auto& image : stage->images) if (image.is_written || image.is_atomic) return false;
++    }
++    return true;
++}
++bool FullViewport(const auto& dynamic, const RenderState& state) {
++    const auto& v = dynamic.viewport_scissors;
++    return v.viewports.size() == 1 && v.scissors.size() == 1 &&
++           !dynamic.primitive.rasterizer_discard &&
++           std::abs(v.viewports[0].width) == float(state.width) &&
++           std::abs(v.viewports[0].height) == float(state.height);
++}
++}
++bool Rasterizer::BypassMotionBlur(const GraphicsPipeline& pipeline, const RenderState& state,
++                                   const DynamicDrawState& dynamic) {
++    const auto* fs = pipeline.GetStages()[u32(Shader::SwStage::Fragment)];
++    if (!impl->velocity_requested || BbSettings::Get().startup_effects[2] || !fs ||
++        fs->pgm_hash != 0xe0305cef || !ReadOnlyStages(pipeline)) return false;
++    // Known two fullscreen blur passes: texture 0 is the unblurred scene, texture 1 velocity.
++    const auto fallback = [this] {
++        if (!impl->blur_fallback_logged) {
++            std::printf("Metal motion blur: unsupported final blur permutation; passthrough unavailable, review feature toggle\n");
++            impl->blur_fallback_logged = true;
++        }
++        return false;
++    };
++    const auto& v = dynamic.viewport_scissors;
++    if (state.num_color_attachments != 1 || state.num_layers != 1 || !FullViewport(dynamic, state) ||
++        v.scissors[0].offset.x != 0 || v.scissors[0].offset.y != 0 ||
++        v.scissors[0].extent.width != state.width || v.scissors[0].extent.height != state.height ||
++        v.viewports[0].x != 0 || v.viewports[0].y != 0 || v.viewports[0].width <= 0 || v.viewports[0].height <= 0 ||
++        fs->images.empty()) return fallback();
++    const u32 index = FragmentBindingBase(pipeline) + fs->buffers.size();
++    id<MTLTexture> src = index < impl->num_textures ? (__bridge id<MTLTexture>)impl->textures[index] : nil;
++    id<MTLTexture> dst = (__bridge id<MTLTexture>)reinterpret_cast<void*>(state.color_attachments[0].image_view);
++    if (!src || !dst || src.textureType != MTLTextureType2D || dst.textureType != MTLTextureType2D ||
++        src.sampleCount != 1 || dst.sampleCount != 1 || dst.width != state.width || dst.height != state.height ||
++        !(src.usage & MTLTextureUsageShaderRead)) return fallback();
++    // These game passes use the same color format; reject unexpected permutations.
++    if (src.pixelFormat != dst.pixelFormat) return fallback();
++    if (src != dst) metal_scene_targets->CopyTextures((__bridge const void*)src, (__bridge const void*)dst);
++    if (++impl->blur_copies == 1) std::printf("Metal motion blur: final blur shader replaced with scene copy\n");
++    return true;
++}
++void Rasterizer::ReplayVelocity(const GraphicsPipeline& pipeline, const RenderState& state,
++                                 const DrawCall& draw, const DynamicDrawState& dynamic) {
++    if (!velocity_mirror->Enabled() || pipeline.Tessellation() || pipeline.Geometry()) return;
++    const auto* fs = pipeline.GetStages()[u32(Shader::SwStage::Fragment)];
++    const int packing = fs ? VelocityMirror::PackingBinding(fs->pgm_hash) : -1;
++    if (packing < 0 || !ReadOnlyStages(pipeline) || !FullViewport(dynamic, state)) return;
++    if (!metal_upscaler->WantsVelocity()) {
++        if (!impl->late_velocity_logged) {
++            std::printf("Metal object motion: game velocity outside active pre-upscale phase; camera fallback\n");
++            impl->late_velocity_logged = true;
++        }
++        return;
++    }
++    const auto& r = pipeline.Render();
++    if (r.key.num_color_attachments != 1 || r.key.num_samples != 1) return;
++    const u32 index = FragmentBindingBase(pipeline) + packing;
++    if (u32(packing) >= fs->buffers.size() || index >= impl->num_buffers) return;
++    auto key = r.key;
++    key.color_buffers[0].data_format = AmdGpu::DataFormat::Format16_16_16_16;
++    key.color_buffers[0].num_format = AmdGpu::NumberFormat::Float;
++    const RenderPipelineInput input{.vertex_attributes = pipeline.VertexAttributes(),
++                                    .rect_list_triangles = r.rect_list && !r.primitive_emulated};
++    const auto* variant = pipeline_cache->GetPsoCache().GetRenderPipeline(key, r.vs, r.fs, input);
++    if (!variant) return;
++    const auto& buffer = impl->buffers[index];
++    if (!velocity_mirror->Capture(buffer.buffer, buffer.offset, buffer.size)) return;
++    const auto size = metal_upscaler->VelocitySize();
++    RenderState mirror{};
++    if (!velocity_mirror->Prepare(state, size[0], size[1], mirror,
++                                  db_desc.first ? texture_cache.GetImage(db_desc.first).image_uid : 0)) return;
++    auto scaled = dynamic;
++    const float fx = float(mirror.width) / state.width, fy = float(mirror.height) / state.height;
++    auto& vp = scaled.viewport_scissors.viewports[0];
++    vp.x *= fx; vp.y *= fy; vp.width *= fx; vp.height *= fy;
++    auto& sc = scaled.viewport_scissors.scissors[0];
++    sc.offset.x = std::lround(sc.offset.x * fx); sc.offset.y = std::lround(sc.offset.y * fy);
++    sc.extent.width = std::lround(sc.extent.width * fx); sc.extent.height = std::lround(sc.extent.height * fy);
++    // Per-pass guest=false propagates through both held and threaded replay. The extra draw
++    // must never contribute to the game's ZPASS counters or occlusion history.
++    impl->velocity_replaying = true;
++    impl->velocity_pipeline = variant;
++    const u64 before = impl->recorded_draws.load(std::memory_order_relaxed);
++    RecordDraw(&pipeline, mirror, draw, scaled);
++    scheduler.EndWithBarrier();
++    impl->velocity_pipeline = nullptr;
++    impl->velocity_replaying = false;
++    if (impl->recorded_draws.load(std::memory_order_relaxed) != before) velocity_mirror->Drawn();
++}
++
+ void Rasterizer::RecordDraw(const VideoCore::PipelineBase* pipeline, const RenderState& state,
+                             const DrawCall& draw, const DynamicDrawState& dynamic) {
+     @autoreleasepool {
+         const auto& graphics = *static_cast<const GraphicsPipeline*>(pipeline);
++        if (!impl->velocity_replaying && BypassMotionBlur(graphics, state, dynamic)) return;
+         if (graphics.Tessellation()) {
+             RecordTessellationDraw(graphics, state, draw, dynamic);
+             return;
+@@ -1728,6 +1852,7 @@
+         }
+         impl->recorded_draws.fetch_add(1, std::memory_order_relaxed);
+         MaybePrintStats();
++        if (!impl->velocity_replaying) ReplayVelocity(graphics, state, draw, dynamic);
+     }
+ }
+ 
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -71,6 +71,10 @@
+     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
+     /// Runtime::Transit: a use of the native image. Writes are the access bits of `access`.
+     void NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access);
++
++    /// Host-only nearest copy/scale. Caller owns coherence and ShaderRead/PixelFormatView usage.
++    /// Both textures must be single-sample 2D, level zero, with matching format classes.
++    void CopyTextures(const void* source, const void* target);
+ 
+ private:
+     struct Proxy;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -405,6 +405,18 @@
+         }
+         id<MTLTexture> source = to_native ? proxy : level;
+         id<MTLTexture> target = to_native ? level : proxy;
++        if (level != native) scheduler.DeferOperation([level] { (void)level; });
++        CopyTextures((__bridge const void*)source, (__bridge const void*)target);
++    }
++}
++
++void SceneTargets::CopyTextures(const void* src, const void* dst) {
++    scheduler.EndRendering();
++    id<MTLTexture> source = (__bridge id<MTLTexture>)src;
++    id<MTLTexture> target = (__bridge id<MTLTexture>)dst;
++    const Class cls = ClassOf(target.pixelFormat);
++    const bool depth = IsDepth(cls);
++    @autoreleasepool {
+         // The stencil of a combined format is read through a view of its own.
+         id<MTLTexture> stencil = nil;
+         if (cls == Class::DepthStencil) {
+@@ -415,9 +427,8 @@
+             }
+         }
+         // What the command buffer uses but does not retain stays alive until it is done.
+-        if (level != native || stencil) {
+-            scheduler.DeferOperation([level, stencil] {
+-                (void)level;
++        if (stencil) {
++            scheduler.DeferOperation([stencil] {
+                 (void)stencil;
+             });
+         }
+@@ -438,7 +449,7 @@
+             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+         }
+         scheduler.RenderEncoder((__bridge const void*)pass);
+-        scheduler.LabelEncoder(to_native ? "Scene proxy resolve" : "Scene proxy fill");
++        scheduler.LabelEncoder("Host texture copy");
+         id<MTLRenderCommandEncoder> render = scheduler.GetImpl().render;
+         [render setRenderPipelineState:impl->Pipeline(target.pixelFormat)];
+         if (depth) {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -86,7 +86,7 @@
+     /// Always a new pass: the caller decides to continue a pass by checking IsRendering().
+     void RenderEncoder(const void* pass_descriptor);
+     /// The same, remembering the state the pass was begun with (IsRenderingWith compares it).
+-    void RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state);
++    void RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest = true);
+     /// The render commands of the rasterizer's pass (the one begun with a RenderState): valid
+     /// while IsRendering() after such a RenderEncoder. Passes begun without a state (the
+     /// upscaler, the presenter, the runtime's kernels) use Impl::render directly.
+@@ -260,6 +260,7 @@
+     std::optional<VideoCore::RenderState> render_state;
+     RenderList commands;
+     bool commands_active = false; ///< the open render pass is the rasterizer's (Commands())
++    bool held_guest = true;       ///< immutable tag carried into replay; host mirrors never count
+     bool hold_env = true;         ///< BB_MTL_HOLD (default 1)
+     bool hoisting = false;        ///< between BeginHoist and EndHoist of a held pass
+     bool hoisted = false;         ///< the held pass has a compute encoder before it
+@@ -292,6 +293,7 @@
+     // Replay thread (see the class comment).
+     struct ReplayJob {
+         RenderList list;            ///< the pass's commands
++        bool guest = true;         ///< captured when posted, never a global replay-time toggle
+         bool close_compute = false; ///< end the hoisted compute encoder first
+         bool wait_all = false;      ///< the render encoder waits for every earlier encoder
+         std::string label;          ///< BB_PASS_LABELS: the encoder label
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -298,12 +298,12 @@
+     render_state.reset();
+ }
+ 
+-void Scheduler::RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state) {
++void Scheduler::RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest) {
+     ASSERT_MSG(pass_descriptor, "RenderEncoder without a pass descriptor");
+     // Experiment bit MtlNoHold switches holding off while the game runs (taken at a pass begin).
+     hold_passes = hold_env && !BbToggle::Experiment(BbToggle::MtlNoHold);
+     if (!hold_passes) {
+-        BeginEncoder(EncoderKind::Render, pass_descriptor, true);
++        BeginEncoder(EncoderKind::Render, pass_descriptor, guest);
+         render_state = state;
+         commands.BeginDirect((__bridge void*)impl->render);
+         commands_active = true;
+@@ -321,6 +321,7 @@
+     open_encoder = EncoderKind::Render;
+     render_state = state;
+     holding = true;
++    held_guest = guest;
+     ++held_serial;
+     hoisting = false;
+     hoisted = false;
+@@ -346,7 +347,7 @@
+     }
+     hoisted = false;
+     OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->held_pass,
+-                 std::exchange(need_fence_wait, false), true);
++                 std::exchange(need_fence_wait, false), held_guest);
+     impl->held_pass = nil;
+     if (pass_labels && !held_label.empty()) {
+         impl->render.label = @(held_label.c_str());
+@@ -362,6 +363,7 @@
+     ReplayJob& job = replay_ring[slot];
+     // What ReleaseHeldPass and EndEncoder do on this thread, but the encoding goes to the job.
+     // The hoisted compute encoder is the only one open while a pass is held.
++    job.guest = held_guest;
+     job.close_compute = hoisted;
+     job.wait_all = std::exchange(need_fence_wait, false) || hoisted || commands.HasBarrier();
+     job.label = pass_labels ? held_label : std::string{};
+@@ -427,7 +429,7 @@
+             CloseNative(EncoderKind::Compute);
+         }
+         OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->replay_passes[slot],
+-                     job.wait_all, true);
++                     job.wait_all, job.guest);
+         impl->replay_passes[slot] = nil;
+         if (!job.label.empty()) {
+             impl->render.label = @(job.label.c_str());
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.h b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.h
+@@ -20,6 +20,7 @@
+ class Runtime;
+ class SceneTargets;
+ class Scheduler;
++class VelocityMirror;
+ 
+ /// bbport: the scene services of the Metal rasterizer (plan P5.3, P5.4 and P7.5, docs/metal/
+ /// ui_composition_design.md, temporal_upscaling_design.md and live_resolution_design.md).
+@@ -131,7 +132,12 @@
+     /// The textures are valid until the next draw is recorded.
+     bool TakeInterpolationInputs(InterpolationInputs& inputs);
+ 
++    void SetVelocityMirror(VelocityMirror* mirror) { velocity_mirror = mirror; }
++    bool WantsVelocity() const { return Active() && !done_this_frame; }
++    std::array<u32, 2> VelocitySize() const;
++
+ private:
++    VelocityMirror* velocity_mirror = nullptr;
+     struct Impl; ///< the textures, views, pipelines and the scaler (mtl_upscaler.mm)
+ 
+     /// MetalFX is the selected provider (in a scaled session once its scaler is taken) and has
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+@@ -17,6 +17,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include "video_core/renderer_metal/mtl_velocity_mirror.h"
+ #include "bbport_settings.h"
+ #include "bbport_toggles.h"
+ #include "common/assert.h"
+@@ -553,7 +554,16 @@
+     return !ui.ScaledSession() && scene_targets.Reduced() && !done_this_frame;
+ }
+ 
++std::array<u32, 2> Upscaler::VelocitySize() const {
++    if (scene_targets.Reduced()) {
++        const auto size = scene_targets.Size();
++        return {size.width, size.height};
++    }
++    return SceneSize(16384, 16384);
++}
++
+ bool Upscaler::OnFrameStart() {
++    if (velocity_mirror) velocity_mirror->FrameStart();
+     if (impl->TakeCreated()) {
+         failed = true;
+     }
+@@ -844,6 +854,7 @@
+     scheduler.EndEncoder();
+     camera.RecordMotion((__bridge const void*)depth_texture, (__bridge const void*)impl->motion, w,
+                         h);
++    if (velocity_mirror) velocity_mirror->Merge((__bridge const void*)impl->motion, w, h);
+     scheduler.EndEncoder();
+ 
+     @autoreleasepool {
+@@ -1023,6 +1034,7 @@
+     // command buffer, so no encoder may be open when it does.
+     scheduler.EndEncoder();
+     camera.RecordMotion((__bridge const void*)depth_input, (__bridge const void*)impl->motion, w, h);
++    if (velocity_mirror) velocity_mirror->Merge((__bridge const void*)impl->motion, w, h);
+     scheduler.EndEncoder();
+ 
+     @autoreleasepool {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.h b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.h
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Native Metal adaptation of IFreemz's game velocity mirror (149f63645bbb).
++#pragma once
++#include <memory>
++#include "video_core/render_state.h"
++namespace Metal {
++class Device;
++class Scheduler;
++class SceneTargets;
++class VelocityMirror final {
++public:
++    VelocityMirror(Device&, Scheduler&, SceneTargets&, bool enabled);
++    ~VelocityMirror();
++    bool Enabled() const;
++    static int PackingBinding(u64 fragment_hash);
++    void FrameStart();
++    // GPU copy only: guest constants may still be in flight. No CPU read or GPU-completion wait.
++    bool Capture(const void* buffer, u64 offset, u64 size);
++    // Original draw has completed encoding. Seed private depth/stencil once per source/frame.
++    bool Prepare(const VideoCore::RenderState&, u32 width, u32 height,
++                 VideoCore::RenderState& mirror, u64 source_uid = 0);
++    void Drawn();
++    void Merge(const void* motion, u32 width, u32 height);
++private:
++    struct Impl;
++    std::unique_ptr<Impl> impl;
++};
++} // namespace Metal
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_velocity_mirror.mm
+@@ -0,0 +1,186 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Velocity shader identities, RGBA16F mirror and packing decode follow IFreemz, commit
++// 149f63645bbb40fa587daa68fbf003b1f6dbcd7d. Camera fallback, Metal hazards/residency and
++// completed-handler retirement are integrated with this backend; no vertex history cache.
++#import <Metal/Metal.h>
++#include <bit>
++#include <cstdio>
++#include "video_core/renderer_metal/mtl_device_impl.h"
++#include "video_core/renderer_metal/mtl_scene_targets.h"
++#include "video_core/renderer_metal/mtl_scheduler_impl.h"
++#include "video_core/renderer_metal/mtl_velocity_mirror.h"
++namespace Metal {
++namespace {
++NSString* const source = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++kernel void merge_velocity(texture2d<float, access::read> mirror [[texture(0)]],
++                           texture2d<float, access::write> motion [[texture(1)]],
++                           device const float2& packing [[buffer(0)]],
++                           uint2 p [[thread_position_in_grid]]) {
++    uint2 extent(motion.get_width(), motion.get_height());
++    if (any(p >= extent)) return;
++    float4 m = mirror.read(p);
++    if (m.a <= .5f || !all(isfinite(packing)) || any(abs(packing) <= 1e-6f)) return;
++    float2 delta = (m.rg - .5f) * float2(-float(extent.x), float(extent.y)) / packing;
++    // Bad/missing game vectors leave the already generated camera motion intact.
++    if (!all(isfinite(delta)) || any(abs(delta) > float2(extent))) return;
++    motion.write(float4(delta, 0, 0), p);
++}
++)MSL";
++}
++struct VelocityMirror::Impl {
++    Device& device;
++    Scheduler& scheduler;
++    SceneTargets& targets;
++    bool enabled, captured = false, drawn = false, failed = false;
++    u64 frames = 0, draws = 0, merged = 0;
++    const void* seeded = nullptr;
++    u64 seeded_uid = 0;
++    id<MTLTexture> color, depth, snapshot;
++    id<MTLBuffer> packing;
++    id<MTLComputePipelineState> pipeline;
++    void Retire(id<MTLResource> resource) {
++        if (!resource) return;
++        auto* d = &device.GetImpl();
++        scheduler.DeferOperation([d, resource] { d->RemoveResident(resource); });
++    }
++    id<MTLTexture> Texture(MTLPixelFormat format, u32 w, u32 h, NSString* label) {
++        auto* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
++        desc.storageMode = MTLStorageModePrivate;
++        desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
++        id<MTLTexture> t = [device.GetImpl().device newTextureWithDescriptor:desc];
++        if (t) { t.label = label; device.GetImpl().AddResident(t); }
++        return t;
++    }
++    void Fail() {
++        if (!failed) std::printf("Metal object motion: allocation/compile failed; camera fallback\n");
++        failed = true;
++    }
++};
++VelocityMirror::VelocityMirror(Device& d, Scheduler& s, SceneTargets& t, bool enabled)
++    : impl{std::make_unique<Impl>(d, s, t, enabled)} {
++    if (!enabled) return;
++    NSError* error = nil;
++    auto* options = [MTLCompileOptions new];
++    options.mathMode = MTLMathModeSafe;
++    auto library = [d.GetImpl().device newLibraryWithSource:source options:options error:&error];
++    if (library) impl->pipeline = [d.GetImpl().device newComputePipelineStateWithFunction:[library newFunctionWithName:@"merge_velocity"] error:&error];
++    impl->packing = [d.GetImpl().device newBufferWithLength:8 options:MTLResourceStorageModePrivate];
++    if (impl->packing) d.GetImpl().AddResident(impl->packing);
++    if (!impl->pipeline || !impl->packing) {
++        if (error) std::printf("Metal object motion error: %s\n", error.localizedDescription.UTF8String);
++        impl->Fail();
++    }
++    std::printf("Metal object motion: game velocity mirror %s; camera fallback; no CPU readback\n", Enabled() ? "enabled" : "unavailable");
++}
++VelocityMirror::~VelocityMirror() {
++    impl->scheduler.EndWithBarrier();
++    impl->Retire(impl->color); impl->Retire(impl->depth); impl->Retire(impl->snapshot); impl->Retire(impl->packing);
++    auto pipeline = impl->pipeline;
++    impl->scheduler.DeferOperation([pipeline] { (void)pipeline; });
++    if (impl->enabled) std::printf("Metal object motion: %llu mirrored draws, %llu merged frames / %llu frames\n", impl->draws, impl->merged, impl->frames);
++}
++bool VelocityMirror::Enabled() const { return impl->enabled && !impl->failed; }
++int VelocityMirror::PackingBinding(u64 hash) {
++    if (hash == 0x34bc187c) return 0;
++    if (hash == 0x749e4f9e || hash == 0xb25e4fae) return 1;
++    return -1;
++}
++void VelocityMirror::FrameStart() {
++    impl->captured = impl->drawn = false;
++    impl->seeded = nullptr;
++    ++impl->frames;
++    if (Enabled() && impl->frames % 300 == 0)
++        std::printf("Metal object motion: %llu mirrored draws, %llu merged frames / %llu frames\n", impl->draws, impl->merged, impl->frames);
++}
++bool VelocityMirror::Capture(const void* buffer, u64 offset, u64 size) {
++    if (!Enabled()) return false;
++    if (impl->captured) return true;
++    id<MTLBuffer> src = (__bridge id<MTLBuffer>)buffer;
++    if (!src || size < 8 || offset > src.length || 8 > src.length - offset) return false;
++    impl->scheduler.EndWithBarrier();
++    impl->scheduler.BlitEncoder("Snapshot game velocity packing");
++    [impl->scheduler.GetImpl().blit copyFromBuffer:src sourceOffset:offset toBuffer:impl->packing destinationOffset:0 size:8];
++    impl->scheduler.EndWithBarrier();
++    impl->captured = true;
++    return true;
++}
++bool VelocityMirror::Prepare(const VideoCore::RenderState& guest, u32 w, u32 h, VideoCore::RenderState& out, u64 source_uid) {
++    if (!Enabled() || !impl->captured || !w || !h || w > 8192 || h > 8192 ||
++        !guest.width || !guest.height || guest.num_layers != 1 || guest.num_color_attachments != 1 ||
++        !guest.depth_stencil_attachment.has_depth) return false;
++    id<MTLTexture> ds = (__bridge id<MTLTexture>)reinterpret_cast<void*>(guest.depth_stencil_attachment.image_view);
++    id<MTLTexture> cb = (__bridge id<MTLTexture>)reinterpret_cast<void*>(guest.color_attachments[0].image_view);
++    if (!ds || !cb || cb.pixelFormat != MTLPixelFormatRGBA8Unorm ||
++        ds.textureType != MTLTextureType2D || cb.textureType != MTLTextureType2D ||
++        ds.sampleCount != 1 || cb.sampleCount != 1 ||
++        cb.width < guest.width || cb.height < guest.height ||
++        ds.width < guest.width || ds.height < guest.height ||
++        (ds.pixelFormat != MTLPixelFormatDepth32Float_Stencil8 && ds.pixelFormat != MTLPixelFormatDepth16Unorm) ||
++        guest.depth_stencil_attachment.has_stencil != (ds.pixelFormat == MTLPixelFormatDepth32Float_Stencil8)) return false;
++    // Bound only this small auxiliary allocation, never shrink the shared caches. At 4K
++    // D32S8 the mirror can approach 128 MiB; larger configurations use camera motion.
++    const u64 depth_bytes = ds.pixelFormat == MTLPixelFormatDepth16Unorm ? 2 : 8;
++    if (u64(w) * h * (8 + depth_bytes) + u64(guest.width) * guest.height * depth_bytes > 128ull * 1024 * 1024)
++        return false;
++    auto& s = impl->scheduler;
++    s.EndWithBarrier();
++    if (!impl->color || impl->color.width != w || impl->color.height != h || impl->depth.pixelFormat != ds.pixelFormat) {
++        impl->Retire(impl->color); impl->Retire(impl->depth);
++        impl->color = impl->Texture(MTLPixelFormatRGBA16Float, w, h, @"Game velocity mirror");
++        impl->depth = impl->Texture(ds.pixelFormat, w, h, @"Game velocity private depth");
++        impl->drawn = false; impl->seeded = nullptr;
++        if (!impl->color || !impl->depth) { impl->Fail(); return false; }
++    }
++    if (impl->seeded != (__bridge const void*)ds || impl->seeded_uid != source_uid ||
++        impl->snapshot.width != guest.width || impl->snapshot.height != guest.height) {
++        if (!impl->snapshot || impl->snapshot.width != guest.width || impl->snapshot.height != guest.height || impl->snapshot.pixelFormat != ds.pixelFormat) {
++            impl->Retire(impl->snapshot);
++            impl->snapshot = impl->Texture(ds.pixelFormat, guest.width, guest.height, @"Velocity depth snapshot");
++            if (!impl->snapshot) { impl->Fail(); return false; }
++        }
++        // Cache textures may lack PixelFormatView. Blit to our small source-sized snapshot,
++        // then reuse the depth+stencil nearest scaler without promoting any cached image.
++        s.BlitEncoder("Snapshot velocity depth and stencil");
++        [s.GetImpl().blit copyFromTexture:ds sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
++                              sourceSize:MTLSizeMake(guest.width, guest.height, 1) toTexture:impl->snapshot
++                        destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
++        s.EndWithBarrier();
++        impl->targets.CopyTextures((__bridge const void*)impl->snapshot, (__bridge const void*)impl->depth);
++        s.EndWithBarrier();
++        impl->seeded = (__bridge const void*)ds;
++        impl->seeded_uid = source_uid;
++    }
++    if (!impl->draws) std::printf("Metal velocity resources: %.2f MiB (mirror, private depth, source snapshot)\n",
++        double(impl->color.allocatedSize + impl->depth.allocatedSize + impl->snapshot.allocatedSize) / (1024 * 1024));
++    out = guest;
++    out.width = w; out.height = h;
++    out.depth_stencil_attachment.image_view = reinterpret_cast<u64>((__bridge void*)impl->depth);
++    out.depth_stencil_attachment.depth_clear = out.depth_stencil_attachment.stencil_clear = false;
++    out.color_attachments[0].image_view = reinterpret_cast<u64>((__bridge void*)impl->color);
++    out.color_attachments[0].is_clear = impl->drawn ? 0 : 1;
++    out.color_attachments[0].clear_value = {std::bit_cast<u32>(.5f), std::bit_cast<u32>(.5f), 0, 0};
++    return true;
++}
++void VelocityMirror::Drawn() {
++    impl->drawn = true;
++    if (++impl->draws == 1) std::printf("Metal object motion: first game velocity draw mirrored at %lux%lu\n", impl->color.width, impl->color.height);
++}
++void VelocityMirror::Merge(const void* texture, u32 w, u32 h) {
++    if (!Enabled() || !impl->drawn || !impl->captured || impl->color.width != w || impl->color.height != h) return;
++    id<MTLTexture> motion = (__bridge id<MTLTexture>)texture;
++    if (!motion || motion.width != w || motion.height != h || motion.pixelFormat != MTLPixelFormatRG16Float) return;
++    auto& s = impl->scheduler;
++    s.EndWithBarrier();
++    s.ComputeEncoder("Merge game object velocity into camera motion");
++    auto encoder = s.GetImpl().compute;
++    [encoder setComputePipelineState:impl->pipeline];
++    [encoder setTexture:impl->color atIndex:0];
++    [encoder setTexture:motion atIndex:1];
++    [encoder setBuffer:impl->packing offset:0 atIndex:0];
++    [encoder dispatchThreads:MTLSizeMake(w,h,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)];
++    s.EndWithBarrier();
++    if (++impl->merged == 1) std::printf("Metal object motion: first velocity frame merged for MetalFX\n");
++}
++} // namespace Metal
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -505,6 +505,205 @@
+     Settle(f);
+ }
+ 
++#include "video_core/renderer_metal/mtl_velocity_mirror.h"
++static void TestGameVelocityMirror(Fixture& f) {
++    std::printf("game velocity: depth/stencil seed, GPU coefficients, packing, camera fallback and retirement\n");
++    World world{f};
++    SceneTargets targets{f.device, f.scheduler, f.runtime, world.Lookup()};
++    CHECK(Metal::VelocityMirror::PackingBinding(0x34bc187c) == 0);
++    CHECK(Metal::VelocityMirror::PackingBinding(0x749e4f9e) == 1);
++    CHECK(Metal::VelocityMirror::PackingBinding(0xb25e4fae) == 1);
++    CHECK(Metal::VelocityMirror::PackingBinding(0xe0305cef) == -1);
++    auto texture = [&](MTLPixelFormat format, u32 w, u32 h, MTLTextureUsage usage) {
++        auto* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
++        desc.storageMode = MTLStorageModePrivate;
++        desc.usage = usage;
++        return [f.mtl newTextureWithDescriptor:desc];
++    };
++    auto color = texture(MTLPixelFormatRGBA8Unorm,8,4,MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead);
++    auto motion = texture(MTLPixelFormatRG16Float,32,16,MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite);
++    float coefficients[8] = {0,0,0,0,1,.5f,0,0};
++    auto packing = [f.mtl newBufferWithBytes:coefficients length:sizeof(coefficients) options:MTLResourceStorageModeShared];
++    auto changed = [f.mtl newBufferWithLength:8 options:MTLResourceStorageModeShared];
++    auto camera = [&] {
++        std::vector<u16> data(32*16*2);
++        for (u32 i=0;i<32*16;++i) { data[2*i]=0x3c00; data[2*i+1]=0x4000; } // 1,2
++        const auto* bytes = reinterpret_cast<const u8*>(data.data());
++        WriteTexture(f,motion,4,{bytes,bytes+data.size()*2});
++    };
++    for (auto format : {MTLPixelFormatDepth32Float_Stencil8, MTLPixelFormatDepth16Unorm}) {
++        auto ds = texture(format,16,8,MTLTextureUsageRenderTarget); // deliberately no PixelFormatView
++        auto* clear = [MTLRenderPassDescriptor renderPassDescriptor];
++        clear.depthAttachment.texture = ds;
++        clear.depthAttachment.loadAction = MTLLoadActionClear;
++        clear.depthAttachment.storeAction = MTLStoreActionStore;
++        clear.depthAttachment.clearDepth = .75;
++        if (format == MTLPixelFormatDepth32Float_Stencil8) {
++            clear.stencilAttachment.texture = ds;
++            clear.stencilAttachment.loadAction = MTLLoadActionClear;
++            clear.stencilAttachment.storeAction = MTLStoreActionStore;
++            clear.stencilAttachment.clearStencil = 7;
++        }
++        f.scheduler.RenderEncoder((__bridge const void*)clear);
++        f.scheduler.EndWithBarrier();
++        // Only the top-left guest render rectangle is live; the larger backing's border
++        // must not be included in the scaled depth/stencil seed.
++        std::vector<u8> raw_depth(16*8*(format==MTLPixelFormatDepth16Unorm?2:4));
++        std::vector<u8> raw_stencil(16*8);
++        for (u32 y=0;y<8;++y) for(u32 x=0;x<16;++x) {
++            const bool inside=x<8 && y<4;
++            if(format==MTLPixelFormatDepth16Unorm) {
++                const u16 value=inside?49151:16384;
++                std::memcpy(raw_depth.data()+(y*16+x)*2,&value,2);
++            } else {
++                const float value=inside?.75f:.25f;
++                std::memcpy(raw_depth.data()+(y*16+x)*4,&value,4);
++            }
++            raw_stencil[y*16+x]=inside?7:3;
++        }
++        WriteTexture(f,ds,format==MTLPixelFormatDepth16Unorm?2:4,raw_depth,0,
++                     format==MTLPixelFormatDepth16Unorm?MTLBlitOptionNone:MTLBlitOptionDepthFromDepthStencil);
++        if(format==MTLPixelFormatDepth32Float_Stencil8)
++            WriteTexture(f,ds,1,raw_stencil,0,MTLBlitOptionStencilFromDepthStencil);
++        RenderState guest{};
++        guest.width=8; guest.height=4; guest.num_layers=guest.num_color_attachments=1;
++        guest.color_attachments[0].image_view=reinterpret_cast<u64>((__bridge void*)color);
++        guest.depth_stencil_attachment.image_view=reinterpret_cast<u64>((__bridge void*)ds);
++        guest.depth_stencil_attachment.has_depth=true;
++        guest.depth_stencil_attachment.has_stencil=format==MTLPixelFormatDepth32Float_Stencil8;
++        Metal::VelocityMirror mirror{f.device,f.scheduler,targets,true};
++        CHECK(mirror.Enabled());
++        RenderState output{};
++        CHECK(!mirror.Prepare(guest,32,16,output)); // no current packing constants
++        CHECK(!mirror.Capture((__bridge const void*)packing,28,4));
++        CHECK(mirror.Capture((__bridge const void*)packing,16,8));
++        // GPU mutation after capture cannot change the snapshotted packing values.
++        f.scheduler.BlitEncoder();
++        [f.scheduler.GetImpl().blit copyFromBuffer:changed sourceOffset:0 toBuffer:packing destinationOffset:16 size:8];
++        f.scheduler.EndWithBarrier();
++        CHECK(mirror.Prepare(guest,32,16,output));
++        auto depth = (__bridge id<MTLTexture>)reinterpret_cast<void*>(output.depth_stencil_attachment.image_view);
++        auto seed = ReadTexture(f,depth,format==MTLPixelFormatDepth16Unorm?2:4,0,
++                               format==MTLPixelFormatDepth16Unorm?MTLBlitOptionNone:MTLBlitOptionDepthFromDepthStencil);
++        for (u32 i=0;i<32*16;++i) {
++            if (format==MTLPixelFormatDepth16Unorm) CHECK(reinterpret_cast<const u16*>(seed.data())[i] >= 49150);
++            else CHECK(reinterpret_cast<const float*>(seed.data())[i] == .75f);
++        }
++        if (format==MTLPixelFormatDepth32Float_Stencil8) {
++            const auto stencil=ReadTexture(f,depth,1,0,MTLBlitOptionStencilFromDepthStencil);
++            for (u8 n:stencil) CHECK(n==7);
++        }
++        auto field=(__bridge id<MTLTexture>)reinterpret_cast<void*>(output.color_attachments[0].image_view);
++        NSString* shader = @R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++vertex float4 velocity_v(uint i [[vertex_id]]) {
++    const float2 p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)};
++    return float4(p[i],.5,1);
++}
++fragment float4 velocity_f(float4 p [[position]]) {
++    return float4(.75,.25,0,p.x<16?1.0:0.0);
++}
++)MSL";
++        NSError* error=nil;
++        auto library=[f.mtl newLibraryWithSource:shader options:nil error:&error];
++        auto* descriptor=[MTLRenderPipelineDescriptor new];
++        descriptor.vertexFunction=[library newFunctionWithName:@"velocity_v"];
++        descriptor.fragmentFunction=[library newFunctionWithName:@"velocity_f"];
++        descriptor.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA16Float;
++        descriptor.depthAttachmentPixelFormat=format;
++        if(format==MTLPixelFormatDepth32Float_Stencil8) descriptor.stencilAttachmentPixelFormat=format;
++        auto pipeline=[f.mtl newRenderPipelineStateWithDescriptor:descriptor error:&error];
++        CHECK(pipeline!=nil);
++        auto* depth_desc=[MTLDepthStencilDescriptor new];
++        depth_desc.depthCompareFunction=MTLCompareFunctionLessEqual;
++        if(format==MTLPixelFormatDepth32Float_Stencil8) {
++            auto* stencil=[MTLStencilDescriptor new];
++            stencil.stencilCompareFunction=MTLCompareFunctionEqual;
++            depth_desc.frontFaceStencil=depth_desc.backFaceStencil=stencil;
++        }
++        auto depth_state=[f.mtl newDepthStencilStateWithDescriptor:depth_desc];
++        auto* render=[MTLRenderPassDescriptor renderPassDescriptor];
++        render.colorAttachments[0].texture=field;
++        render.colorAttachments[0].loadAction=MTLLoadActionClear;
++        render.colorAttachments[0].storeAction=MTLStoreActionStore;
++        render.colorAttachments[0].clearColor=MTLClearColorMake(.5,.5,0,0);
++        render.depthAttachment.texture=depth;
++        render.depthAttachment.loadAction=MTLLoadActionLoad;
++        render.depthAttachment.storeAction=MTLStoreActionStore;
++        if(format==MTLPixelFormatDepth32Float_Stencil8) {
++            render.stencilAttachment.texture=depth;
++            render.stencilAttachment.loadAction=MTLLoadActionLoad;
++            render.stencilAttachment.storeAction=MTLStoreActionStore;
++        }
++        f.scheduler.RenderEncoder((__bridge const void*)render,output,false);
++        auto& commands=f.scheduler.Commands();
++        commands.SetRenderPipelineState((__bridge void*)pipeline);
++        commands.SetDepthStencilState((__bridge void*)depth_state);
++        commands.SetStencilReference(7,7);
++        Metal::RenderList::Viewport viewport{0,0,32,16,0,1};
++        commands.SetViewports(&viewport,1);
++        commands.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        f.scheduler.EndWithBarrier();
++        camera();
++        mirror.Drawn();
++        mirror.Merge((__bridge const void*)motion,32,16);
++        auto result=ReadTexture(f,motion,4);
++        auto* half=reinterpret_cast<const u16*>(result.data());
++        for(u32 y=0;y<16;++y) for(u32 x=0;x<32;++x) {
++            u32 i=(y*32+x)*2;
++            CHECK(half[i]==(x<16?0xc800:0x3c00)); // -8 or camera 1
++            CHECK(half[i+1]==(x<16?0xc800:0x4000)); // -8 or camera 2
++        }
++        // New frame: stale mirror/coefficients must never overwrite camera-only motion.
++        mirror.FrameStart(); camera();
++        mirror.Merge((__bridge const void*)motion,32,16);
++        result=ReadTexture(f,motion,4); half=reinterpret_cast<const u16*>(result.data());
++        CHECK(half[0]==0x3c00 && half[1]==0x4000);
++        // Zero packing is rejected on the GPU, preserving existing camera vectors.
++        CHECK(mirror.Capture((__bridge const void*)packing,16,8));
++        CHECK(mirror.Prepare(guest,32,16,output));
++        mirror.Drawn(); mirror.Merge((__bridge const void*)motion,32,16);
++        result=ReadTexture(f,motion,4); half=reinterpret_cast<const u16*>(result.data());
++        CHECK(half[0]==0x3c00 && half[1]==0x4000);
++        // Non-finite packing is also rejected without corrupting camera vectors.
++        const u32 nan_coefficients[2]={0x7fc00000,0x3f800000};
++        std::memcpy(static_cast<u8*>(packing.contents)+16,nan_coefficients,8);
++        mirror.FrameStart();
++        CHECK(mirror.Capture((__bridge const void*)packing,16,8));
++        CHECK(mirror.Prepare(guest,32,16,output));
++        mirror.Drawn(); mirror.Merge((__bridge const void*)motion,32,16);
++        result=ReadTexture(f,motion,4); half=reinterpret_cast<const u16*>(result.data());
++        CHECK(half[0]==0x3c00 && half[1]==0x4000);
++        CHECK(!mirror.Prepare(guest,8192,8192,output)); // auxiliary budget fallback
++        auto layered=guest; layered.num_layers=2;
++        CHECK(!mirror.Prepare(layered,32,16,output));
++        // Resize with encoded work still pending: no Finish in Prepare, deferred old resources.
++        for (u32 width : {16u,32u,24u}) {
++            mirror.FrameStart();
++            CHECK(mirror.Capture((__bridge const void*)packing,16,8));
++            CHECK(mirror.Prepare(guest,width,16,output));
++        }
++        Settle(f);
++        std::memcpy(static_cast<u8*>(packing.contents)+16,coefficients+4,8);
++    }
++    // Tag follows each held/replayed pass: host stateful mirrors must not count as guest.
++    std::atomic<unsigned> guest_passes=0;
++    f.scheduler.SetVisibilityQuery([&](const void*) { ++guest_passes; return std::pair<void*,u64>{}; });
++    auto* pass=[MTLRenderPassDescriptor renderPassDescriptor];
++    pass.colorAttachments[0].texture=color;
++    pass.colorAttachments[0].loadAction=MTLLoadActionClear;
++    pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++    RenderState state{}; state.width=8;state.height=4;
++    f.scheduler.RenderEncoder((__bridge const void*)pass,state,false);
++    f.scheduler.RenderEncoder((__bridge const void*)pass,state,false);
++    f.scheduler.RenderEncoder((__bridge const void*)pass,state,true);
++    f.scheduler.EndWithBarrier();
++    CHECK(guest_passes==1);
++    f.scheduler.SetVisibilityQuery({});
++    Settle(f);
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -516,6 +715,7 @@
+         TestDepthStencil(f);
+         TestEligibility(f);
+         TestLifetime(f);
++        TestGameVelocityMirror(f);
+         Settle(f);
+         CHECK(!f.scheduler.HasFailed());
+     }

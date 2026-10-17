@@ -18,7 +18,7 @@ apply_once() {
     git -C "$dir" apply --check "$patch"
     git -C "$dir" apply "$patch"
 }
-for patch in "$repo"/gpu/patches/metal/*.patch; do apply_once "$source" "$patch"; done
+python3 "$repo/tools/macos/apply_metal_patches.py" "$source" "$repo"/gpu/patches/metal/*.patch
 for patch in "$source"/gpu/patches/fsr-vulkan/*.patch; do
     apply_once "$source/gpu/third_party/fsr-vulkan" "$patch"
 done

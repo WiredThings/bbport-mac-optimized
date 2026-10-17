@@ -3,6 +3,31 @@ import XCTest
 
 final class OptimizedProfileTests: XCTestCase {
 
+    func testGameVelocityPersistenceAndBackendIsolation() {
+        let suite = "bbport.velocity.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var prefs = LauncherPrefs.load(from: defaults)
+        var game = GameSettings()
+        game.upscaler = "metalfx"
+        game.effects[game.effects.firstIndex { $0.key == "effect_motion_blur" }!].isOn = false
+        XCTAssertTrue(prefs.metalObjectMotion)
+        let profile = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(profile.environment["BB_METAL_OBJECT_MOTION"], "1")
+        XCTAssertFalse(profile.settings.effects.first { $0.key == "effect_motion_blur" }!.isOn)
+        XCTAssertFalse(profile.settings.objectMotion)
+        prefs.metalObjectMotion = false
+        prefs.save(to: defaults)
+        XCTAssertFalse(LauncherPrefs.load(from: defaults).metalObjectMotion)
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_METAL_OBJECT_MOTION"], "0")
+        prefs.metalObjectMotion = true
+        game.upscaler = "off"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_METAL_OBJECT_MOTION"], "0")
+        prefs.renderer = "vulkan"
+        game.upscaler = "fsr3"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_METAL_OBJECT_MOTION"], "0")
+    }
+
     func testMetalOcclusionToggleAndBackendIsolation() {
         let suite = "bbport.occlusion.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

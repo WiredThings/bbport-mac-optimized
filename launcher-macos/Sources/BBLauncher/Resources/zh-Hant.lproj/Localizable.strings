@@ -289,3 +289,7 @@
 
 "Occlusion culling (experimental)" = "遮擋剔除（實驗）";
 "Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "使用保守的可見性查詢。若物體或燈光閃爍，請關閉；下次啟動遊戲生效。";
+
+"Game object motion vectors (experimental)" = "遊戲物體速度圖（實驗）";
+"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "保留遊戲速度圖；動態模糊遵循「特效」設定。需要重新啟動遊戲。";
+"MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX 合併相機運動與支援的遊戲物體速度圖。暫不支援 RCAS 和 HDR。";

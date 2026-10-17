@@ -182,6 +182,7 @@ struct LauncherPrefs: Equatable {
     var preupload = ""
     var nativeGpu = false
     var renderer = "metal"
+    var metalObjectMotion = true
     var metalOcclusion = true
     var frameStats = false
     var gpuProfile = false
@@ -222,6 +223,7 @@ struct LauncherPrefs: Equatable {
         static let preupload = "preupload"
         static let nativeGpu = "nativeGpu"
         static let renderer = "renderer"
+        static let metalObjectMotion = "metalObjectMotion"
         static let metalOcclusion = "metalOcclusion"
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
@@ -276,6 +278,7 @@ struct LauncherPrefs: Equatable {
         p.preupload = text(Key.preupload, p.preupload)
         p.nativeGpu = flag(Key.nativeGpu, p.nativeGpu)
         p.renderer = text(Key.renderer, p.renderer)
+        p.metalObjectMotion = flag(Key.metalObjectMotion, p.metalObjectMotion)
         p.metalOcclusion = flag(Key.metalOcclusion, p.metalOcclusion)
         if !Catalog.contains(Catalog.renderers, p.renderer) { p.renderer = "metal" }
         p.frameStats = flag(Key.frameStats, p.frameStats)
@@ -323,6 +326,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(preupload, forKey: Key.preupload)
         defaults.set(nativeGpu, forKey: Key.nativeGpu)
         defaults.set(renderer, forKey: Key.renderer)
+        defaults.set(metalObjectMotion, forKey: Key.metalObjectMotion)
         defaults.set(metalOcclusion, forKey: Key.metalOcclusion)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)

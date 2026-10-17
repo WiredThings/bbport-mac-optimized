@@ -141,6 +141,29 @@ def validate_patch_requirements(names, game):
     return names
 
 
+def metal_game_velocity(settings):
+    return (os.environ.get('BB_RENDERER') == 'metal' and
+            os.environ.get('BB_METAL_OBJECT_MOTION') == '1' and
+            os.environ.get('BB_UPSCALER', settings.get('upscaler')) == 'metalfx')
+
+
+def compatible_effect_names(names, settings):
+    # The old perf patch destroys the velocity producer. Metal replaces the final blur passes
+    # with scene copies instead, keeping the user's effect_motion_blur=0 setting unchanged.
+    if metal_game_velocity(settings):
+        names = [n for n in names if n != EFFECTS['effect_motion_blur'][0]]
+    return names
+
+
+def validate_velocity_writes(writes, settings):
+    if not metal_game_velocity(settings): return
+    constructor = 0x026C2549 - EBOOT_BASE
+    for offset, data in writes:
+        if offset <= constructor < offset + len(data) and data[constructor-offset] == 0:
+            raise ValueError('External patch disables the motion-blur constructor and game velocity; '
+                             'disable that patch or turn off Metal game object motion vectors')
+
+
 def effect_patches(settings):
     names=[]
     for key,(off,on) in EFFECTS.items():
@@ -149,7 +172,7 @@ def effect_patches(settings):
         if name: names.append(name)
     lod=MODEL_LOD.get(settings.get('model_lod','0'))
     if lod: names.append(lod)
-    return names
+    return compatible_effect_names(names, settings)
 SCENE_WIDTH=0x02196A6B-EBOOT_BASE
 SCENE_HEIGHT=0x02196A7A-EBOOT_BASE
 UI_WIDTH=0x02358554-EBOOT_BASE
@@ -376,6 +399,7 @@ def main():
         size=render_size(settings)
         if size: print(f'{size[0]}x{size[1]}')
         return
+    settings=read_settings(a.settings)
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
     names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
     names+=[n for n in language_patches() if n not in names]
@@ -383,6 +407,7 @@ def main():
         names.append(INTEL_TONEMAP)
     if skip_network_choice() and SKIP_NETWORK_CHOICE not in names:
         names.append(SKIP_NETWORK_CHOICE)
+    names=compatible_effect_names(names, settings)
     names=validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
@@ -401,6 +426,7 @@ def main():
         # After the built-in ones: an external patch of the same bytes wins.
         writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
                                                     a.patches_config),segments)
+    validate_velocity_writes(writes, settings)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).
     blob=struct.pack('<8sQQ',b'BBPATCH2',EBOOT_BASE,len(writes))

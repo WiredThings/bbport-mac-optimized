@@ -289,3 +289,7 @@
 
 "Occlusion culling (experimental)" = "Occlusion culling (experimental)";
 "Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "Conservative visibility queries. Disable if objects or lights flicker; applies on next launch.";
+
+"Game object motion vectors (experimental)" = "Game object motion vectors (experimental)";
+"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "Preserves game velocity; motion blur follows the Effects setting. Restart required.";
+"MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable.";

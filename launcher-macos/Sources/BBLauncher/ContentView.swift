@@ -481,17 +481,24 @@ struct UpscalerSection: View {
                 }
             }
             .disabled(upscaler == "off" || !model.game.sharpen || model.prefs.renderer == "metal")
-            Toggle(isOn: $model.game.objectMotion) {
-                Text(L10n.key("Object motion vectors"))
-                Text(L10n.key("Less ghosting on characters; costs about 10% FPS"))
+            if model.prefs.renderer == "metal" {
+                Toggle(isOn: $model.prefs.metalObjectMotion) {
+                    Text(L10n.key("Game object motion vectors (experimental)"))
+                    Text(L10n.key("Preserves game velocity; motion blur follows the Effects setting. Restart required."))
+                }
+                .disabled(upscaler != "metalfx")
+            } else {
+                Toggle(isOn: $model.game.objectMotion) {
+                    Text(L10n.key("Object motion vectors"))
+                    Text(L10n.key("Less ghosting on characters; costs about 10% FPS"))
+                }
             }
-            .disabled(model.prefs.renderer == "metal")
         } header: {
             Text(L10n.key("Upscaler"))
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if model.prefs.renderer == "metal" {
-                    Text(L10n.key("Metal uses MetalFX and camera motion vectors. Object motion, RCAS and HDR are unavailable."))
+                    Text(L10n.key("MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable."))
                 }
                 if let replaced = model.game.replacedUpscaler {
                     Text(L10n.format("bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead.", String(describing: replaced)))

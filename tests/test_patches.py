@@ -313,3 +313,27 @@ class IntelTonemapTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MetalGameVelocityPatchTests(unittest.TestCase):
+    def test_velocity_keeps_constructor_and_preserves_blur_setting(self):
+        settings = {'upscaler': 'metalfx', 'effect_motion_blur': '0', 'effect_ssao': '0'}
+        env = {'BB_RENDERER': 'metal', 'BB_METAL_OBJECT_MOTION': '1', 'BB_UPSCALER': 'metalfx'}
+        with patch.dict(os.environ, env, clear=True):
+            names = effect_patches(settings)
+            self.assertNotIn('Disable Motion Blur (perf increase)', names)
+            self.assertIn(patches.EFFECTS['effect_ssao'][0], names)
+            self.assertEqual(settings['effect_motion_blur'], '0')
+            self.assertEqual(patches.compatible_effect_names(['Disable Motion Blur (perf increase)'], settings), [])
+            patches.validate_velocity_writes([], settings)
+            with self.assertRaisesRegex(ValueError, 'constructor'):
+                patches.validate_velocity_writes([(0x026C2549-EBOOT_BASE, b'\x00')], settings)
+            with self.assertRaises(ValueError):
+                patches.validate_velocity_writes([(0x026C2548-EBOOT_BASE, b'\x90\x00')], settings)
+
+    def test_other_backends_and_disabled_feature_keep_existing_perf_patch(self):
+        for env in ({'BB_RENDERER': 'vulkan', 'BB_METAL_OBJECT_MOTION': '1'},
+                    {'BB_RENDERER': 'metal', 'BB_METAL_OBJECT_MOTION': '0'},
+                    {'BB_RENDERER': 'metal', 'BB_METAL_OBJECT_MOTION': '1', 'BB_UPSCALER': 'off'}):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
+                self.assertIn('Disable Motion Blur (perf increase)', effect_patches({'upscaler': 'metalfx', 'effect_motion_blur': '0'}))

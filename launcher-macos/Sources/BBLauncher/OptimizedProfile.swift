@@ -38,6 +38,7 @@ struct OptimizedProfile {
             "BB_LANGUAGE": prefs.language,
             "BB_NATIVE_GPU": prefs.renderer == "metal" ? "0" : "1", "BB_PREBUILT": "1",
             "BB_RENDERER": prefs.renderer,
+            "BB_METAL_OBJECT_MOTION": prefs.renderer == "metal" && prefs.metalObjectMotion && settings.upscaler == "metalfx" ? "1" : "0",
             "BB_METAL_OCCLUSION": prefs.renderer == "metal" && prefs.metalOcclusion ? "1" : "0",
             "BB_SKIP_EMPTY_DRAWS": "1", "BB_VK_RECORD_THREADS": "1",
             "BB_FRAMES_AHEAD": "2", "BB_GPU_QOS": "1",
