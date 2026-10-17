@@ -102,3 +102,27 @@ Game data, shader text, caches, traces and saves are not published with this rep
 Validation: all 71 existing native groups, 8 focused query groups and 15 combined native
 groups passed, including Metal API validation. The metadata unit and 35 benchmark plus
 19 Metal report/packaging Python tests passed; all 24 serialized patches apply idempotently.
+
+## Follow-up combined run and memory audit
+
+A 45-second-warmup / 45-second-score attempt enabled query chaining, precise residency,
+direct copy, direct texture tiling and adaptive staging together. It stopped at 58.9 seconds
+under the unchanged sustained-warning guard, before scoring. The last recorded process
+footprint was 5,785,631,200 bytes and owned Metal allocation capacity 1,334,151,824 bytes.
+The preceding reference ended near 5,975,611,824 / 1,490,873,488 bytes, but startup trajectories
+were unmatched: this is **not a controlled memory-saving result**. Original save hashes and
+launcher preferences remained unchanged. No candidate is enabled in the normal installed app.
+
+A focused ARC/O3 x86_64 probe created 2000 Metal render-pass descriptors and observed weak
+references to both descriptor and attachment after each local scope. Both were already nil
+without a per-call autorelease pool. Main draw recording, replay jobs, texture creation and
+presentation also have existing scoped pools. Therefore the presence of a convenience factory
+outside a local pool does not establish a leak; no speculative pool change was made.
+Shader translation already releases previous IR objects while preserving arena capacity.
+These checks do not exclude all transient driver allocations or all possible lifetime bugs.
+
+After the owned process exited, system pressure returned to normal. Remaining swap usage was
+about 8.37 GiB; historical swap alone does not establish ongoing pressure. The same gameplay
+workload repeatedly reaches warning pressure, preventing a qualifying FPS/slow-frame result
+under this benchmark's strict gate. No other apps were terminated and no memory guard, cache
+capacity, resolution or effects were relaxed to obtain a score.
