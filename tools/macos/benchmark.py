@@ -101,6 +101,27 @@ def world_camera(row):
     except (KeyError,ValueError,TypeError): return False
 
 
+def camera_telemetry(rows):
+    """Repair only isolated absent camera telemetry bracketed by the same scene within 50 ms.
+
+    Keep every frame and its original time. Never repair a title/zero/invalid camera,
+    consecutive gaps, endpoints, or a loading-length gap. Raw CSV remains unchanged.
+    """
+    keys=('cam_x','cam_y','cam_z')
+    missing=[i for i,row in enumerate(rows) if all(row.get(k)=='' for k in keys)]
+    if len(missing)>len(rows)*.01: raise ValueError('Too much missing camera telemetry')
+    result=list(rows)
+    for i in missing:
+        if i==0 or i==len(rows)-1 or not world_camera(rows[i-1]) or not world_camera(rows[i+1]):
+            raise ValueError('Unbracketed camera telemetry gap')
+        a=[float(rows[i-1][k]) for k in keys];b=[float(rows[i+1][k]) for k in keys]
+        gap=float(rows[i+1]['t_s'])-float(rows[i-1]['t_s'])
+        if math.dist(a,b)>.05 or not 0<gap<=.05 or not float(rows[i-1]['t_s'])<float(rows[i]['t_s'])<float(rows[i+1]['t_s']):
+            raise ValueError('Camera telemetry gap crosses a scene change')
+        result[i]=dict(rows[i],**{k:rows[i-1][k] for k in keys})
+    return result,len(missing)
+
+
 def scene_matches(row, expected=None):
     if not world_camera(row): return False
     return not expected or math.dist([float(row[k]) for k in ('cam_x','cam_y','cam_z')],expected)<=.15
@@ -113,17 +134,20 @@ def stable_scene(rows, expected=None, seconds=3):
     if len(recent)<60 or end-float(recent[0]['t_s'])<seconds-.1: return False
     # Frame-boundary recorder counters can occasionally be low during normal gameplay.
     # Validate the window, retain all frame times, and never count the title camera as gameplay.
+    try: recent,_=camera_telemetry(recent)
+    except ValueError: return False
     return all(scene_matches(r,expected) for r in recent) and sum(float(r['draws'])>300 for r in recent)/len(recent)>=.99
 
 
 def metrics(rows):
+    rows,missing_camera=camera_telemetry(rows)
     if len(rows) < 100 or not all(world_camera(row) for row in rows) or sum(float(r['draws'])>300 for r in rows)/len(rows)<.99:
         raise ValueError('Measurement contains menus/loading or too few game frames')
     frames = sorted(float(r['frame_ms']) for r in rows)
     if not all(math.isfinite(t) and t > 0 for t in frames):
         raise ValueError('Invalid frame times')
     worst = max(1, math.ceil(len(frames) * .01))
-    result = dict(frames=len(frames), low_draw_frame_fraction=sum(float(r['draws'])<=300 for r in rows)/len(rows), fps=1000 / statistics.mean(frames), frame_ms_mean=statistics.mean(frames),
+    result = dict(frames=len(frames), missing_camera_samples=missing_camera, low_draw_frame_fraction=sum(float(r['draws'])<=300 for r in rows)/len(rows), fps=1000 / statistics.mean(frames), frame_ms_mean=statistics.mean(frames),
                   frame_ms_p50=statistics.median(frames), frame_ms_p95=frames[min(len(frames)-1, math.ceil(len(frames)*.95)-1)],
                   frame_ms_p99=frames[min(len(frames)-1, math.ceil(len(frames)*.99)-1)],
                   one_percent_low_fps=1000 / statistics.mean(frames[-worst:]), worst_frame_ms=frames[-1])

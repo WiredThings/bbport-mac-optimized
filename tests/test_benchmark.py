@@ -41,6 +41,23 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(b.stable_scene(r,[-9,-4,-18]))
         for row in r[-30:]:row['draws']='20'
         self.assertFalse(b.stable_scene(r))
+    def test_isolated_camera_telemetry_gap_retains_all_frame_times(self):
+        r=self.rows();r[500].update(cam_x='',cam_y='',cam_z='',draws='3',frame_ms='100')
+        m=b.metrics(r);self.assertEqual(m['frames'],1000);self.assertEqual(m['missing_camera_samples'],1);self.assertAlmostEqual(m['fps'],1000/20.08)
+        self.assertEqual(r[500]['cam_x'],'')
+    def test_camera_gap_cannot_hide_loading_or_scene_changes(self):
+        for changes in [dict(t_s='12'),dict(cam_x='8')]:
+            r=self.rows();r[500].update(cam_x='',cam_y='',cam_z='');r[501].update(changes)
+            with self.assertRaises(ValueError):b.metrics(r)
+    def test_consecutive_and_endpoint_camera_gaps_rejected(self):
+        for indices in [(0,),(999,),(500,501)]:
+            r=self.rows()
+            for i in indices:r[i].update(cam_x='',cam_y='',cam_z='')
+            with self.assertRaises(ValueError):b.metrics(r)
+    def test_actual_title_or_zero_camera_never_repaired(self):
+        for camera in [('0','4','-8'),('0','0','0')]:
+            r=self.rows();r[500].update(zip(('cam_x','cam_y','cam_z'),camera))
+            with self.assertRaises(ValueError):b.metrics(r)
     def test_nonfinite_and_zero_frame_times_rejected(self):
         for invalid in ['nan','0','-1','inf']:
             r=self.rows();r[0]['frame_ms']=invalid

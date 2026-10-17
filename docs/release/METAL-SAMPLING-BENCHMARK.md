@@ -88,3 +88,45 @@ Central Yharnam cohort and must not be compared with the earlier manual Hunter's
 samples. Title input stops permanently on the first world frame, including during death
 and respawn transitions. A second smoke run reached the stable respawn scene but was
 rejected by an overly strict per-frame recorder-count check; it is not an accepted baseline.
+
+The frame recorder can emit an isolated present with absent camera telemetry. Up to 1%
+missing samples are accepted only when each single gap is bracketed by valid identical
+world cameras within 50 ms. Endpoints, consecutive gaps, title/zero/invalid coordinates,
+long gaps and scene changes remain invalid. Only the absent coordinates are carried from
+the preceding matching record; every original frame time, including the neighboring slow
+frame, remains in the score. Raw CSV and missing-camera counts are retained. The first
+repeat that exposed this condition remains rejected rather than being retroactively scored.
+
+## Accepted autonomous results — Central Yharnam
+
+M4 Mac mini (10 GPU cores, 16 GB), frozen current owner settings and save, private cache,
+45 seconds warmup plus shader quiet window, 45 seconds sampling, GPU stage timing off.
+These are instrumented frame-statistics runs, not the earlier uninstrumented HUD readings.
+Four accepted runs used identical renderer/probe binaries and camera
+(-190.784, -27.226, 71.116). Average draws stayed between 1202.99 and 1203.77.
+
+| Order | Parameter address space | Mean FPS | 1% low FPS | p95 frame ms | Median process GiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | Original device | 41.90 | 31.54 | 26.18 | 5.853 |
+| 2 | Experimental constant | 41.39 | 26.14 | 26.64 | 5.767 |
+| 3 | Experimental constant | 41.62 | 25.20 | 26.58 | 5.814 |
+| 4 | Original device | 41.60 | 28.23 | 26.34 | 5.755 |
+
+Mean of the two run means: device 41.75 FPS, constant 41.50 FPS (-0.59%). Both experimental
+runs also had lower 1% lows than either reference. This small sample does not establish a
+precise causal regression, but it provides no reason to enable the experiment: **default
+remains device access**. No claimed sampling speedup. Differences in process footprint are
+not evidence of memory savings; this specialization creates no new resource or upload.
+
+The specialized paths actually compiled, including the hot 71c96598/e21e283a shaders; no
+GPU faults or compilation occurred in the accepted measurement windows. Every accepted
+run stopped its own private process and verified unchanged original save hashes. No normal
+launcher preferences were written. All accepted windows had complete camera telemetry;
+the separate rejected repeat remains excluded. Local detailed results and raw traces are
+in the owner's benchmark workspace, not distributed with saves or game assets.
+
+Validation: 43 native renderer test groups, 17 benchmark checks, and 12 packaging/analysis
+checks pass. Exact GPU sampling tests include linear/sRGB, mip filtering and packed offsets;
+existing two-level page table, velocity/blur bypass, occlusion, proxy clear, lean usage,
+alpha fusion and resource-retirement/memory-budget tests remain passing. This does not
+establish a whole-game visual or performance guarantee beyond the tested paths.
