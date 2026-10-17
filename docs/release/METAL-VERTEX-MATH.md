@@ -31,6 +31,9 @@ Default on; `BB_MTL_VERTEX_MATH=0` restores original helper calls. Optional diag
 parent PSOs each have a lifetime creation limit of 32; cap/failure messages invalidate
 claims of complete pairing. The file selector uses atomic state and polls at most once
 a second. Normal launches create no reference libraries/PSOs and poll no file.
+Warm-up forwards the same program name/identity as runtime compilation; existing SPIR-V,
+metadata format, cache generations and capacities stay unchanged. This also lets cached
+programs build the intended bounded reference states.
 Other vertex passes stay optimized during this targeted same-process A/B; it measures
 the selected main passes, not a complete 0.2.13-vs-0.2.14 comparison.
 

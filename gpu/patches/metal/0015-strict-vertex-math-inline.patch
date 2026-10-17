@@ -14,6 +14,21 @@ diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
      # bbport: compiles every SPIR-V module of a shader cache directory to MSL and a MTLLibrary
      # (renderer_metal/mtl_shader); needs a Metal device only, so it builds the few sources it
      # uses instead of linking bbgpu.
+diff --git a/gpu/shadps4/video_core/pipeline_cache_core_serialization.cpp b/gpu/shadps4/video_core/pipeline_cache_core_serialization.cpp
+--- a/gpu/shadps4/video_core/pipeline_cache_core_serialization.cpp
++++ b/gpu/shadps4/video_core/pipeline_cache_core_serialization.cpp
+@@ -250,7 +250,10 @@
+     // bbport: a module the driver rejects is a damaged entry (WarmUp rebuilds the cache), not a
+     // fatal error as when compiling.
+     const auto compile = [&] {
+-        const auto created = CreateShaderModule(spv, {}, true);
++        // Preserve the guest program identity on warm-up too: the Metal shader cache and
++        // bounded diagnostic reference selection use the same name as runtime compilation.
++        const auto name = GetShaderName(program->info.hw_stage, program->info.pgm_hash, perm_idx);
++        const auto created = CreateShaderModule(spv, name, true);
+         if (!created) {
+             throw Serialization::CorruptData{"cached SPIR-V rejected by the driver"};
+         }
 diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.h b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.h
 --- a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.h
 +++ b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.h
