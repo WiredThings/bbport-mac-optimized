@@ -1,0 +1,295 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
+@@ -113,6 +113,8 @@
+     /// memoryBarrierWithScope:Buffers|Textures afterStages:Vertex|Fragment
+     /// beforeStages:Vertex|Fragment (the scheduler's in-pass barrier).
+     void MemoryBarrier();
++    struct BarrierCounts { u64 requested{}, dropped{}; };
++    [[nodiscard]] BarrierCounts BarrierSnapshot() const noexcept;
+     void PushDebugGroup(const char* name);
+     void PopDebugGroup();
+     void InsertDebugSignpost(const char* name);
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
+@@ -417,6 +417,12 @@
+     id<MTLRenderCommandEncoder> encoder = nil;
+     std::vector<u8> arena;
+     bool has_barrier = false;
++    const bool coalesce_barriers = [] {
++        const char* flag = std::getenv("BB_MTL_COALESCE_BARRIERS");
++        return flag && flag[0] == '1';
++    }();
++    bool barrier_since_draw = false;
++    RenderList::BarrierCounts barriers{};
+ 
+     // The redundancy filter (reset by the Begin* calls).
+     void* pipeline = kUnset;
+@@ -485,13 +491,36 @@
+                     static_cast<unsigned long long>(arena_high_water >> 10));
+     }
+ 
++    // Bindings, fixed-function setters and labels perform no resource accesses. Retain the
++    // first barrier since a draw and every barrier after any draw, including indirect/patch
++    // draws. This filter applies only within ONE physical render encoder. Scheduler fences,
++    // hoisted compute barriers, pass load/store actions and recorded HasBarrier are unchanged.
++    template <class Cmd>
++    void Execute(id<MTLRenderCommandEncoder> enc, const Cmd& c, const void* extra) {
++        if constexpr (Cmd::op == Op::MemoryBarrier) {
++            ++barriers.requested;
++            if (coalesce_barriers && barrier_since_draw) {
++                ++barriers.dropped;
++                return;
++            }
++            barrier_since_draw = true;
++        } else if constexpr (Cmd::op == Op::DrawPrimitives ||
++                             Cmd::op == Op::DrawIndexedPrimitives ||
++                             Cmd::op == Op::DrawPrimitivesIndirect ||
++                             Cmd::op == Op::DrawIndexedPrimitivesIndirect ||
++                             Cmd::op == Op::DrawPatches) {
++            barrier_since_draw = false;
++        }
++        Apply(enc, c, extra);
++    }
++
+     // ---- Direct or recorded ----
+ 
+     /// Records `c` and its trailing `extra_size` bytes, or applies it to the encoder at once.
+     template <class Cmd>
+     void Issue(const Cmd& c, const void* extra = nullptr, u32 extra_size = 0) {
+         if (mode == Mode::Direct) {
+-            Apply(encoder, c, extra);
++            Execute(encoder, c, extra);
+             return;
+         }
+         assert(mode == Mode::Recording);
+@@ -522,10 +551,12 @@
+     void Run(id<MTLRenderCommandEncoder> enc, const u8* record) {
+         Cmd c;
+         std::memcpy(&c, record + sizeof(Header), sizeof(Cmd));
+-        Apply(enc, c, record + sizeof(Header) + sizeof(Cmd));
++        Execute(enc, c, record + sizeof(Header) + sizeof(Cmd));
+     }
+ 
+     void Replay(id<MTLRenderCommandEncoder> enc) {
++        barrier_since_draw = false;
++        barriers = {};
+         const u8* data = arena.data();
+         for (size_t at = 0; at < arena.size();) {
+             Header header;
+@@ -580,6 +611,8 @@
+     impl->encoder = (__bridge id<MTLRenderCommandEncoder>)encoder;
+     impl->arena.clear();
+     impl->has_barrier = false;
++    impl->barrier_since_draw = false;
++    impl->barriers = {};
+     impl->ResetFilter();
+ }
+ 
+@@ -588,6 +621,8 @@
+     impl->encoder = nil;
+     impl->arena.clear();
+     impl->has_barrier = false;
++    impl->barrier_since_draw = false;
++    impl->barriers = {};
+     impl->ResetFilter();
+ }
+ 
+@@ -814,6 +849,10 @@
+ 
+ // ---- Ordering and labels ----
+ 
++RenderList::BarrierCounts RenderList::BarrierSnapshot() const noexcept {
++    return impl->barriers;
++}
++
+ void RenderList::MemoryBarrier() {
+     impl->has_barrier = true;
+     impl->Count(false);
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -20,6 +20,17 @@
+ 
+ constexpr u64 WaitSliceMs = 100;     ///< one bounded wait of Wait()
+ constexpr u64 StuckWarningMs = 10000; ///< Wait() warns once after this long
++
++// Emitted only for the already bounded single-frame metadata diagnostic. Requested barriers
++// and actual drops are separate from Scheduler::MemoryBarrier requests and physical fences.
++void CaptureRenderBarriers(const RenderList& list, uintptr_t queue) {
++    if (!VideoCore::FrameCapture::NativeRecording()) return;
++    const auto counts = list.BarrierSnapshot();
++    if (counts.requested)
++        VideoCore::FrameCapture::Native(std::format(
++            "{{\"op\":\"render_barriers\",\"queue\":{},\"requested\":{},\"dropped\":{}}}",
++            queue, counts.requested, counts.dropped));
++}
+ 
+ /// A fence wait before everything the encoder does from here on. Render encoders take stages:
+ /// vertex is the first one every draw goes through.
+@@ -428,6 +439,7 @@
+         impl->profile->Label(held_label.c_str());
+     }
+     commands.Replay((__bridge void*)impl->render);
++    CaptureRenderBarriers(commands, (uintptr_t)this);
+     commands.BeginDirect((__bridge void*)impl->render);
+ }
+ 
+@@ -513,6 +525,7 @@
+             impl->profile->Label(job.label.c_str());
+         }
+         job.list.Replay((__bridge void*)impl->render);
++        CaptureRenderBarriers(job.list, (uintptr_t)this);
+         job.list.End();
+         CloseNative(EncoderKind::Render);
+     }
+@@ -654,6 +667,7 @@
+ 
+ void Scheduler::ClosePhysical(EncoderKind kind) {
+     if (kind == EncoderKind::Render && commands_active) {
++        CaptureRenderBarriers(commands, (uintptr_t)this);
+         commands.End();
+         commands_active = false;
+     }
+@@ -714,7 +728,7 @@
+ }
+ 
+ void Scheduler::MemoryBarrier() {
+-    if(VideoCore::FrameCapture::NativeRecording())VideoCore::FrameCapture::Native("{\"op\":\"barrier\"}");
++    if(VideoCore::FrameCapture::NativeRecording())VideoCore::FrameCapture::Native(std::format("{{\"op\":\"barrier\",\"kind\":{},\"holding\":{},\"hoisting\":{}}}",unsigned(open_encoder),holding?"true":"false",hoisting?"true":"false"));
+     impl->profile->Barrier();
+     if(impl->pending_clears) {
+         // All queued operations are independent constant overwrites. Preserve a
+@@ -744,9 +758,15 @@
+         WaitOutstandingFences(*impl, EncoderKind::Compute);
+         break;
+     case EncoderKind::Render:
+-        [impl->render memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
+-                                 afterStages:MTLRenderStageVertex | MTLRenderStageFragment
+-                                beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
++        if (commands_active) {
++            // Guest direct draws already go through this list. Its optional filter knows
++            // whether a draw occurred since the last identical render-only barrier.
++            commands.MemoryBarrier();
++        } else {
++            [impl->render memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
++                                     afterStages:MTLRenderStageVertex | MTLRenderStageFragment
++                                    beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
++        }
+         WaitOutstandingFences(*impl, EncoderKind::Render);
+         break;
+     case EncoderKind::Blit:
+diff --git a/tests/test_mtl_render_list.mm b/tests/test_mtl_render_list.mm
+--- a/tests/test_mtl_render_list.mm
++++ b/tests/test_mtl_render_list.mm
+@@ -11,6 +11,7 @@
+ 
+ #include <array>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include "video_core/renderer_metal/mtl_render_list.h"
+@@ -132,6 +133,91 @@
+     return Read(f);
+ }
+ 
++
++// The fake encoder checks forwarded API calls for every draw family, including zero-count
++// draws. These are control-flow checks; the separate atomic producer/consumer runs on Metal.
++@interface BarrierEncoder : NSObject
++@property NSUInteger barriers;
++@property NSUInteger draws;
++@end
++@implementation BarrierEncoder
++- (void)memoryBarrierWithScope:(MTLBarrierScope)s afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b { ++_barriers; }
++- (void)setCullMode:(MTLCullMode)m {}
++- (void)insertDebugSignpost:(NSString*)s {}
++- (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i baseInstance:(NSUInteger)b { ++_draws; }
++- (void)drawIndexedPrimitives:(MTLPrimitiveType)t indexCount:(NSUInteger)n indexType:(MTLIndexType)i indexBuffer:(id<MTLBuffer>)b indexBufferOffset:(NSUInteger)o instanceCount:(NSUInteger)c baseVertex:(NSInteger)v baseInstance:(NSUInteger)a { ++_draws; }
++- (void)drawPrimitives:(MTLPrimitiveType)t indirectBuffer:(id<MTLBuffer>)b indirectBufferOffset:(NSUInteger)o { ++_draws; }
++- (void)drawIndexedPrimitives:(MTLPrimitiveType)t indexType:(MTLIndexType)i indexBuffer:(id<MTLBuffer>)b indexBufferOffset:(NSUInteger)o indirectBuffer:(id<MTLBuffer>)a indirectBufferOffset:(NSUInteger)p { ++_draws; }
++- (void)drawPatches:(NSUInteger)n patchStart:(NSUInteger)s patchCount:(NSUInteger)c patchIndexBuffer:(id<MTLBuffer>)b patchIndexBufferOffset:(NSUInteger)o instanceCount:(NSUInteger)i baseInstance:(NSUInteger)a { ++_draws; }
++@end
++
++static bool Coalescing() {
++    const char* flag=std::getenv("BB_MTL_COALESCE_BARRIERS");return flag&&flag[0]=='1';
++}
++static void BarrierSequence(RenderList& l) {
++    l.MemoryBarrier();l.SetCullMode(MTLCullModeNone);l.MemoryBarrier();
++    l.DrawPrimitives(MTLPrimitiveTypeTriangle,0,0,1,0);
++    l.MemoryBarrier();l.InsertDebugSignpost("binding-only gap");l.MemoryBarrier();
++    l.DrawIndexedPrimitives(MTLPrimitiveTypeTriangle,0,MTLIndexTypeUInt16,nullptr,0,1,0,0);
++    l.MemoryBarrier();l.MemoryBarrier();
++    l.DrawPrimitivesIndirect(MTLPrimitiveTypeTriangle,nullptr,0);
++    l.MemoryBarrier();l.MemoryBarrier();
++    l.DrawIndexedPrimitivesIndirect(MTLPrimitiveTypeTriangle,MTLIndexTypeUInt16,nullptr,0,nullptr,0);
++    l.MemoryBarrier();l.MemoryBarrier();
++    l.DrawPatches(3,0,0,1,0);
++    l.MemoryBarrier();l.MemoryBarrier();
++}
++static void TestBarrierControlFlow() {
++    for(unsigned mode=0;mode<3;++mode) {
++        RenderList source,destination;auto enc=[BarrierEncoder new];
++        if(!mode)source.BeginDirect(Raw(enc));else source.BeginRecording();
++        BarrierSequence(source);CHECK(source.HasBarrier());
++        RenderList* active=&source;
++        if(mode==2){source.TakeRecording(destination);source.End();active=&destination;CHECK(active->HasBarrier());}
++        if(mode)active->Replay(Raw(enc));
++        CHECK(enc.draws==5);CHECK(enc.barriers==(Coalescing()?6:12));
++        auto stats=active->BarrierSnapshot();CHECK(stats.requested==12 && stats.dropped==(Coalescing()?6:0));
++        active->End();
++        // A new physical encoder must keep its first barrier, regardless of the old final op.
++        active->BeginDirect(Raw(enc));active->MemoryBarrier();active->End();
++        CHECK(enc.barriers==(Coalescing()?7:13));
++    }
++    std::puts("barrier filter: direct/recorded/moved/reset and every draw family passed");
++}
++
++static void TestBarrierAtomicOrdering(const Fixture& f, bool vertex) {
++    NSString* src=@"#include <metal_stdlib>\nusing namespace metal;\n"
++      "vertex float4 vs(uint id[[vertex_id]]){float2 p=float2((id<<1)&2,id&2);return float4(p*2-1,0,1);}\n"
++      "fragment float4 fs(device atomic_uint* counter[[buffer(0)]],constant uint& mode[[buffer(1)]]) {uint v=mode?atomic_load_explicit(counter,memory_order_relaxed):atomic_fetch_add_explicit(counter,1u,memory_order_relaxed)+1u;return float4(float(v)/255.0,0,0,1);}\n";
++    if(vertex)src=@"#include <metal_stdlib>\nusing namespace metal;\n"
++      "struct O{float4 position[[position]];float4 color[[user(locn0)]];};\n"
++      "vertex O vs(uint id[[vertex_id]],device atomic_uint* counter[[buffer(0)]],constant uint& mode[[buffer(1)]]){if(!mode&&id==0)atomic_fetch_add_explicit(counter,1u,memory_order_relaxed);uint v=mode?atomic_load_explicit(counter,memory_order_relaxed):0u;float2 p=float2((id<<1)&2,id&2);return O{float4(p*2-1,0,1),float4(float(v)/255.0,0,0,1)};}\n"
++      "fragment float4 fs(O in[[stage_in]]){return in.color;}\n";
++    NSError* error=nil;auto lib=[f.device newLibraryWithSource:src options:nil error:&error];
++    CHECK(lib);if(!lib){std::printf("atomic library: %s\n",error.localizedDescription.UTF8String);return;}
++    auto desc=[MTLRenderPipelineDescriptor new];desc.vertexFunction=[lib newFunctionWithName:@"vs"];desc.fragmentFunction=[lib newFunctionWithName:@"fs"];desc.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++    auto pipeline=[f.device newRenderPipelineStateWithDescriptor:desc error:&error];CHECK(pipeline);if(!pipeline)return;
++    auto counter=[f.device newBufferWithLength:256 options:MTLResourceStorageModeShared];
++    for(unsigned mode=0;mode<3;++mode) {
++        *static_cast<uint32_t*>(counter.contents)=0;
++        auto cmd=[f.queue commandBuffer];auto enc=[cmd renderCommandEncoderWithDescriptor:Pass(f)];
++        RenderList l,moved;if(!mode)l.BeginDirect(Raw(enc));else l.BeginRecording();
++        l.SetRenderPipelineState(Raw(pipeline));const auto stage=vertex?RenderList::Stage::Vertex:RenderList::Stage::Fragment;l.SetBuffer(stage,Raw(counter),0,0);
++        RenderList::Viewport viewport{0,0,double(kWidth),1,0,1};l.SetViewports(&viewport,1);
++        RenderList::Scissor scissor{0,0,1,1};l.SetScissorRects(&scissor,1);
++        for(unsigned draw=0;draw<7;++draw) {
++            l.MemoryBarrier();uint32_t read_only=draw==6;l.SetBytes(stage,&read_only,4,1);l.MemoryBarrier();l.SetCullMode(MTLCullModeNone);l.MemoryBarrier();
++            l.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        }
++        RenderList* active=&l;if(mode==2){l.TakeRecording(moved);l.End();active=&moved;}
++        if(mode)active->Replay(Raw(enc));
++        auto stats=active->BarrierSnapshot();CHECK(stats.requested==21 && stats.dropped==(Coalescing()?14:0));active->End();
++        [enc endEncoding];[cmd commit];[cmd waitUntilCompleted];CHECK(cmd.status==MTLCommandBufferStatusCompleted);
++        CHECK(*static_cast<uint32_t*>(counter.contents)==6);CHECK(Read(f)[0]==0xff000006);
++    }
++    std::puts("barrier filter: atomic write/read dependencies and exact pixels direct/recorded/moved passed");
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -176,6 +262,9 @@
+                            kWhite = 0xffffffff;
+         const std::array<uint32_t, kWidth> expected{kGreen, kGreen, kRed,  kGreen,
+                                                     kBlue,  kWhite, 0,     0};
++        TestBarrierControlFlow();
++        TestBarrierAtomicOrdering(f,false);
++        TestBarrierAtomicOrdering(f,true);
+         RenderList list;
+         const auto direct = Run(f, list, false);
+         CHECK(direct == expected);

@@ -22,3 +22,12 @@ class AttachmentReportTests(unittest.TestCase):
    elif change=='unclosed':r.pop()
    else:r[2]=dict(op='open',queue=1,kind=1,guest=False)
    with self.assertRaises(ValueError):a.analyze(self.text(r))
+
+ def test_barrier_requests_are_not_inferred_as_redundant(self):
+  rows=self.rows();rows[3:3]=[dict(op='barrier'),dict(op='barrier',kind=2,holding=True,hoisting=True),dict(op='render_barriers',queue=1,requested=7,dropped=2)]
+  r=a.analyze(self.text(rows));self.assertEqual(r['render_barriers'],dict(lists=1,requested=7,dropped=2));self.assertEqual(len(r['scheduler_barrier_requests_by_path']),2)
+  self.assertIsNone(a.analyze(self.text(self.rows()))['render_barriers']['dropped'])
+ def test_invalid_barrier_summary_rejected(self):
+  for summary in [dict(queue=7,requested=1,dropped=0),dict(queue=1,requested=1,dropped=2),dict(queue=1,requested=-1,dropped=0)]:
+   rows=self.rows();rows[3:3]=[dict(op='render_barriers',**summary)]
+   with self.assertRaises(ValueError):a.analyze(self.text(rows))
