@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
+#include "bbport_pool_trim.h"
 
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -98,8 +101,37 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
 }
 
 vk::CommandBuffer CommandPool::Commit() {
+    // Upstream bmy/bbport-mac d6704c6: completed command buffers can retain large
+    // Metal command allocators. Keep a reusable working set instead of the peak.
+    static const bool trim = [] {
+        const char* env = std::getenv("BB_CMDBUF_TRIM");
+        return !(env && env[0] == '0');
+    }();
+    if (trim && ++commits_since_trim >= 64) {
+        commits_since_trim = 0;
+        Trim();
+    }
     const std::size_t index = CommitResource();
     return cmd_buffers[index];
+}
+
+void CommandPool::Trim() {
+    constexpr std::size_t KeepIdle = 32;
+    if (ticks.size() <= KeepIdle) {
+        return;
+    }
+    const u64 gpu_tick = work_semaphore->KnownGpuTick();
+    const std::size_t before = ticks.size();
+    const auto freed = BbTrimCompletedBuffers(ticks, cmd_buffers, gpu_tick, KeepIdle);
+    if (freed.empty()) {
+        return;
+    }
+    hint_iterator = 0;
+    instance.GetDevice().freeCommandBuffers(*cmd_pool, freed);
+    if (freed.size() >= 32) {
+        std::printf("GPU: command buffer pool %p trimmed from %zu to %zu\n",
+                    static_cast<const void*>(this), before, ticks.size());
+    }
 }
 
 DescriptorHeap::DescriptorHeap(const Instance& instance, Semaphore* work_semaphore_,

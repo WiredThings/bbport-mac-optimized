@@ -47,6 +47,7 @@ export BB_QUICKSAVE_HELPER=$PWD/tools/macos/quicksave.py
 export BB_QUICKSAVE_PYTHON=$PYTHON BB_QUICKSAVE_STATUS=$BB_DATA_DIR/out/quicksave-status.txt
 export BB_SKIP_EMPTY_DRAWS=1 BB_VK_RECORD_THREADS=1 BB_FRAMES_AHEAD=2 BB_GPU_QOS=1
 export BB_MAC_UNIFIED_MEMORY=0 BB_PIPE_PARK_WAITS=0
+export BB_CMDBUF_TRIM=${BB_CMDBUF_TRIM:-1} BB_KK_POOL_FIX=${BB_KK_POOL_FIX:-1}
 # These must never turn a normal Play click into an automated input/benchmark session.
 unset BB_PAD_FILE BB_PAD_REPLAY BB_PAD_RECORD BB_PRESET_FILE BB_TOGGLE_FILE
 unset BB_CAPTURE_TRIGGER BB_PRESENT_DUMP_TRIGGER BB_TIMEOUT BB_QUICKLOAD_PENDING
@@ -61,4 +62,5 @@ echo "Renderer: $BB_GPU_PROCESS"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
 echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
 echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"
+echo "Renderer memory fixes: command-trim=$BB_CMDBUF_TRIM, driver-pool-fix=$BB_KK_POOL_FIX"
 exec bash run.sh "$@"

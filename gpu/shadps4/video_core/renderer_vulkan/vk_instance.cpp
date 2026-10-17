@@ -1007,6 +1007,45 @@ void Instance::CollectToolingInfo() const {
     }
 }
 
+#ifdef __APPLE__
+/// The renderer's Vulkan heapUsage omits allocations KosmicKrisp keeps under its own Metal
+/// ledger. Sample that ledger at most every 250 ms so the texture collector can see native
+/// renderer pressure as well as allocations Vulkan attributes directly to the renderer.
+struct MacProcessMemory {
+    u64 outside_graphics = 0;
+    u64 graphics = 0;
+    bool valid = false;
+};
+
+static MacProcessMemory CurrentMacProcessMemory() {
+    static std::atomic<u64> other_cached{0}, graphics_cached{0};
+    static std::atomic<s64> sampled_ns{-1};
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
+    if (sampled < 0 || now - sampled >= 250'000'000) {
+        task_vm_info_data_t info{};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
+                      &count) == KERN_SUCCESS &&
+            count >= TASK_VM_INFO_REV3_COUNT) {
+            const u64 footprint = info.phys_footprint;
+            const s64 graphics_signed =
+                info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed;
+            const u64 graphics = graphics_signed > 0 ? u64(graphics_signed) : 0;
+            other_cached.store(footprint > graphics ? footprint - graphics : 0,
+                               std::memory_order_relaxed);
+            graphics_cached.store(graphics, std::memory_order_relaxed);
+            sampled_ns.store(now, std::memory_order_relaxed);
+        }
+    }
+    const s64 last_sample = sampled_ns.load(std::memory_order_relaxed);
+    return {other_cached.load(std::memory_order_relaxed),
+            graphics_cached.load(std::memory_order_relaxed), last_sample >= 0};
+}
+#endif
+
 u64 Instance::GetDeviceMemoryUsage() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
@@ -1021,47 +1060,54 @@ u64 Instance::GetDeviceMemoryUsage() const {
     return total_usage;
 }
 
+u64 Instance::GetDeviceGraphicsMemoryUsage() const {
+#ifdef __APPLE__
+    const MacProcessMemory process_memory = CurrentMacProcessMemory();
+    return process_memory.valid ? process_memory.graphics : 0;
+#else
+    return GetDeviceMemoryUsage();
+#endif
+}
+
 #ifdef __APPLE__
 /// bbport (macOS): the Mac's memory is shared by the CPU and the GPU, and Metal's limit (the
 /// heap size, recommendedMaxWorkingSetSize, ~75% of the Mac's memory) is for everything this
 /// process has, not for the GPU alone. The game's direct memory (5-9 GB), its heap, Rosetta and
-/// the runtime came on top of a GPU budget of the whole limit: on a 24 GB Mac the texture cache
-/// started collecting at 12.7 GB of GPU memory and the Mac swapped (issue #3). The GPU's share is
-/// the limit less the process's footprint outside the GPU's own allocations, at least 2 GB.
+/// the runtime came on top of a GPU budget of the whole limit (issue #3). The GPU's share is the
+/// limit less what the process uses outside graphics memory (macOS's graphics ledger), at least
+/// 2 GB. Not less the whole footprint beyond the renderer's own allocations: KosmicKrisp holds
+/// graphics memory of its own the renderer cannot see (15 GB and growing in a 5-minute run,
+/// issue #6), and counting it shrank the texture cache until it evicted images in use without
+/// freeing any of that.
 static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
-    // The footprint is sampled at most every 250 ms (this runs at every texture collector tick).
-    static std::atomic<u64> other_cached{0};
-    static std::atomic<s64> sampled_ns{-1};
-    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count();
-    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
-    if (sampled < 0 || now - sampled >= 250'000'000) {
-        task_vm_info_data_t info{};
-        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
-                      &count) != KERN_SUCCESS) {
-            return limit;
-        }
-        // The footprint counts this process's Metal allocations too; if it is ever smaller than
-        // them, they were evidently not in it.
-        const u64 footprint = info.phys_footprint;
-        other_cached.store(footprint >= gpu_usage ? footprint - gpu_usage : footprint,
-                           std::memory_order_relaxed);
-        sampled_ns.store(now, std::memory_order_relaxed);
+    const MacProcessMemory process_memory = CurrentMacProcessMemory();
+    if (!process_memory.valid) {
+        return limit;
     }
-    const u64 other = other_cached.load(std::memory_order_relaxed);
+    const u64 other = process_memory.outside_graphics;
+    const u64 graphics = process_memory.graphics;
     constexpr u64 Floor = u64{2} << 30;
     const u64 budget = limit > other + Floor ? limit - other : Floor;
-    // Printed when it moves by 1 GiB or more (the game's memory grows as areas load).
-    static std::atomic<u64> printed{0};
-    u64 last = printed.load(std::memory_order_relaxed);
-    if ((last > budget ? last - budget : budget - last) >= (u64{1} << 30) &&
-        printed.compare_exchange_strong(last, budget, std::memory_order_relaxed)) {
-        std::printf("GPU: memory budget %llu MiB (Metal's limit %llu MiB, less %llu MiB this "
-                    "process uses outside the GPU)\n",
+    // Printed when the budget or the graphics memory moves by 1 GiB or more: the second line
+    // tracks the driver's own graphics memory (graphics less the renderer's allocations).
+    static std::atomic<u64> printed_budget{0}, printed_graphics{0};
+    const auto moved = [](u64 a, u64 b) { return (a > b ? a - b : b - a) >= (u64{1} << 30); };
+    u64 last_budget = printed_budget.load(std::memory_order_relaxed);
+    u64 last_graphics = printed_graphics.load(std::memory_order_relaxed);
+    const bool budget_moved =
+        moved(last_budget, budget) &&
+        printed_budget.compare_exchange_strong(last_budget, budget, std::memory_order_relaxed);
+    const bool graphics_moved =
+        moved(last_graphics, graphics) &&
+        printed_graphics.compare_exchange_strong(last_graphics, graphics, std::memory_order_relaxed);
+    if (budget_moved || graphics_moved) {
+        std::printf("GPU: memory budget %llu MiB (Metal's limit %llu MiB, less %llu MiB outside "
+                    "graphics memory); graphics memory %llu MiB, of it %llu MiB the renderer's "
+                    "and %llu MiB the driver's own\n",
                     (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
-                    (unsigned long long)(other >> 20));
+                    (unsigned long long)(other >> 20), (unsigned long long)(graphics >> 20),
+                    (unsigned long long)(gpu_usage >> 20),
+                    (unsigned long long)((graphics > gpu_usage ? graphics - gpu_usage : 0) >> 20));
     }
     return budget;
 }

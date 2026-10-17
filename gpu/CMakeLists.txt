@@ -205,6 +205,10 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(command-pool-trim-test EXCLUDE_FROM_ALL ../tests/test_command_pool_trim.cpp)
+target_compile_options(command-pool-trim-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(command-pool-trim-test PRIVATE shim)
+
 add_executable(shader-performance-port-test EXCLUDE_FROM_ALL
     ../tests/test_shader_performance_port.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_compile_options(shader-performance-port-test PRIVATE -UNDEBUG)

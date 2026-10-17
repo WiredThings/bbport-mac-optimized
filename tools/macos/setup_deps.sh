@@ -21,7 +21,8 @@ PREFIX=${1:-$REPO/deps-$ARCH}
 SRC=$PREFIX/src
 mkdir -p "$PREFIX" "$SRC"
 exec > >(tee -a "$PREFIX/setup.log") 2>&1
-JOBS=$(sysctl -n hw.ncpu)
+JOBS=${BB_BUILD_JOBS:-2}
+[[ $JOBS =~ ^[1-9][0-9]*$ ]] || { echo "STOP: BB_BUILD_JOBS must be positive" >&2; exit 1; }
 CURRENT_STEP=start
 step() { CURRENT_STEP=$*; printf '\n=== %s\n' "$*"; }
 trap 'printf "\nSTOP: failed during: %s (line %s). Full output above and in %s\n" "$CURRENT_STEP" "$LINENO" "$PREFIX/setup.log" >&2' ERR
@@ -216,13 +217,13 @@ fi
 
 step "KosmicKrisp (Mesa Vulkan-on-Metal driver, $ARCH)"
 # The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
-# driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64),
-# pinned to the revision upstream used at the vendored shadPS4 commit.
-KK_REV=${KK_REV:-3af112680499cc5eaf519007404a7366679e1c7f}
+# bmy/bbport-mac PR #8: command-buffer memory rework, before geometry-shader emulation.
+KK_REV=${KK_REV:-a82cadb14cb225eaeadf190d5c9d20ca8ec91744}
 # This port's Mesa patches (tools/macos/kosmickrisp-patches): a change rebuilds the driver.
 KK_PATCHES=$(cat "$REPO"/tools/macos/kosmickrisp-patches/*.patch 2>/dev/null | shasum | cut -c1-16)
 kk_stamp=$PREFIX/lib/kosmickrisp/.bbport-patches
-if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_PATCHES" ]]; then
+KK_STAMP="$KK_REV $KK_PATCHES"
+if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_STAMP" ]]; then
     "$BREW" install meson llvm spirv-llvm-translator
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
@@ -230,7 +231,9 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     # Mesa's build scripts need these; pinned like the sources above.
     quiet "kosmickrisp python modules" "$PREFIX/pyenv/bin/pip" install --only-binary :all: \
         mako==1.3.10 markupsafe==3.0.2 packaging==25.0 pyyaml==6.0.2
-    kk=$SRC/mesa-kosmickrisp
+    # Each revision/patch series gets a fresh source directory. Later patches can edit
+    # earlier patches without resetting or cleaning another build's source checkout.
+    kk=$SRC/mesa-kosmickrisp-$KK_REV-$KK_PATCHES
     if [[ $(git -C "$kk" rev-parse HEAD 2>/dev/null) != "$KK_REV" ]]; then
         rm -rf "$kk" && mkdir -p "$kk"
         git -C "$kk" init -q
@@ -241,19 +244,27 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
         echo "fetching Mesa"
         git -C "$kk" submodule update -q --init --depth 1
     fi
-    # Our patches on top of the pinned Mesa (each applied once; a re-run finds them applied).
-    for patch in "$REPO"/tools/macos/kosmickrisp-patches/*.patch; do
-        [[ -f $patch ]] || continue
-        if ! git -C "$kk/externals/mesa" apply --reverse --check "$patch" 2>/dev/null; then
+    # Mark the complete series, rather than reverse-checking patches separately: a
+    # later patch may modify a line introduced by an earlier one.
+    if [[ ! -f $kk/.bbport-series-applied ]]; then
+        [[ -z $(git -C "$kk/externals/mesa" status --porcelain) ]] ||
+            die "Partially patched Mesa source at $kk; preserve it and use a new prefix"
+        for patch in "$REPO"/tools/macos/kosmickrisp-patches/*.patch; do
+            [[ -f $patch ]] || continue
             git -C "$kk/externals/mesa" apply "$patch"
             echo "applied $(basename "$patch")"
-        fi
-    done
+        done
+        echo "$KK_STAMP" > "$kk/.bbport-series-applied"
+    fi
     # Mesa first builds native (arm64) helper tools against Homebrew packages (LLVM,
     # SPIRV-LLVM-Translator), so this step sees Homebrew's pkg-config files, unlike the x86-64
     # libraries above; the x86-64 driver itself only links the SDK (cross file, --prefer-static).
     # Mesa's build scripts run the first python3 on PATH: the venv with mako/pyyaml.
+    # CMake's job limit does not propagate to Meson's nested Ninja builds.
+    printf '#!/bin/bash\nexec %q -j %q "$@"\n' "$(command -v ninja)" "$JOBS" > "$kk/bbport-ninja"
+    chmod +x "$kk/bbport-ninja"
     kk_env=(env -u PKG_CONFIG_LIBDIR
+            NINJA="$kk/bbport-ninja"
             PKG_CONFIG_PATH="$("$BREW" --prefix)/lib/pkgconfig:$("$BREW" --prefix spirv-llvm-translator)/lib/pkgconfig"
             PATH="$PREFIX/pyenv/bin:$PATH")
     rm -rf "$kk/build-$ARCH"   # meson does not re-run a failed setup in place
@@ -264,7 +275,7 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     mkdir -p "$PREFIX/lib/kosmickrisp"
     cp "$kk/build-$ARCH/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-$ARCH/outputs/kosmickrisp_mesa_icd.json" \
         "$PREFIX/lib/kosmickrisp/"
-    echo "$KK_PATCHES" > "$kk_stamp"
+    echo "$KK_STAMP" > "$kk_stamp"
 fi
 
 step "Verify: every library must contain $ARCH"

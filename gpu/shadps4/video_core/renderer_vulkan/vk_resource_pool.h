@@ -59,9 +59,12 @@ public:
     vk::CommandBuffer Commit();
 
 private:
+    void Trim();
+
     const Instance& instance;
     vk::UniqueCommandPool cmd_pool;
     std::vector<vk::CommandBuffer> cmd_buffers;
+    std::size_t commits_since_trim = 0;
 };
 
 class DescriptorHeap final {

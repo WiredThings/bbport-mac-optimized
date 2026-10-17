@@ -19,6 +19,10 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
+The `0.1.4-mem1` preview adds upstream idle command-buffer trimming, corrected macOS
+graphics-memory budgeting and a pinned KosmicKrisp command-memory fix. It preserves the
+Chinese launcher and perf1 shader caches. See [provenance and validation limits](docs/release/MEMORY-FIX-1.md).
+
 The `0.1.3-perf1` preview also ports compact vertex-only render areas, selective Apple shader
 precision and persistent shader-permutation fixes from Wooloomooloo2/Mark Hall. It keeps
 KosmicKrisp and uses separate caches. See [scope, source commits and validation limits](docs/release/PERFORMANCE-PORT-1.md).

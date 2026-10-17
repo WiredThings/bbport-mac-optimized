@@ -65,6 +65,8 @@ class OptimizedLauncherTests(unittest.TestCase):
                 self.assertNotIn('BB_QUICKLOAD_PENDING', env)
                 self.assertEqual(env['BB_MAC_UNIFIED_MEMORY'], '0')
                 self.assertEqual(env['BB_FRAMES_AHEAD'], '2')
+                self.assertEqual(env['BB_CMDBUF_TRIM'], '1')
+                self.assertEqual(env['BB_KK_POOL_FIX'], '1')
 
     def test_strict_precision_uses_its_own_cache_and_preserves_overrides(self):
         self.env['BB_SPIRV_PRECISE'] = 'all'

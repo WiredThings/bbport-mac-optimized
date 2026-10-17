@@ -1326,6 +1326,9 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
 void TextureCache::GarbageCollectImages() {
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
+        BbStats::gc_pressure_bytes.store(
+            std::max(total_used_memory, instance.GetDeviceGraphicsMemoryUsage()),
+            std::memory_order_relaxed);
         // bbport: on integrated GPUs (Steam Deck) the usage covers system-memory heaps holding
         // much more than images (buffers backing guest memory), and the startup budget left
         // ~1 GB after its 8 GB system reserve: usage stayed above the critical mark, so the
@@ -1351,6 +1354,9 @@ void TextureCache::GarbageCollectImages() {
                 critical_gc_memory = budget / 100 * 95;
             }
         }
+    }
+    if (!instance.CanReportMemoryUsage()) {
+        BbStats::gc_pressure_bytes.store(total_used_memory, std::memory_order_relaxed);
     }
     BbStats::gc_used_bytes.store(total_used_memory, std::memory_order_relaxed);
     BbStats::gc_trigger_bytes.store(trigger_gc_memory, std::memory_order_relaxed);
