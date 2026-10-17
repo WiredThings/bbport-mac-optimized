@@ -33,6 +33,23 @@ struct OptimizedProfile {
         return settings
     }
 
+    var presentMode: String {
+        prefs.renderer == "metal" && prefs.presentMode == "FifoRelaxed" ? "Mailbox" : prefs.presentMode
+    }
+
+    var gpuProfileVariable: String { prefs.renderer == "metal" ? "BB_MTL_GPU_TIMING" : "BB_GPU_PROFILE" }
+
+    /// Mirror the pinned Metal SceneResolution::ForPreset, including even-pixel rounding.
+    /// The preview is not an override and does not change the selected quality or effects.
+    var metalRenderResolution: String {
+        let size = settings.outputRes.split(separator: "x").compactMap { Int($0) }
+        guard size.count == 2 else { return settings.outputRes }
+        if settings.upscaler == "off" { return "\(size[0]) × \(size[1])" }
+        let scale = [1.0, 1.5, 1.7, 2.0, 3.0, 1.25][min(max(settings.preset, 0), 5)]
+        let render = size.map { max(1, Int((Double($0) / scale / 2).rounded(.toNearestOrAwayFromZero))) * 2 }
+        return "\(render[0]) × \(render[1])"
+    }
+
     var environment: [String: String] {
         var env = [
             "BB_LANGUAGE": prefs.language,

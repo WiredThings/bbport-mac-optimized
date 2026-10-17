@@ -267,6 +267,7 @@ final class LauncherModel: ObservableObject {
 
     func normalizeRendererSettings() {
         if prefs.renderer == "metal" {
+            prefs.presentMode = profile.presentMode
             if !["off", "metalfx"].contains(game.upscaler) { game.upscaler = "metalfx" }
             game.objectMotion = false
             game.sharpen = false
@@ -517,7 +518,7 @@ final class LauncherModel: ObservableObject {
         env["BB_GAME_MENU"] = p.gameMenu ? "1" : "0"
         env["BB_SKIP_NETWORK_CHOICE"] = p.skipNetworkChoice ? "1" : "0"
         if p.display.isEmpty { env.removeValue(forKey: "BB_DISPLAY") } else { env["BB_DISPLAY"] = p.display }
-        env["BB_PRESENT_MODE"] = p.presentMode
+        env["BB_PRESENT_MODE"] = profile.presentMode
         env["BB_HDR"] = p.hdr && p.renderer != "metal" ? "1" : "0"
         env["BB_FPS"] = p.fpsMode
         // The ini's upscaler is overridden by BB_UPSCALER at start; both carry the same value.
@@ -529,10 +530,13 @@ final class LauncherModel: ObservableObject {
         if p.preupload.isEmpty { env.removeValue(forKey: "BB_PREUPLOAD") } else { env["BB_PREUPLOAD"] = p.preupload }
         // Set only when on: parts of the port test these for presence, not value ("0" is on).
         for (key, on) in [("BB_NATIVE_GPU", p.nativeGpu),
-                          ("BB_FRAME_STATS", p.frameStats), ("BB_GPU_PROFILE", p.gpuProfile),
+                          ("BB_FRAME_STATS", p.frameStats),
                           ("BB_VK_VALIDATION", p.vkValidation)] {
             if on { env[key] = "1" } else { env.removeValue(forKey: key) }
         }
+        env.removeValue(forKey: "BB_GPU_PROFILE")
+        if p.gpuProfile { env[profile.gpuProfileVariable] = "1" }
+        // Explicit Metal timing in extraEnv remains available for bounded diagnostic sessions.
         // Do not allow diagnostics to capture controller input or trigger a restore at launch.
         for key in ["BB_PAD_FILE", "BB_PAD_REPLAY", "BB_PAD_RECORD", "BB_PRESET_FILE", "BB_TOGGLE_FILE",
                     "BB_CAPTURE_TRIGGER", "BB_PRESENT_DUMP_TRIGGER", "BB_TIMEOUT", "BB_QUICKLOAD_PENDING",

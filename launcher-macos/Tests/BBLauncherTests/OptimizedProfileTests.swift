@@ -3,6 +3,33 @@ import XCTest
 
 final class OptimizedProfileTests: XCTestCase {
 
+    func testBackendCapabilitiesMatchPinnedMetalEngine() {
+        XCTAssertFalse(Catalog.presentModes(renderer: "metal").contains { $0.value == "FifoRelaxed" })
+        XCTAssertTrue(Catalog.presentModes(renderer: "vulkan").contains { $0.value == "FifoRelaxed" })
+        XCTAssertEqual(Catalog.presets.map(\.value), [0, 5, 1, 2, 3, 4])
+        var prefs = LauncherPrefs(); var game = GameSettings()
+        prefs.presentMode = "FifoRelaxed"; prefs.resolution = "1280x720"
+        game.upscaler = "metalfx"; game.preset = 3
+        var profile = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(profile.presentMode, "Mailbox") // matches old runtime fallback
+        XCTAssertEqual(profile.metalRenderResolution, "640 × 360")
+        XCTAssertEqual(profile.gpuProfileVariable, "BB_MTL_GPU_TIMING")
+        XCTAssertEqual(profile.settings.preset, 3)
+        prefs.resolution = "1920x1080"; game.preset = 2
+        profile = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(profile.metalRenderResolution, "1130 × 636")
+        game.preset = 0
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).metalRenderResolution, "1920 × 1080")
+        game.preset = 5
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).settings.preset, 5)
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).metalRenderResolution, "1536 × 864")
+        prefs.renderer = "vulkan"
+        profile = OptimizedProfile(prefs: prefs, game: game)
+        XCTAssertEqual(profile.presentMode, "FifoRelaxed")
+        XCTAssertEqual(profile.settings.preset, 5)
+        XCTAssertEqual(profile.gpuProfileVariable, "BB_GPU_PROFILE")
+    }
+
     func testGameVelocityPersistenceAndBackendIsolation() {
         let suite = "bbport.velocity.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

@@ -293,3 +293,9 @@
 "Game object motion vectors (experimental)" = "Game object motion vectors (experimental)";
 "Preserves game velocity; motion blur follows the Effects setting. Restart required." = "Preserves game velocity; motion blur follows the Effects setting. Restart required.";
 "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable.";
+
+/* Backend capability audit */
+"Apple MetalFX temporal upscaling; Native AA renders at 1:1" = "Apple MetalFX temporal upscaling; Native AA renders at 1:1";
+"Scene render resolution" = "Scene render resolution";
+"Metal reads unified memory directly; background upload is unused." = "Metal reads unified memory directly; background upload is unused.";
+"Diagnostic timing can lower FPS; leave off for normal play." = "Diagnostic timing can lower FPS; leave off for normal play.";

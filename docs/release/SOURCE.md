@@ -1,5 +1,22 @@
 # Source for the standalone release
 
+## Current M4 Metal work
+
+The launcher, runtime integration, ordered Metal adapter patches and validation notes through
+0.2.16 are on the fork's `optimized` branch:
+
+```sh
+git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
+```
+
+Follow [METAL-BACKEND.md](METAL-BACKEND.md) for the pinned Metal engine and build settings.
+The applied submodule worktrees are represented by the versioned ordered patch series;
+`gpu/patches/metal` is part of this repository. The latest local installation and app/source
+archives do not by themselves create a GitHub Release. See
+[METAL-ALPHA-MERGE.md](METAL-ALPHA-MERGE.md) for the current change and validation boundaries.
+
+## Original standalone release (historical)
+
 Application source, build scripts and dependency patches are published at the `v0.1.0` tag:
 
 ```sh

@@ -1,0 +1,515 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.h
+@@ -79,6 +79,10 @@
+     /// Full single-level color clear of an existing proxy; lazy native resolve preserves readers.
+     bool ClearProxy(VideoCore::Image&, const VideoCore::SubresourceRange&, const vk::ClearValue&);
+     [[nodiscard]] u64 ProxyClearCount() const;
++    /// Normal MetalFX RGB + original alpha: fuse the dirty-proxy resolve into the existing merge.
++    /// No allocations; false leaves coherence untouched so callers can use their original path.
++    bool MergeUpscaleAlpha(VideoCore::Image&, const void* upscaled, const void* alpha_source);
++    [[nodiscard]] u64 UpscaleAlphaCount() const;
+     /// Descriptor memos must not retain views of a backing replaced on first format need.
+     [[nodiscard]] u64 Generation() const noexcept {
+         return SceneTargetsCore::Generation() + view_generation;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scene_targets.mm
+@@ -157,6 +157,15 @@
+     "    out.depth = source.read(texel);\n"
+     "    out.stencil = stencil.read(texel).x;\n"
+     "    return out;\n"
++    "}\n"
++    "kernel void scene_upscale_alpha(texture2d<float, access::read> rgb [[texture(0)]],\n"
++    "    texture2d<float, access::read> alpha [[texture(1)]],\n"
++    "    texture2d<float, access::write> dst [[texture(2)]],\n"
++    "    constant float2& scale [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {\n"
++    "    if (any(p >= uint2(dst.get_width(), dst.get_height()))) return;\n"
++    "    uint2 a = SourceTexel(float4(float2(p) + 0.5f, 0, 1), scale,\n"
++    "                          uint2(alpha.get_width(), alpha.get_height()));\n"
++    "    dst.write(float4(rgb.read(p).rgb, alpha.read(a).a), p);\n"
+     "}\n";
+ 
+ id<MTLTexture> TextureOf(const VideoCore::UniqueImage& image) {
+@@ -209,24 +218,43 @@
+     std::chrono::steady_clock::time_point overwrite_reported{};
+     Device::Impl& dev;
+     id<MTLLibrary> library = nil;
++    id<MTLComputePipelineState> alpha_merge = nil;
++    bool alpha_attempted = false;
++    u64 alpha_fused = 0;
++    std::chrono::steady_clock::time_point alpha_reported{};
+     id<MTLDepthStencilState> depth_always = nil;   ///< writes every fragment's depth
+     id<MTLDepthStencilState> stencil_replace = nil; ///< ... and the exported stencil
+     std::unordered_map<u32, id<MTLRenderPipelineState>> pipelines; ///< by the target's pixel format
+ 
+     explicit Impl(Device::Impl& dev_) : dev{dev_} {}
++
++    void EnsureLibrary() {
++        if (library) return;
++        NSError* error = nil;
++        MTLCompileOptions* options = [MTLCompileOptions new];
++        options.languageVersion = MTLLanguageVersion3_1;
++        library = [dev.device newLibraryWithSource:CopySource options:options error:&error];
++        ASSERT_MSG(library, "Scene proxy copy shaders did not compile: {}", ErrorText(error));
++    }
++
++    id<MTLComputePipelineState> AlphaPipeline() {
++        if (!alpha_attempted) {
++            alpha_attempted = true;
++            EnsureLibrary();
++            NSError* error = nil;
++            alpha_merge = [dev.device newComputePipelineStateWithFunction:
++                [library newFunctionWithName:@"scene_upscale_alpha"] error:&error];
++            if (!alpha_merge) std::printf("Metal upscale alpha: pipeline unavailable (%s); original merge retained\n", ErrorText(error).c_str());
++        }
++        return alpha_merge;
++    }
+ 
+     id<MTLRenderPipelineState> Pipeline(MTLPixelFormat format) {
+         auto& pipeline = pipelines[u32(format)];
+         if (pipeline) {
+             return pipeline;
+         }
+-        if (!library) {
+-            NSError* error = nil;
+-            MTLCompileOptions* options = [MTLCompileOptions new];
+-            options.languageVersion = MTLLanguageVersion3_1;
+-            library = [dev.device newLibraryWithSource:CopySource options:options error:&error];
+-            ASSERT_MSG(library, "Scene proxy copy shaders did not compile: {}", ErrorText(error));
+-        }
++        EnsureLibrary();
+         const Class cls = ClassOf(format);
+         NSString* fragment = nil;
+         switch (cls) {
+@@ -678,6 +706,90 @@
+     }
+ }
+ 
++namespace {
++bool UpscaleAlphaEnabled() {
++    static const bool baseline = [] {
++        const char* v = std::getenv("BB_MTL_UPSCALE_ALPHA"); return !v || v[0] != '0';
++    }();
++    static const char* control = std::getenv("BB_MTL_UPSCALE_ALPHA_FILE");
++    if (!control || !*control) return baseline;
++    static bool enabled = baseline;
++    static auto next = std::chrono::steady_clock::time_point{};
++    const auto now = std::chrono::steady_clock::now();
++    if (now >= next) {
++        next = now + std::chrono::seconds(1);
++        if (FILE* f = std::fopen(control, "r")) {
++            const int v = std::fgetc(f); std::fclose(f);
++            if ((v == '0' || v == '1') && enabled != (v == '1')) {
++                enabled = v == '1';
++                std::printf("Metal upscale alpha mode: enabled=%d; no resource recreation\n", int(enabled));
++            }
++        }
++    }
++    return enabled;
++}
++}
++
++u64 SceneTargets::UpscaleAlphaCount() const { return impl->alpha_fused; }
++
++bool SceneTargets::MergeUpscaleAlpha(VideoCore::Image& image, const void* rgb_ptr,
++                                     const void* alpha_ptr) {
++    if (!UpscaleAlphaEnabled() || !Reduced() || !EligibleScene(image) ||
++        image.info.pixel_format != vk::Format::eR16G16B16A16Sfloat ||
++        image.info.resources.levels != 1 || image.info.resources.layers != 1 ||
++        !ProxyDirty(image, 0)) return false;
++    const auto it = entries.find(Key(image.image_uid, 0));
++    if (it == entries.end()) return false;
++    const auto rgb = (__bridge id<MTLTexture>)rgb_ptr;
++    const auto alpha = (__bridge id<MTLTexture>)alpha_ptr;
++    const auto native = NativeTexture(image);
++    if (!rgb || !alpha || !native || alpha != TextureOf(Of(*it->second).image)) return false;
++    const auto plain = [](id<MTLTexture> t) {
++        return t.textureType == MTLTextureType2D && t.sampleCount == 1 &&
++               t.mipmapLevelCount == 1 && t.pixelFormat == MTLPixelFormatRGBA16Float;
++    };
++    auto root = [](id<MTLTexture> t) { while (t.parentTexture) t = t.parentTexture; return t; };
++    const auto aliases = [&](id<MTLTexture> a, id<MTLTexture> b) {
++        return root(a) == root(b) || (a.buffer && a.buffer == b.buffer) ||
++               (a.iosurface && a.iosurface == b.iosurface) || a.isAliasable || b.isAliasable;
++    };
++    if (!plain(rgb) || !plain(alpha) || !plain(native) ||
++        rgb.width != native.width || rgb.height != native.height ||
++        alpha.width != size.width || alpha.height != size.height ||
++        !(rgb.usage & MTLTextureUsageShaderRead) || !(alpha.usage & MTLTextureUsageShaderRead) ||
++        !(native.usage & MTLTextureUsageShaderWrite) ||
++        aliases(native, rgb) || aliases(native, alpha) || aliases(rgb, alpha)) return false;
++    const auto pipeline = impl->AlphaPipeline();
++    if (!pipeline) return false;
++    // The complete RGBA overwrite below reads alpha from the existing dirty proxy. Discarding
++    // native contents only changes coherence; it does not free or modify that proxy's storage.
++    // Validate everything before this point: a rejected call leaves the original path intact.
++    DiscardNativeContents(image, 0);
++    runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
++                    vk::AccessFlagBits2::eShaderWrite);
++    runtime.FlushBarriers();
++    scheduler.ComputeEncoder();
++    scheduler.LabelEncoder("Upscale merge alpha fusion");
++    const auto compute = scheduler.GetImpl().compute;
++    const std::array<float, 2> scale{float(alpha.width) / native.width,
++                                      float(alpha.height) / native.height};
++    [compute setComputePipelineState:pipeline];
++    [compute setTexture:rgb atIndex:0];
++    [compute setTexture:alpha atIndex:1];
++    [compute setTexture:native atIndex:2];
++    [compute setBytes:scale.data() length:sizeof(scale) atIndex:0];
++    [compute dispatchThreadgroups:MTLSizeMake((native.width + 7) / 8, (native.height + 7) / 8, 1)
++            threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
++    if (ImageUsageLog::Enabled()) ImageUsageLog::Bound((__bridge const void*)native, ImageUsageLog::Use::UpscalerWrite);
++    ++impl->alpha_fused;
++    const auto now = std::chrono::steady_clock::now();
++    if (now - impl->alpha_reported >= std::chrono::seconds(5)) {
++        std::printf("Metal upscale alpha: fused=%llu; existing proxy alpha, no native resolve, no extra texture\n", (unsigned long long)impl->alpha_fused);
++        impl->alpha_reported = now;
++    }
++    return true;
++}
++
+ u64 SceneTargets::ProxyClearCount() const { return impl->proxy_clears; }
+ 
+ bool SceneTargets::ClearProxy(VideoCore::Image& image, const VideoCore::SubresourceRange& range,
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_upscaler.mm
+@@ -1077,6 +1077,12 @@
+     reset = false;
+     dispatched_last_frame = true;
+ 
++    // Normal output can merge RGB with the existing proxy alpha, avoiding the otherwise
++    // redundant native-size resolve. Debug modes, Native AA and unproven resources fall back.
++    const u32 mode = BbSettings::Get().debug_view == BbSettings::DebugMotion ? 2 : 0;
++    if (mode == 0 && reduced && scene_targets.MergeUpscaleAlpha(color,
++            (__bridge const void*)impl->live_output, (__bridge const void*)color_input)) return;
++
+     // The result replaces the scene colour's RGB (its alpha carries data for the post): a native
+     // write, which first resolves a dirty proxy of the colour into the native image (the alpha)
+     // and then invalidates it.
+@@ -1084,7 +1090,6 @@
+                     vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
+     runtime.FlushBarriers();
+     // Debug view of the motion vectors (menu); the reactive mask has no counterpart here.
+-    const u32 mode = BbSettings::Get().debug_view == BbSettings::DebugMotion ? 2 : 0;
+     scheduler.ComputeEncoder();
+     scheduler.LabelEncoder("Upscale merge");
+     id<MTLComputeCommandEncoder> compute = scheduler.GetImpl().compute;
+diff --git a/gpu/shadps4/video_core/scene_resolution.h b/gpu/shadps4/video_core/scene_resolution.h
+--- a/gpu/shadps4/video_core/scene_resolution.h
++++ b/gpu/shadps4/video_core/scene_resolution.h
+@@ -14,8 +14,8 @@
+ };
+ inline Size ForPreset(int preset, Size output = {}) {
+     // Even dimensions for half-resolution effects; match the preset labels exactly.
+-    constexpr std::array<double, 5> scales{1.0, 1.5, 1.7, 2.0, 3.0};
+-    const double scale = scales[std::clamp(preset, 0, 4)];
++    constexpr std::array<double, 6> scales{1.0, 1.5, 1.7, 2.0, 3.0, 1.25};
++    const double scale = scales[std::clamp(preset, 0, 5)];
+     return {uint32_t(std::max(1l, std::lround(output.width / scale / 2)) * 2),
+             uint32_t(std::max(1l, std::lround(output.height / scale / 2)) * 2)};
+ }
+diff --git a/gpu/shim/bbport_game_menu.cpp b/gpu/shim/bbport_game_menu.cpp
+--- a/gpu/shim/bbport_game_menu.cpp
++++ b/gpu/shim/bbport_game_menu.cpp
+@@ -135,7 +135,9 @@
+ void Fill(const BbSettings::Values& s, int* values) {
+     values[OutputRes] = s.output_res;
+     values[Upscaler] = s.upscaler;
+-    values[Preset] = s.preset;
++    for (int i = 0; i < BbSettings::PresetCount; ++i) {
++        if (BbSettings::PresetOrder[i] == s.preset) values[Preset] = i;
++    }
+     // One slider for both: 0 is sharpening off.
+     values[Sharpness] =
+         s.sharpen ? std::clamp(int(std::lround(s.sharpness / SharpnessStep)), 1, SharpnessSteps - 1) : 0;
+@@ -196,9 +198,10 @@
+     // Sliders and toggles first, the pop-up list last: a list opens downwards over the rows
+     // below it, and their values showed through it.
+     row(Preset, "Quality preset", "Пресет",
+-        "Scene resolution: 0-1 Native AA, 2-3 Quality, 4-6 Balanced, 7-8 Performance, 9-10 Ultra",
+-        "Разрешение сцены: 0-1 Native AA, 2-3 Quality, 4-6 Balanced, 7-8 Performance, 9-10 Ultra",
+-        {AddText("Native AA", "Native AA"), AddText("Quality", "Quality"), AddText("Balanced", "Balanced"),
++        "Scene resolution: 0 Native AA, 2 Ultra Quality, 4 Quality, 6 Balanced, 8 Performance, 10 Ultra",
++        "Разрешение сцены: 0 Native AA, 2 Ultra Quality, 4 Quality, 6 Balanced, 8 Performance, 10 Ultra",
++        {AddText("Native AA", "Native AA"), AddText("Ultra Quality", "Ultra Quality"),
++         AddText("Quality", "Quality"), AddText("Balanced", "Balanced"),
+          AddText("Performance", "Performance"), AddText("Ultra Performance", "Ultra Performance")},
+         Kind::Steps);
+     row(Sharpness, "Sharpness", "Резкость", "RCAS after the upscaler: 0 off, 10 strongest",
+@@ -632,7 +635,7 @@
+     s.output_res = std::clamp(values[OutputRes], 0, BbSettings::OutputCount - 1);
+     const int upscaler = std::clamp(values[Upscaler], 0, BbSettings::UpscalerCount - 1);
+     s.upscaler = UpscalerAvailable(upscaler) ? upscaler : FallbackUpscaler();
+-    s.preset = std::clamp(values[Preset], 0, BbSettings::PresetCount - 1);
++    s.preset = BbSettings::PresetOrder[std::clamp(values[Preset], 0, BbSettings::PresetCount - 1)];
+     s.sharpen = values[Sharpness] != 0;
+     if (values[Sharpness] != 0) {
+         s.sharpness = std::clamp(values[Sharpness], 0, SharpnessSteps - 1) * SharpnessStep;
+diff --git a/gpu/shim/bbport_overlay.cpp b/gpu/shim/bbport_overlay.cpp
+--- a/gpu/shim/bbport_overlay.cpp
++++ b/gpu/shim/bbport_overlay.cpp
+@@ -333,16 +333,16 @@
+     ImGui::BeginDisabled(taa);
+     int preset = taa ? BbSettings::NativeAA : s.preset.load();
+     char preset_label[64];
+-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
++    std::snprintf(preset_label, sizeof(preset_label), "%s (x%g)", BbSettings::PresetName(preset),
+                   BbSettings::PresetScale(preset));
+     if (ImGui::BeginCombo(BbSettings::MenuText("Preset", "Пресет"), preset_label)) {
+-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
++        for (const int i : BbSettings::PresetOrder) {
+             char label[64];
+             const float scale = BbSettings::PresetScale(i);
+             const int output = s.output_res;
+             std::snprintf(
+                 label, sizeof(label),
+-                BbSettings::MenuText("%s (x%.1f, render %dx%d)", "%s (x%.1f, рендер %dx%d)"),
++                BbSettings::MenuText("%s (x%g, render %dx%d)", "%s (x%g, рендер %dx%d)"),
+                 BbSettings::PresetName(i), scale,
+                 int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
+                 int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));
+diff --git a/gpu/shim/bbport_settings.cpp b/gpu/shim/bbport_settings.cpp
+--- a/gpu/shim/bbport_settings.cpp
++++ b/gpu/shim/bbport_settings.cpp
+@@ -322,13 +322,14 @@
+ }
+ 
+ float PresetScale(int preset) {
+-    static constexpr float scales[PresetCount] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
++    static constexpr float scales[PresetCount] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f, 1.25f};
+     return scales[std::clamp(preset, 0, PresetCount - 1)];
+ }
+ 
+ const char* PresetName(int preset) {
+     static constexpr const char* names[PresetCount] = {"Native AA", "Quality", "Balanced",
+-                                                       "Performance", "Ultra Performance"};
++                                                       "Performance", "Ultra Performance",
++                                                       "Ultra Quality"};
+     return names[std::clamp(preset, 0, PresetCount - 1)];
+ }
+ 
+diff --git a/gpu/shim/bbport_settings.h b/gpu/shim/bbport_settings.h
+--- a/gpu/shim/bbport_settings.h
++++ b/gpu/shim/bbport_settings.h
+@@ -15,7 +15,13 @@
+ inline bool IsFsr4(int upscaler) {
+     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
+ }
+-enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
++// bbport: UltraQuality (x1.25) comes last so the stored numbers of the others stay.
++enum Preset : int {
++    NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, UltraQuality, PresetCount
++};
++/// The presets in menu order (finest first).
++inline constexpr int PresetOrder[PresetCount] = {NativeAA,     UltraQuality, Quality,
++                                                 Balanced,     Performance,  UltraPerformance};
+ enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
+ enum class MenuLanguage { English, Russian };
+ 
+diff --git a/tests/test_mtl_scene_targets.mm b/tests/test_mtl_scene_targets.mm
+--- a/tests/test_mtl_scene_targets.mm
++++ b/tests/test_mtl_scene_targets.mm
+@@ -26,6 +26,9 @@
+ #include "common/slot_vector.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+ #include "video_core/renderer_metal/mtl_runtime.h"
++#include "video_core/renderer_metal/mtl_runtime_impl.h"
++#include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "video_core/host_shaders_msl/upscale_merge_comp_msl.h"
+ #include "video_core/renderer_metal/mtl_scene_targets.h"
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+@@ -1083,6 +1086,109 @@
+     f.runtime.scene_targets=previous;Settle(f);
+ }
+ 
++// Compare against the real old path: nearest render resolve + generated UPSCALE_MERGE_COMP.
++// The pattern varies alpha at every texel and includes finite half subnormals/signs/extremes.
++static void TestUpscaleAlphaFusion(Fixture& f) {
++    std::printf("upscale alpha fusion: byte-exact old merge, preset edges, coherence, no new backing\n");
++    auto* previous = f.runtime.scene_targets;
++    World world{f}; SceneTargets targets{f.device, f.scheduler, f.runtime, world.Lookup()};
++    auto id = world.Add(MakeInfo(vk::Format::eR16G16B16A16Sfloat, 1920, 1080));
++    auto& image = world.Get(id);
++    f.runtime.PromoteImageUsage(&image, ImageUsagePromotion::Storage);
++    auto native = NativeOf(image);
++    auto* descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
++        width:1920 height:1080 mipmapped:NO];
++    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
++    descriptor.storageMode = MTLStorageModePrivate;
++    auto rgb = [f.mtl newTextureWithDescriptor:descriptor];
++    auto pattern = [](u32 w, u32 h, unsigned seed) {
++        std::vector<u8> bytes(size_t(w) * h * 8);
++        auto* halves = reinterpret_cast<u16*>(bytes.data());
++        for (size_t i = 0; i < size_t(w) * h * 4; ++i) {
++            const u16 magnitude = (i * 73 + (i / (w * 4)) * 157 + seed) % 0x7c00;
++            halves[i] = magnitude | ((i & 1) ? 0x8000 : 0);
++        }
++        return bytes;
++    };
++    WriteTexture(f, rgb, 8, pattern(1920, 1080, 97));
++    const auto& shader = Metal::HostShaders::UPSCALE_MERGE_COMP;
++    auto function = f.runtime.GetImpl().kernels.Function(shader, nullptr, 0);
++    NSError* error = nil;
++    auto reference = [f.mtl newComputePipelineStateWithFunction:function error:&error];
++    CHECK(reference && !error);
++    std::array<u32, 5> slots{};
++    for (const auto& binding : shader.bindings) {
++        if ((binding.kind == Metal::HostShaders::Binding::Kind::Texture ||
++             binding.kind == Metal::HostShaders::Binding::Kind::StorageTexture) &&
++            binding.set == 0 && binding.binding < slots.size()) slots[binding.binding] = binding.msl_index;
++    }
++    const auto merge_reference = [&] {
++        f.runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
++            vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
++        f.runtime.FlushBarriers(); f.scheduler.ComputeEncoder();
++        auto encoder = f.scheduler.GetImpl().compute;
++        [encoder setComputePipelineState:reference];
++        [encoder setTexture:rgb atIndex:slots[0]]; [encoder setTexture:native atIndex:slots[1]];
++        for (unsigned i = 2; i < 5; ++i) [encoder setTexture:rgb atIndex:slots[i]];
++        const u32 mode = 0; [encoder setBytes:&mode length:sizeof(mode) atIndex:0];
++        [encoder dispatchThreadgroups:MTLSizeMake(240, 135, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
++    };
++    VideoCore::ImageViewInfo view{}; view.format = image.info.pixel_format;
++    const bool enabled = !std::getenv("BB_MTL_UPSCALE_ALPHA") || std::getenv("BB_MTL_UPSCALE_ALPHA")[0] != '0';
++    // All five reduced presets, plus a non-divisible ratio to exercise pixel-centre ties.
++    for (auto size : {SceneResolution::Size{1536, 864}, {1280, 720}, {1130, 636}, {960, 540}, {640, 360}, {726, 402}}) {
++        targets.SetSize(size);
++        auto proxy = TextureOf(targets.Attachment(id, view, true).view);
++        auto alpha = pattern(size.width, size.height, 13);
++        WriteTexture(f, proxy, 8, alpha);
++        merge_reference();
++        const auto expected = ReadTexture(f, native, 8);
++        const auto expected_fill = ReadTexture(f, TextureOf(targets.Read(id, view).view), 8);
++        // Reuse the exact allocation without native access or new storage.
++        proxy = TextureOf(targets.Attachment(id, view, true).view);
++        WriteTexture(f, proxy, 8, alpha);
++        CHECK(targets.ProxyDirty(image, 0));
++        const auto before = targets.UpscaleAlphaCount();
++        // Invalid source/alias/dimensions must not discard dirty alpha.
++        CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)native, (__bridge const void*)proxy));
++        CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)proxy, (__bridge const void*)proxy));
++        CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)rgb));
++        CHECK(targets.ProxyDirty(image, 0));
++        const auto resources_before = Metal::MemoryStats::Read();
++        const bool fused = targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)proxy);
++        CHECK(fused == enabled); CHECK(targets.UpscaleAlphaCount() == before + enabled);
++        const auto resources_after = Metal::MemoryStats::Read();
++        for (unsigned i = 0; i < resources_before.size(); ++i) {
++            CHECK(resources_before[i].bytes == resources_after[i].bytes);
++            CHECK(resources_before[i].objects == resources_after[i].objects);
++        }
++        if (!fused) merge_reference();
++        CHECK(!targets.ProxyDirty(image, 0));
++        CHECK(!targets.ProxyCurrent(image));
++        CHECK(ReadTexture(f, native, 8) == expected);
++        f.runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
++        CHECK(ReadTexture(f, native, 8) == expected); // no stale resolve on later native reader
++        CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)proxy));
++        auto filled = TextureOf(targets.Read(id, view).view);
++        auto filled_bytes = ReadTexture(f, filled, 8);
++        CHECK(filled_bytes == expected_fill); // same GPU nearest mapping, including float boundary ties
++        CHECK(targets.ProxyCurrent(image));
++        CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)filled)); // clean proxy
++    }
++    targets.SetSize({1920, 1080});
++    CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)native));
++    // Optional live A/B control: each switch revalidates coherence, no allocation or cache reset.
++    if (const char* control = std::getenv("BB_MTL_UPSCALE_ALPHA_FILE")) {
++        targets.SetSize({960, 540});
++        auto proxy = TextureOf(targets.Attachment(id, view, true).view);
++        WriteTexture(f, proxy, 8, pattern(960, 540, 7));
++        const auto set = [&](char v) { FILE* file = std::fopen(control, "w"); CHECK(file); if(file) { std::fputc(v,file); std::fclose(file); } std::this_thread::sleep_for(std::chrono::milliseconds(1050)); };
++        set('0'); CHECK(!targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)proxy)); CHECK(targets.ProxyDirty(image,0));
++        set('1'); CHECK(targets.MergeUpscaleAlpha(image, (__bridge const void*)rgb, (__bridge const void*)proxy)); CHECK(!targets.ProxyDirty(image,0));
++    }
++    Settle(f); f.runtime.scene_targets = previous;
++}
++
+ int main() {
+     @autoreleasepool {
+         Fixture f;
+@@ -1099,6 +1205,7 @@
+         TestFullColorClear(f);
+         TestFullCopyOverwrite(f);
+         TestDirectProxyClear(f);
++        TestUpscaleAlphaFusion(f);
+         TestGameVelocityMirror(f);
+         TestMotionBlurCopy(f);
+         TestVelocityBatch(f);
+diff --git a/tests/test_scene_targets_core.cpp b/tests/test_scene_targets_core.cpp
+--- a/tests/test_scene_targets_core.cpp
++++ b/tests/test_scene_targets_core.cpp
+@@ -101,6 +101,19 @@
+     for (const auto& c : b) std::printf(" [%s]", c.c_str());
+     std::printf("\n");
+     return false;
++}
++
++void TestPresetDimensions() {
++    using VideoCore::SceneResolution::ForPreset;
++    assert(Is(ForPreset(0), 1920, 1080));
++    assert(Is(ForPreset(5), 1536, 864));
++    assert(Is(ForPreset(1), 1280, 720));
++    assert(Is(ForPreset(2), 1130, 636));
++    assert(Is(ForPreset(3), 960, 540));
++    assert(Is(ForPreset(4), 640, 360));
++    assert(Is(ForPreset(5, {1280, 720}), 1024, 576));
++    assert(Is(ForPreset(5, {2560, 1440}), 2048, 1152));
++    std::printf("six preset dimensions match labels; old stored IDs unchanged\n");
+ }
+ 
+ void TestEligibility() {
+@@ -272,6 +285,7 @@
+ } // namespace
+ 
+ int main() {
++    TestPresetDimensions();
+     TestEligibility();
+     TestCoherence();
+     TestSetSizeAndMips();
+diff --git a/tests/test_settings.cpp b/tests/test_settings.cpp
+--- a/tests/test_settings.cpp
++++ b/tests/test_settings.cpp
+@@ -17,11 +17,15 @@
+ }
+ 
+ int main() {
++    static_assert(BbSettings::UltraQuality == 5 && BbSettings::UltraPerformance == 4);
++    assert(BbSettings::PresetScale(5) == 1.25f);
++    assert(std::string(BbSettings::PresetName(5)) == "Ultra Quality");
++
+     char path[] = "/tmp/bbport-settings-test-XXXXXX";
+     const int fd = mkstemp(path);
+     assert(fd >= 0);
+     const char ini[] = "# launcher\nupscaler=fsr3\nkey.cross=X, Space\npad.circle=a\nshow_fps=0\n"
+-                       "fullscreen_hint=1\n";
++                       "fullscreen_hint=1\npreset=5\n";
+     assert(write(fd, ini, sizeof(ini) - 1) == ssize_t(sizeof(ini) - 1));
+     close(fd);
+     setenv("BB_CONFIG", path, 1);
+@@ -29,6 +33,7 @@
+     BbSettings::Load();
+     auto& s = BbSettings::Get();
+     assert(s.upscaler == BbSettings::UpscalerFsr3 && !s.show_fps && s.menu_x < 0.0f);
++    assert(s.preset == BbSettings::UltraQuality);
+     s.show_fps = true;
+     s.upscaler = BbSettings::UpscalerFsr411;
+     s.menu_x = 0.625f;
+@@ -43,10 +48,13 @@
+     assert(saved.find("menu_pos=0.6250,0.1250\n") != std::string::npos);
+     assert(saved.find("upscaler=fsr3") == std::string::npos);
+ 
++    assert(saved.find("preset=5\n") != std::string::npos);
++    s.preset = BbSettings::NativeAA;
+     s.menu_x = -1.0f;
+     s.menu_y = -1.0f;
+     BbSettings::Load();
+     assert(s.menu_x == 0.625f && s.menu_y == 0.125f && s.upscaler == BbSettings::UpscalerFsr411);
++    assert(s.preset == BbSettings::UltraQuality);
+     unlink(path);
+     std::puts("PASS: settings save keeps other keys, menu position");
+ }

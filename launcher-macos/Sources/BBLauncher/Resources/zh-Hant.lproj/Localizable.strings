@@ -293,3 +293,9 @@
 "Game object motion vectors (experimental)" = "遊戲物體速度圖（實驗）";
 "Preserves game velocity; motion blur follows the Effects setting. Restart required." = "保留遊戲速度圖；動態模糊遵循「特效」設定。需要重新啟動遊戲。";
 "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX 合併相機運動與支援的遊戲物體速度圖。暫不支援 RCAS 和 HDR。";
+
+/* Backend capability audit */
+"Apple MetalFX temporal upscaling; Native AA renders at 1:1" = "Apple MetalFX 時域超解析度；原生抗鋸齒以 1:1 算繪";
+"Scene render resolution" = "場景算繪解析度";
+"Metal reads unified memory directly; background upload is unused." = "Metal 直接讀取統一記憶體，不使用背景上傳。";
+"Diagnostic timing can lower FPS; leave off for normal play." = "診斷計時可能降低幀率，正常遊玩時請關閉。";

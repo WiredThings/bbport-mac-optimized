@@ -103,6 +103,10 @@ enum Catalog {
         Choice(value: "Immediate", label: "Immediate"),
     ]
 
+    static func presentModes(renderer: String) -> [Choice<String>] {
+        presentModes.filter { renderer != "metal" || $0.value != "FifoRelaxed" }
+    }
+
     static let drawPipe: [Choice<String>] = [
         Choice(value: "", label: "Auto (8+ threads)"),
         Choice(value: "1", label: "On"),

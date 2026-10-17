@@ -404,7 +404,7 @@ struct DisplaySection: View {
                 Text(L10n.key("Where the game's window opens"))
             }
             Picker(selection: $model.prefs.presentMode) {
-                ForEach(Catalog.presentModes) { Text(L10n.key($0.label)).tag($0.value) }
+                ForEach(Catalog.presentModes(renderer: model.prefs.renderer)) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Present mode"))
                 Text(L10n.key(model.prefs.renderer == "metal" ? "Metal presentation mode" : "KosmicKrisp has no Mailbox and uses FIFO instead"))
@@ -469,6 +469,11 @@ struct UpscalerSection: View {
                 ForEach(Catalog.presets) { Text(L10n.key($0.label)).tag($0.value) }
             }
             .disabled(upscaler == "off" || upscaler == "taa")
+            if model.prefs.renderer == "metal" && !model.prefs.ultrawide {
+                LabeledContent(L10n.key("Scene render resolution")) {
+                    Text(model.profile.metalRenderResolution).monospacedDigit()
+                }
+            }
             Toggle(L10n.key("Sharpening (RCAS)"), isOn: $model.game.sharpen)
                 .disabled(upscaler == "off" || model.prefs.renderer == "metal")
             LabeledContent(L10n.key("Sharpness")) {
@@ -513,7 +518,7 @@ struct UpscalerSection: View {
         switch upscaler {
         case "fsr3": return L10n.key("AMD FSR 3.1 temporal upscaling")
         case "taa": return L10n.key("Anti-aliasing at the output resolution, no FSR model")
-        case "metalfx": return L10n.key("Apple MetalFX temporal upscaling (experimental; no Native AA preset)")
+        case "metalfx": return L10n.key("Apple MetalFX temporal upscaling; Native AA renders at 1:1")
         default: return L10n.key("No upscaling or temporal anti-aliasing")
         }
     }
@@ -567,8 +572,9 @@ struct PerformanceSection: View {
                 ForEach(Catalog.preupload) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Background upload of game data"))
-                Text(L10n.key("Full can mean fewer hitches when areas load"))
+                Text(L10n.key(model.prefs.renderer == "metal" ? "Metal reads unified memory directly; background upload is unused." : "Full can mean fewer hitches when areas load"))
             }
+            .disabled(model.prefs.renderer == "metal")
             Picker(L10n.key("GPU data readbacks by the CPU"), selection: $model.prefs.readbacks) {
                 ForEach(Catalog.readbacks) { Text(L10n.key($0.label)).tag($0.value) }
             }
@@ -676,7 +682,8 @@ struct DeveloperSection: View {
             }
             Toggle(isOn: $model.prefs.gpuProfile) {
                 Text(L10n.key("GPU profile in the log"))
-                Text("BB_GPU_PROFILE")
+                Text(model.profile.gpuProfileVariable)
+                Text(L10n.key("Diagnostic timing can lower FPS; leave off for normal play."))
             }
             Toggle(isOn: $model.prefs.vkValidation) {
                 Text(L10n.key("Vulkan validation layers"))
