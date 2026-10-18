@@ -10,7 +10,7 @@ def analyze(text):
     rows=[json.loads(line[7:]) for line in text.splitlines() if line.startswith('NATIVE ')]
     if not rows or rows[0].get('op')!='frame' or rows[0].get('truncated',True):
         raise ValueError('Missing or truncated single-frame metadata')
-    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[]
+    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[];compute_access=[];texture_tiling=[]
     for row in rows[1:]:
         op=row['op'];queue=row.get('queue')
         if op=='open':
@@ -28,6 +28,20 @@ def analyze(text):
             if not (isinstance(row.get('count'),int) and 0<=row['count']<=4096 and isinstance(row.get('pairs'),int) and 1<=row['pairs']<=16 and row.get('end') in (0,1) and row.get('poison') in (0,1) and isinstance(row.get('chained'),bool)):
                 raise ValueError('Invalid occlusion snapshot counters')
             query_snapshots.append(row)
+        elif op in ('compute_access','texture_tiling'):
+            if queue not in current or current[queue]['kind']!=2:
+                raise ValueError('Compute resource event without a compute encoder')
+            if op=='compute_access':
+                flags=('direct_resources','requested_bound_only','guest_declared','bda','paged','indirect')
+                if any(not isinstance(row.get(k),bool) for k in flags):raise ValueError('Invalid compute resource flags')
+                if row['direct_resources'] and row['bda']:raise ValueError('Indirect memory classified as direct')
+                if row['requested_bound_only'] and not row['direct_resources']:raise ValueError('Unproven compute resource restriction')
+                if not row['guest_declared'] and not row['requested_bound_only']:raise ValueError('Missing required compute guest residency')
+                compute_access.append(row)
+            else:
+                if row.get('bits') not in (32,64) or not isinstance(row.get('proxy'),bool):raise ValueError('Invalid texture tiling kind')
+                if any(not isinstance(row.get(k),int) or row[k]<=0 for k in ('width','height','linear_bytes')):raise ValueError('Invalid texture tiling extent')
+                texture_tiling.append(row)
         elif op=='render_barriers':
             if queue not in current or current[queue]['kind']!=1:
                 raise ValueError('Render barrier summary without a render encoder')
@@ -59,6 +73,8 @@ def analyze(text):
                 full_color_clear_passes=clears,consecutive_clear_runs=runs,
                 render_barriers=dict(lists=len(render_barriers),requested=sum(r['requested'] for r in render_barriers) if render_barriers else None,dropped=sum(r['dropped'] for r in render_barriers) if render_barriers else None),
                 occlusion_snapshots=dict(events=len(query_snapshots),chained_events=sum(q['chained'] for q in query_snapshots),counter_slots=sum(q['count'] for q in query_snapshots)) if query_snapshots else None,
+                compute_resource_access=dict(dispatches=len(compute_access),direct_resources=sum(r['direct_resources'] for r in compute_access),bound_only_requested=sum(r['requested_bound_only'] for r in compute_access),broad_residency_at_dispatch=sum(r['guest_declared'] for r in compute_access)) if compute_access else None,
+                texture_tiling=dict(copies=len(texture_tiling),half_copies=sum(r['bits']==64 for r in texture_tiling),proxy_copies=sum(r['proxy'] for r in texture_tiling),linear_bytes_avoided=sum(r['linear_bytes'] for r in texture_tiling)) if texture_tiling else None,
                 scheduler_barrier_requests_by_path=[dict(kind=k[0],holding=k[1],hoisting=k[2],count=count) for k,count in barrier_paths.items()],
                 notes=['Decoded guest GPU frame; not a replayable GPU trace.','No texture/buffer payload snapshots.','Adjacent barrier metadata can hide intervening GPU draws or dispatches; it is not evidence that a dependency is redundant.',
                        'Clear-load candidates may contain draws; corroborate labels and source before treating a pass as clear-only.',

@@ -37,7 +37,7 @@ DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
 DIAGNOSTIC_OVERRIDES = {'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_COPY_AUDIT', 'BB_MTL_STAGING_AUDIT'}
-OVERRIDES = {'BB_MTL_QUERY_COMPUTE_CHAIN', 'BB_MTL_COALESCE_BARRIERS', 'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
+OVERRIDES = {'BB_MTL_PRECISE_COMPUTE', 'BB_MTL_TEXTURE_TILING_HALF', 'BB_MTL_QUERY_COMPUTE_CHAIN', 'BB_MTL_COALESCE_BARRIERS', 'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
 
 
@@ -335,6 +335,8 @@ def capture_frame(process, folder, guard, max_swap_growth_mib=1024, shared_memor
 
 
 def run(args):
+    if getattr(args,'capture_on_entry',False) and not getattr(args,'capture_native',False):
+        raise ValueError('Scene-entry capture is native diagnostics only, never a scored run')
     root = args.workspace.resolve()
     lock = (root/'run.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -442,22 +444,25 @@ def run(args):
             time.sleep(.2)
         if not world:
             raise RuntimeError('Did not enter a controllable scene before deadline')
-        print('Scene detected; warming shader and resource caches',flush=True)
-        warm_start=time.monotonic();quiet_since=warm_start
-        while time.monotonic()-warm_start<args.warmup or time.monotonic()-quiet_since<15:
-            guard();rr=frame_rows(frames)
-            if not stable_scene(rr,manifest['expected_camera']):
-                quiet_since=time.monotonic()
-                # Loading transitions restart the quiet window; one transient frame is not a failure.
+        if args.capture_on_entry:
+            print('Scene detected; capturing diagnostic metadata before warmup (not an FPS score)',flush=True)
+        else:
+            print('Scene detected; warming shader and resource caches',flush=True)
+            warm_start=time.monotonic();quiet_since=warm_start
+            while time.monotonic()-warm_start<args.warmup or time.monotonic()-quiet_since<15:
+                guard();rr=frame_rows(frames)
+                if not stable_scene(rr,manifest['expected_camera']):
+                    quiet_since=time.monotonic()
+                    # Loading transitions restart the quiet window; one transient frame is not a failure.
+                    if time.monotonic()-warm_start>args.warmup+90:
+                        raise RuntimeError('Scene did not settle during bounded warmup')
+                    time.sleep(.5)
+                    continue
+                if float(rr[-1]['compiles'])>0:
+                    quiet_since=time.monotonic()
                 if time.monotonic()-warm_start>args.warmup+90:
-                    raise RuntimeError('Scene did not settle during bounded warmup')
+                    raise RuntimeError('Shader warmup did not settle')
                 time.sleep(.5)
-                continue
-            if float(rr[-1]['compiles'])>0:
-                quiet_since=time.monotonic()
-            if time.monotonic()-warm_start>args.warmup+90:
-                raise RuntimeError('Shader warmup did not settle')
-            time.sleep(.5)
         if args.capture_native:
             print(f'Recording {args.capture_count} decoded GPU frame(s): bounded attachment metadata'+(' and one display image' if args.capture_display else ' only'),flush=True)
             members=[]
@@ -480,7 +485,7 @@ def run(args):
                 check_gpu_faults(log_path.read_text(errors="replace"))
                 print(f'Attachment metadata captured: {captured_path}',flush=True)
             snapshot=display_snapshot(folder) if args.capture_display else None
-            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata' if len(members)==1 else 'bounded-native-attachment-series',display=snapshot,trace=members[0]['path'],traces=members,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute,notes=['Decoded guest GPU frame(s), not a replayable GPUTools trace.','At most three metadata frames; each bounded to 8192 records / 2 MiB.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata' if len(members)==1 else 'bounded-native-attachment-series',capture_phase='scene-entry' if args.capture_on_entry else 'warmed',warmup_completed=not args.capture_on_entry,display=snapshot,trace=members[0]['path'],traces=members,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute,notes=['Decoded guest GPU frame(s), not a replayable GPUTools trace.','At most three metadata frames; each bounded to 8192 records / 2 MiB.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
             return
         if args.capture_frame:
             print('Capturing one layer frame; diagnostic FPS is not scored',flush=True)
@@ -569,7 +574,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('init');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--launcher-data',type=Path,default=DEFAULT_DATA);p.add_argument('--expected-camera',nargs=3,type=float);p.set_defaults(func=init)
-    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--mute',action='store_true');p.add_argument('--minimal-stats',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-count',type=int,default=1);p.add_argument('--capture-display',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
+    p=sub.add_parser('run');p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,default=DEFAULT_APP);p.add_argument('--name',required=True);p.add_argument('--warmup',type=int,default=45);p.add_argument('--seconds',type=int,default=45);p.add_argument('--startup-timeout',type=int,default=300);p.add_argument('--max-swap-growth-mib',type=int,default=2048);p.add_argument('--profile-gpu',action='store_true');p.add_argument('--mute',action='store_true');p.add_argument('--minimal-stats',action='store_true');p.add_argument('--capture-frame',action='store_true');p.add_argument('--capture-native',action='store_true');p.add_argument('--capture-count',type=int,default=1);p.add_argument('--capture-on-entry',action='store_true');p.add_argument('--capture-display',action='store_true');p.add_argument('--capture-shared-memory',action='store_true');p.add_argument('--env',action='append',default=[]);p.set_defaults(func=run)
     p=sub.add_parser('compare');p.add_argument('before',type=Path);p.add_argument('after',type=Path);p.set_defaults(func=compare)
     args=parser.parse_args()
     if args.command=='run' and not (15<=args.warmup<=180 and 15<=args.seconds<=180 and 30<=args.startup_timeout<=600 and 256<=args.max_swap_growth_mib<=2048):
@@ -580,6 +585,8 @@ def main():
         parser.error('--capture-count is 1..3; multiple frames require native metadata only, without display readback')
     if args.command=='run' and args.capture_display and not args.capture_native:
         parser.error('--capture-display requires --capture-native and never produces an FPS score')
+    if args.command=='run' and args.capture_on_entry and not args.capture_native:
+        parser.error('--capture-on-entry is native diagnostic metadata only; never an FPS score')
     if args.command=='run' and args.capture_shared_memory and not args.capture_frame:
         parser.error('--capture-shared-memory requires --capture-frame')
     try: args.func(args)

@@ -26,6 +26,8 @@ resolution, sampling, effects and cache budgets. The direct Metal GPU backend an
 runtime are x86-64 under Rosetta; the launcher is native Apple Silicon. See the
 [capture scope, compatibility checks and benchmark results](docs/release/METAL-FRAME-CAPTURE.md).
 
+Unreleased source experiments add [scoped compute resource declarations and exact RGBA16F exports](docs/release/METAL-RESOURCE-ACCESS-AND-HALF-COPY.md). They remain opt-in pending qualifying gameplay FPS, slow-frame and memory comparisons.
+
 The `0.1.4-mem1` preview adds upstream idle command-buffer trimming, corrected macOS
 graphics-memory budgeting and a pinned KosmicKrisp command-memory fix. It preserves the
 Chinese launcher and perf1 shader caches. See [provenance and validation limits](docs/release/MEMORY-FIX-1.md).
@@ -35,7 +37,7 @@ precision and persistent shader-permutation fixes from Wooloomooloo2/Mark Hall. 
 KosmicKrisp and uses separate caches. See [scope, source commits and validation limits](docs/release/PERFORMANCE-PORT-1.md).
 Gameplay FPS on a base M4 has not been measured for this preview.
 
-- **Native Apple Silicon launcher and renderer.** The original game's x86-64 code still runs through Rosetta 2; this is not a fully native ARM64 game port.
+- **Native Apple Silicon launcher and direct Metal rendering.** The game and the renderer's CPU code are x86-64 under Rosetta 2; this is not a fully native ARM64 game port.
 - **16:9, 21:9 and 32:9 resolutions**, selectable in the launcher. First launch defaults to 1920×1080, then remembers your choice.
 - **Optional ultrawide UI fix.** Choose your own downloaded [Nexus Mods UI pack](https://www.nexusmods.com/bloodborne/mods/202); the launcher backs up the existing files and installs it. Disabling restores those previous files. No UI pack is bundled.
 - **Optional quicksave/quickload**, with remappable shortcuts: F1 settings, F2 save, F3 load. Quickload restores the latest saved checkpoint and restarts the game.

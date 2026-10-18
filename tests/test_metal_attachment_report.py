@@ -38,3 +38,18 @@ class AttachmentReportTests(unittest.TestCase):
   self.assertIsNone(a.analyze(self.text(self.rows()))['occlusion_snapshots'])
   rows[5]['count']=4097
   with self.assertRaises(ValueError):a.analyze(self.text(rows))
+
+ def test_compute_resource_and_copy_events(self):
+  rows=self.rows();rows[4:4]=[dict(op='open',queue=1,kind=2,guest=False),dict(op='compute_access',queue=1,direct_resources=True,requested_bound_only=True,guest_declared=False,bda=False,paged=False,indirect=False),dict(op='texture_tiling',queue=1,bits=64,proxy=True,width=1920,height=1080,linear_bytes=16711680),dict(op='close',queue=1,kind=2)]
+  result=a.analyze(self.text(rows));self.assertEqual(result['compute_resource_access'],dict(dispatches=1,direct_resources=1,bound_only_requested=1,broad_residency_at_dispatch=0));self.assertEqual(result['texture_tiling'],dict(copies=1,half_copies=1,proxy_copies=1,linear_bytes_avoided=16711680))
+  for update in [dict(bda=True),dict(direct_resources=False),dict(guest_declared=0)]:
+   changed=[dict(r) for r in rows];changed[5].update(update)
+   with self.assertRaises(ValueError):a.analyze(self.text(changed))
+  named=[dict(r) for r in rows];named[5]['paged']=True
+  self.assertEqual(a.analyze(self.text(named))['compute_resource_access']['direct_resources'],1)
+  bad=[dict(r) for r in rows];bad[6]['bits']=128
+  with self.assertRaises(ValueError):a.analyze(self.text(bad))
+  bad=[dict(r) for r in rows];bad[6]['linear_bytes']=0
+  with self.assertRaises(ValueError):a.analyze(self.text(bad))
+  bad=[dict(r) for r in rows];bad[4]['kind']=1;bad[-1]['kind']=1
+  with self.assertRaises(ValueError):a.analyze(self.text(bad))

@@ -180,3 +180,16 @@ class BenchmarkTests(unittest.TestCase):
     def test_cohort_fingerprint_ignores_renderer_and_detects_config(self):
         m=dict(seed_files={},ini_sha256='ini',game_eboot_sha256='game',environment={},expected_camera=None,external_configs={})
         old=b.cohort_fingerprint(m);m['renderer_sha256']='new';self.assertEqual(old,b.cohort_fingerprint(m));m['ini_sha256']='changed';self.assertNotEqual(old,b.cohort_fingerprint(m))
+
+    def test_entry_capture_cannot_skip_scored_warmup(self):
+        base=['benchmark','run','--workspace','/unused','--name','entry']
+        for flags in [['--capture-on-entry'],['--capture-on-entry','--capture-frame']]:
+            with patch.object(b.sys,'argv',base+flags),patch.object(b,'run') as run,contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):b.main()
+                run.assert_not_called()
+        with patch.object(b.sys,'argv',base+['--capture-on-entry','--capture-native']),patch.object(b,'run') as run:
+            self.assertEqual(b.main(),0);self.assertTrue(run.call_args.args[0].capture_on_entry)
+
+    def test_programmatic_entry_capture_rejects_scoring_before_files_or_game(self):
+        args=type('Args',(),dict(capture_on_entry=True,capture_native=False))()
+        with self.assertRaisesRegex(ValueError,'never a scored run'):b.run(args)
