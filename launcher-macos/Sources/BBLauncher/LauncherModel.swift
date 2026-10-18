@@ -536,8 +536,7 @@ final class LauncherModel: ObservableObject {
                     "BB_NATIVE_CHECKOUT", "BB_PROBE", "BB_GPU_PROCESS", "BB_GPU_DEPS"] {
             env.removeValue(forKey: key)
         }
-        for (key, value) in profile.environment { env[key] = value }
-        return env
+        return profile.applyingEnvironment(to: env)
     }
 
     // MARK: - Running the game

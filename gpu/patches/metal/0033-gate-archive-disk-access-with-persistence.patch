@@ -1,0 +1,87 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -168,6 +168,7 @@
+     std::mutex archive_mutex; ///< MTLBinaryArchive is not documented as thread-safe
+     id<MTLBinaryArchive> archive; ///< nil: none (yet / any more)
+     bool archive_dirty{};
++    bool persist_enabled{};
+     bool archive_error_logged{};
+ };
+ 
+@@ -202,6 +203,8 @@
+ PsoCache::PsoCache(Device& device_, std::filesystem::path cache_dir, bool relaxed_math)
+     : device{device_}, impl{std::make_unique<Impl>()} {
+     impl->mtl_device = device.GetImpl().device;
++    const char* persist = std::getenv("BB_MTL_PERSIST_WARM_ARCHIVE");
++    impl->persist_enabled = persist && persist[0] == '1';
+     if (cache_dir.empty()) {
+         cache_dir = ShaderCompiler::DefaultCacheDir();
+     }
+@@ -211,7 +214,9 @@
+     @autoreleasepool {
+         std::error_code ec;
+         std::filesystem::create_directories(cache_dir, ec);
+-        const bool exists = std::filesystem::exists(archive_path, ec);
++        // OFF ignores existing disk archives as well as disabling automatic writes.
++        // Retain the fresh compilation object and active-PSO lifetime of the accepted baseline.
++        const bool exists = impl->persist_enabled && std::filesystem::exists(archive_path, ec);
+         MTLBinaryArchiveDescriptor* descriptor = [MTLBinaryArchiveDescriptor new];
+         if (exists) {
+             descriptor.url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:archive_path.c_str()]];
+@@ -240,7 +245,7 @@
+ }
+ 
+ PsoCache::~PsoCache() {
+-    Flush();
++    if (impl->persist_enabled) Flush();
+ }
+ 
+ void PsoCache::ReleaseWarmArchive() {
+--- a/tests/test_mtl_pipeline_core.mm
++++ b/tests/test_mtl_pipeline_core.mm
+@@ -263,6 +263,10 @@
+         CHECK(command.status==MTLCommandBufferStatusCompleted);
+         CHECK(*(const u32*)output.contents==value);
+     };
++    const char* previous = std::getenv("BB_MTL_PERSIST_WARM_ARCHIVE");
++    const bool had_previous = previous != nullptr;
++    const std::string previous_value = previous ? previous : "";
++    setenv("BB_MTL_PERSIST_WARM_ARCHIVE", "1", 1);
+     {
+         Metal::PsoCache cache{device,folder};
+         auto pipeline=cache.GetComputePipeline(key,&shader);CHECK(pipeline);
+@@ -280,6 +284,25 @@
+         cache.ReleaseWarmArchive();CHECK(cache.GetComputePipeline(key,&shader)==pipeline);
+         CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xaabbccdd);
+     }
++    setenv("BB_MTL_PERSIST_WARM_ARCHIVE", "0", 1);
++    const auto archive_file=folder/"pipelines.binaryarchive";
++    NSData* saved_archive=[NSData dataWithContentsOfFile:@(archive_file.c_str())];
++    CHECK(saved_archive!=nil);
++    {
++        Metal::PsoCache cache{device,folder};CHECK(!cache.ArchiveLoaded());
++        auto pipeline=cache.GetComputePipeline(key,&shader);CHECK(pipeline);
++        CHECK(cache.GetCounters().archive_hits==0);run(pipeline,0xabc01234);
++        // Do not release the archive: OFF must suppress destructor serialization too.
++    }
++    CHECK([saved_archive isEqualToData:[NSData dataWithContentsOfFile:@(archive_file.c_str())]]);
++    {
++        const auto no_auto_flush=folder/"without-auto-persistence";
++        {
++            Metal::PsoCache cache{device,no_auto_flush};
++            run(cache.GetComputePipeline(key,&shader),0x13572468);
++        }
++        CHECK(!std::filesystem::exists(no_auto_flush/"pipelines.binaryarchive"));
++    }
+     {
+         const auto no_flush=folder/"without-persistence";
+         Metal::PsoCache cache{device,no_flush};
+@@ -288,6 +311,8 @@
+         CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xfeed1234);
+         CHECK(!std::filesystem::exists(cache.ArchivePath()));
+     }
++    if (had_previous) setenv("BB_MTL_PERSIST_WARM_ARCHIVE",previous_value.c_str(),1);
++    else unsetenv("BB_MTL_PERSIST_WARM_ARCHIVE");
+     std::filesystem::remove_all(folder);
+     std::puts("warm archive: retained PSO identity/GPU output, late creation, no-persistence release and next-start hit passed");
+ }

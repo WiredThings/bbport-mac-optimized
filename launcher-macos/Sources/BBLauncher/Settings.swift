@@ -188,6 +188,7 @@ struct LauncherPrefs: Equatable {
     var renderer = "metal"
     var metalObjectMotion = true
     var metalOcclusion = true
+    var metalOptimizations: [String: Bool] = [:]
     var frameStats = false
     var gpuProfile = false
     var vkValidation = false
@@ -229,6 +230,7 @@ struct LauncherPrefs: Equatable {
         static let renderer = "renderer"
         static let metalObjectMotion = "metalObjectMotion"
         static let metalOcclusion = "metalOcclusion"
+        static let metalOptimizations = "metalOptimizations"
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
         static let vkValidation = "vkValidation"
@@ -289,6 +291,22 @@ struct LauncherPrefs: Equatable {
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
         p.vkValidation = flag(Key.vkValidation, p.vkValidation)
         p.extraEnv = text(Key.extraEnv, p.extraEnv)
+        let knownMetalKeys = Set(MetalOptimizations.all.map(\.id))
+        if let stored = defaults.dictionary(forKey: Key.metalOptimizations) {
+            p.metalOptimizations = stored.reduce(into: [:]) { result, item in
+                if knownMetalKeys.contains(item.key), let value = item.value as? Bool {
+                    result[item.key] = value
+                }
+            }
+        } else {
+            // Preserve explicit old developer overrides when introducing visible controls.
+            for token in p.extraEnv.split(whereSeparator: { $0.isWhitespace }) {
+                let pair = token.split(separator: "=", maxSplits: 1)
+                if pair.count == 2, knownMetalKeys.contains(String(pair[0])), ["0", "1"].contains(pair[1]) {
+                    p.metalOptimizations[String(pair[0])] = pair[1] == "1"
+                }
+            }
+        }
         p.gameMenu = flag(Key.gameMenu, p.gameMenu)
         p.skipNetworkChoice = flag(Key.skipNetworkChoice, p.skipNetworkChoice)
         p.display = text(Key.display, p.display)
@@ -332,6 +350,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(renderer, forKey: Key.renderer)
         defaults.set(metalObjectMotion, forKey: Key.metalObjectMotion)
         defaults.set(metalOcclusion, forKey: Key.metalOcclusion)
+        defaults.set(metalOptimizations, forKey: Key.metalOptimizations)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)
         defaults.set(vkValidation, forKey: Key.vkValidation)

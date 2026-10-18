@@ -67,10 +67,22 @@ struct OptimizedProfile {
             "BB_UPSCALER": settings.upscaler, "BB_UPSCALE_PRESET": String(settings.preset),
             "BB_LIVE_RES": "0", "BB_PATCHES": "",
         ]
+        env.merge(MetalOptimizations.environment(prefs: prefs)) { _, selected in selected }
         if prefs.ultrawide {
             env["BB_PATCHES"] = "Resolution Patch \(resolution) (\(aspect))"
             env["BB_DMEM_MB"] = "9152"
         }
+        return env
+    }
+
+    /// Keep visible controls authoritative even when an old developer entry names the same flag.
+    func applyingEnvironment(to base: [String: String]) -> [String: String] {
+        var env = base
+        if prefs.renderer != "metal" { env = env.filter { !$0.key.hasPrefix("BB_MTL_") } }
+        for option in MetalOptimizations.all { env.removeValue(forKey: option.id) }
+        for key in ["BB_MTL_CLEAR_DISCARD_FILE", "BB_MTL_OVERWRITE_DISCARD_FILE", "BB_MTL_PROXY_CLEAR_FILE",
+                    "BB_MTL_VERTEX_MATH_FILE", "BB_MTL_UPSCALE_ALPHA_FILE"] { env.removeValue(forKey: key) }
+        env.merge(environment) { _, selected in selected }
         return env
     }
 

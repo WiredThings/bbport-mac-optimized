@@ -36,6 +36,7 @@ struct ContentView: View {
                     .accessibilityValue(advanced ? L10n.key("Expanded") : L10n.key("Collapsed"))
                 }
                 if advanced {
+                    if model.prefs.renderer == "metal" { MetalOptimizationSection() }
                     AdvancedGameSection()
                     DisplaySection()
                     FrameRateSection()
