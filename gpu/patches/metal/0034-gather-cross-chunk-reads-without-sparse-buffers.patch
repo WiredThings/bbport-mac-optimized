@@ -1,0 +1,191 @@
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+@@ -24,6 +24,7 @@
+ #include "video_core/amdgpu/liverpool.h"
+ #include "video_core/buffer_cache/buffer.h"
+ #include "video_core/buffer_cache/buffer_cache.h"
++#include "video_core/buffer_cache/guest_read_gather.h"
+ #include "video_core/buffer_cache/memory_tracker.h"
+ #include "video_core/cache_backend.h"
+ #include "video_core/texture_cache/texture_cache.h"
+@@ -911,6 +912,31 @@
+             return *bound;
+         }
+         NoteLayerMiss(device_addr, size, is_written);
++        if (!sparse_arena && !is_written) {
++            // LayerBind has already copied current mirror data back in GPU order. A read
++            // crossing physical chunks still cannot be one imported buffer; never route it
++            // through GetArena, whose 4 GiB sparse allocation is unsupported on Metal.
++            const auto gathered = GatherGuestRead(backend, stream_buffer, device_addr, size,
++                [this](VAddr at, u64 remaining) -> std::optional<GuestReadPiece> {
++                    const auto span = BbLayer::GpuMemory::Get().ResolvePrefix(at, remaining);
++                    if (!span) return std::nullopt;
++                    const auto source = LayerInPlace(at, span->size);
++                    if (!source) return std::nullopt;
++                    return GuestReadPiece{source->first, source->second, span->size};
++                },
++                [this, is_texel_buffer](const GuestReadPiece& piece, VAddr at) {
++                    if (is_texel_buffer)
++                        SynchronizeMemoryFromImage(piece.buffer, piece.offset, at,
++                                                   static_cast<u32>(piece.size));
++                });
++            ASSERT_MSG(gathered, "No complete guest chunk coverage for read {:#x}+{:#x}",
++                       device_addr, size);
++            static std::atomic<u32> reports{0};
++            if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
++                std::printf("Metal cross-chunk read: %#llx+%#x gathered in existing stream ring\n",
++                            (unsigned long long)device_addr, size);
++            return *gathered;
++        }
+     }
+     thread_local std::array<InPlaceMemo, 256> in_place_reads{};
+     const u64 memo_first = device_addr >> block_shift;
+diff --git a/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h b/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++#include <algorithm>
++#include <limits>
++#include <optional>
++#include <vector>
++#include "video_core/cache_backend.h"
++
++namespace VideoCore {
++
++struct GuestReadPiece {
++    const Buffer* buffer{};
++    u64 offset{};
++    u64 size{};
++};
++
++// A rare read spanning guest chunks cannot use a sparse VA arena on Metal. Gather an exact
++// snapshot in the existing stream ring instead. No persistent allocation or address-table
++// entry is added. Copies are GPU commands, so earlier GPU writes and subsequent readers retain
++// their order; the ring's normal tick watches prevent reuse while those readers are in flight.
++// Resolve and validate the WHOLE range before reserving or recording anything. Never truncate
++// the resource, substitute zeroes, or use this snapshot as a writable guest alias.
++template <typename Resolve, typename BeforeCopy>
++std::optional<std::pair<const Buffer*, u64>> GatherGuestRead(
++    CacheBackend& backend, StreamBuffer& stream, VAddr address, u64 size,
++    Resolve&& resolve, BeforeCopy&& before_copy) {
++    if (!size || size > stream.SizeBytes() || address > std::numeric_limits<u64>::max() - size) {
++        return std::nullopt;
++    }
++    struct Part { GuestReadPiece source; VAddr address; u64 destination; };
++    std::vector<Part> parts;
++    for (u64 done = 0; done < size;) {
++        // Bound host metadata even for fragmented mappings. Rejection has no side effects.
++        if (parts.size() == 4096) return std::nullopt;
++        const auto piece = resolve(address + done, size - done);
++        if (!piece || !piece->buffer || !piece->size || piece->size > size - done ||
++            piece->offset > piece->buffer->SizeBytes() ||
++            piece->size > piece->buffer->SizeBytes() - piece->offset) {
++            return std::nullopt;
++        }
++        parts.push_back({*piece, address + done, done});
++        done += piece->size;
++    }
++    const auto offset = stream.Reserve(size, std::max(backend.Limits().uniform_min_alignment,
++                                                   backend.Limits().storage_min_alignment));
++    if (!offset) return std::nullopt;
++    for (const auto& part : parts) {
++        before_copy(part.source, part.address);
++        const vk::BufferCopy copy{part.source.offset, *offset + part.destination, part.source.size};
++        backend.CopyBuffer(part.source.buffer, &stream, std::span{&copy, 1});
++    }
++    return std::pair<const Buffer*, u64>{&stream, *offset};
++}
++
++} // namespace VideoCore
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -14,6 +14,7 @@
+ #include <setjmp.h>
+ #include "video_core/renderer_metal/mtl_occlusion.h"
+ #include "video_core/render_state.h"
++#include "video_core/buffer_cache/guest_read_gather.h"
+ #include <sys/mman.h>
+ #include <mach/mach.h>
+ 
+@@ -475,6 +476,67 @@
+     CHECK(Metal::GuestMemory::Find(BackingPhys) != nullptr);
+     CHECK(((__bridge id<MTLBuffer>)chunk->buffer).length == BackingSize);
+     Settle(f);
++}
++
++static void TestCrossChunkRead(Fixture& f) {
++    std::puts("cross-chunk read snapshots in existing stream ring");
++    // Exact size from the observed normal-gameplay crash, split across discontinuous sources.
++    constexpr u64 Size = 0xf9ad8, Start = 0x7000000000, First = 0x34400;
++    auto a = MakeBuffer(f.runtime, 512_KB, MemoryType::HostCached, "gather first chunk");
++    auto b = MakeBuffer(f.runtime, 1_MB, MemoryType::HostCached, "gather second chunk");
++    auto output = MakeBuffer(f.runtime, 5 * Size, MemoryType::HostCached, "gather snapshots");
++    StreamBuffer ring{f.runtime, MemoryType::Stream, 2_MB};
++    const auto original_a = Pattern(a->SizeBytes(), 73);
++    const auto original_b = Pattern(b->SizeBytes(), 74);
++    const auto changed_a = Pattern(a->SizeBytes(), 75);
++    const auto changed_b = Pattern(b->SizeBytes(), 76);
++    const u64 split = a->SizeBytes() - First;
++    auto resolve = [&](VAddr at, u64 remaining) -> std::optional<GuestReadPiece> {
++        const u64 done = at - Start;
++        if (done < split) return GuestReadPiece{a.get(), First + done,
++                                               std::min(remaining, split - done)};
++        return GuestReadPiece{b.get(), done - split, remaining};
++    };
++    auto no_sync = [](const GuestReadPiece&, VAddr) {};
++    // Reject holes, overflows, zero-size and oversized requests before any GPU copy/reservation.
++    unsigned callbacks = 0;
++    auto count_sync = [&](const GuestReadPiece&, VAddr) { ++callbacks; };
++    CHECK(!GatherGuestRead(f.runtime, ring, Start, 0, resolve, count_sync));
++    CHECK(!GatherGuestRead(f.runtime, ring, Start, ring.SizeBytes()+1, resolve, count_sync));
++    CHECK(!GatherGuestRead(f.runtime, ring, ~u64{0}-8, 16, resolve, count_sync));
++    CHECK(!GatherGuestRead(f.runtime, ring, Start, Size,
++        [&](VAddr at, u64 n) -> std::optional<GuestReadPiece> {
++            if (at != Start) return std::nullopt;
++            return resolve(at,n);
++        }, count_sync));
++    CHECK(!GatherGuestRead(f.runtime, ring, Start, Size,
++        [&](VAddr, u64) -> std::optional<GuestReadPiece> {
++            return GuestReadPiece{a.get(), a->SizeBytes()-1, 16};
++        }, count_sync));
++    CHECK(callbacks == 0);
++    for (u64 i = 0; i < 5; ++i) {
++        // Earlier GPU updates must be visible to the gather; later updates must not alter
++        // the already captured range. Repeated gathers wrap the SAME fixed-size ring.
++        f.runtime.UpdateBuffer(a.get(), 0, original_a);
++        f.runtime.UpdateBuffer(b.get(), 0, original_b);
++        const auto gathered = GatherGuestRead(f.runtime, ring, Start, Size, resolve, no_sync);
++        CHECK(gathered && gathered->first == &ring);
++        if (!gathered) break;
++        f.runtime.UpdateBuffer(a.get(), 0, changed_a);
++        f.runtime.UpdateBuffer(b.get(), 0, changed_b);
++        const vk::BufferCopy copy{gathered->second, i*Size, Size};
++        f.runtime.CopyBuffer(gathered->first, output.get(), {&copy,1});
++    }
++    Settle(f);
++    for (u64 i = 0; i < 5; ++i) {
++        CHECK(std::memcmp(output->mapped_data.data()+i*Size,
++                          original_a.data()+First, split)==0);
++        CHECK(std::memcmp(output->mapped_data.data()+i*Size+split,
++                          original_b.data(), Size-split)==0);
++    }
++    CHECK(ring.SizeBytes() == 2_MB);
++    CHECK(!f.scheduler.HasFailed());
++    std::puts("cross-chunk read: exact bytes, holes, GPU ordering and bounded ring reuse passed");
+ }
+ 
+ static void TestImages(Fixture& f) {
+@@ -1704,6 +1766,7 @@
+         TestBuffers(f);
+         TestInlineUpdates(f);
+         TestGuestChunk(f);
++        TestCrossChunkRead(f);
+         TestImages(f);
+         TestViewsAndSamplers(f);
+         TestPromotion(f);
