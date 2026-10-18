@@ -2,17 +2,18 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings 0.2.29 (0229)** release, compared with the optimized upstream
+Scope: the public **WiredThings 0.2.30 (0230)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.29 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.30 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
-0.2.29 updates launcher Help/About links and guide-language routing only; the production
-runtime, renderer and third-party patches are unchanged from 0.2.28.
+0.2.30 adds Chinese-only text-source selection and a private local importer for the community
+GOTY retranslation. The production runtime, renderer and graphics patches are unchanged;
+0.2.29 previously updated Help/About links.
 
 ## Inherited foundations and imported work
 
@@ -79,7 +80,8 @@ patch database. **Its inclusion is not evidence that every entry is enabled or v
 
 | Patch / asset | Credit / source | Public-release behavior |
 | --- | --- | --- |
-| **Unlock Game Region** | **Lance McDonald (manfightdragon), Kyo**, `Name="Unlock Game Region"` in the XML | Already present in the optimized upstream database. This fork automatically selects it for Chinese PS4 language IDs 10/11; it affects the launch image and does not supply or translate text/fonts |
+| **Unlock Game Region** | **Lance McDonald (manfightdragon), Kyo**, `Name="Unlock Game Region"` in the XML | Already present in the optimized upstream database. This fork automatically selects it for Chinese PS4 language IDs 10/11 in official-text mode; it affects the launch image and does not supply or translate text/fonts |
+| **Bloodborne Chinese Retranslation (GOTY zh-cn / zh-tw)** | **Supuritto**, [Nexus #146](https://www.nexusmods.com/bloodborne/mods/146); GOTY English-slot solution credits **connlost** | New in 0.2.30: Chinese-only source selector, ZIP/folder import, per-script private copies and hash validation. Runs English US with a temporary text/font overlay; skips region unlock. Author forbids redistribution, so no text/font payload is bundled. Original game and saved patch selections are preserved |
 | Uncap FPS++, 60/90 FPS++ and related timestep modes | Lance McDonald (manfightdragon), Kyo; per-entry XML attribution | The launcher selects a mode; frame limits and actual performance remain separate |
 | Resolution patches, effect/model-detail patches | Kyo and the other authors named on each XML entry | Existing patch data is integrated with output/render size and Metal velocity compatibility, not reattributed to this fork |
 | Restore Debug Camera | Lance McDonald (manfightdragon) | Optional; default game combination Cross + L3 / keyboard Space + Z |

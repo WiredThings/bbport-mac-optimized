@@ -123,7 +123,7 @@
 "L2 / firearm" = "L2／射擊";
 "Language" = "語言";
 "Launcher language" = "啟動器語言";
-"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "遊戲文字在下次啟動時切換，需有對應文字和字型。中文會自動啟用區域修補，語音不變。";
+"Launcher language changes immediately. Game text changes on the next launch. Voice audio is unchanged." = "啟動器語言立即生效，遊戲文字下次啟動時生效，不改變配音。";
 "Leave on Auto for the optimized profile" = "優化配置建議保留自動選項";
 "Less ghosting on characters; costs about 10% FPS" = "減少移動物件殘影。";
 "Load earlier" = "提前加載";
@@ -382,3 +382,17 @@
 "MetalFX uses camera motion and supported object velocity." = "MetalFX 使用相機運動和已支援物件的速度圖。";
 
 "Replaced unsupported upscaler %@ with %@." = "已將不支援的升頻器 %@ 替換為 %@。";
+
+// Chinese translation source
+"Chinese text" = "中文文字";
+"Official Chinese (region unlock)" = "官方中文（區域解鎖）";
+"Community retranslation" = "社群漢化";
+"Import GOTY package…" = "匯入 GOTY 漢化包…";
+"Download from Nexus Mods" = "從 Nexus Mods 下載";
+"Translation verified" = "漢化包已驗證";
+"Import the matching GOTY Chinese package to play." = "請先匯入對應的 GOTY 中文漢化包。";
+"Bloodborne Chinese Retranslation by Supuritto. Choose GOTY zh-cn for Simplified or zh-tw for Traditional Chinese." = "Bloodborne Chinese Retranslation · Supuritto。簡體選 GOTY zh-cn，繁體選 GOTY zh-tw。";
+"Choose the GOTY zh-cn / zh-tw ZIP or extracted folder" = "選擇 GOTY zh-cn／zh-tw ZIP 或解壓縮資料夾";
+"Import" = "匯入";
+"Checking translation files…" = "正在驗證漢化檔案…";
+"Could not import or verify the translation package." = "無法匯入或驗證漢化包。";

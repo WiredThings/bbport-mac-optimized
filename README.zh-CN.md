@@ -1,10 +1,10 @@
 # Bloodborne Optimized：macOS 血源运行器
 
-[English](README.md) · [下载 0.2.29](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
+[English](README.md) · [下载 0.2.30](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.30) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
 
 这是 [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized) 的
 **WiredThings 分支**，提供独立 macOS 启动器、**直接 Metal 渲染**、**MetalFX 时域升频**，
-以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.29（0229）预览版**。
+以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.30（0230）预览版**。
 
 启动器本身是原生 Apple Silicon 程序；Metal 路径中的游戏与渲染器宿主代码仍是 x86-64，
 通过 **Rosetta 2** 运行。项目基于 bbport、shadPS4 和社区渲染器工作，不是 FS／Sony 官方 PC 版。
@@ -14,8 +14,8 @@
 需要 **Apple Silicon Mac、macOS 26 或更新版本、Rosetta 2**，以及自行准备的、
 **已合并 1.09 更新的解密游戏文件**。安装包自带 Python 和运行库，游玩无需安装 Xcode、Homebrew 或自行编译。
 
-1. 从 [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29)
-   下载 **Bloodborne-Optimized-0.2.29-macOS.zip**。
+1. 从 [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.30)
+   下载 **Bloodborne-Optimized-0.2.30-macOS.zip**。
 2. 解压并把 **Bloodborne Optimized.app** 放进“应用程序”；更新前先退出旧启动器和游戏。
 3. 选择同时包含 `eboot.bin`、`sce_sys`、`dvdroot_ps4` 的完整合并目录，
    不要只选择单独的 `CUSA…-patch` 更新目录。
@@ -83,7 +83,7 @@ mkdir "$GAME_MERGED" && \
 
 | 方面 | 相对优化版上游新增／集成的内容 |
 | --- | --- |
-| 多语言 | 三种启动器语言；独立的游戏语言选择；中文文本／字体检查和区域解锁联动 |
+| 多语言 | 三种启动器语言；独立的游戏语言选择；中文资源检查、区域解锁和社区汉化本地导入 |
 | Metal 后端 | 将 Huax-1839 的 Metal 引擎接入现有启动器、运行时、语言／分辨率补丁和快速存读档；保留 Vulkan 兼容路径 |
 | 时域输入 | 将 IFreemz 的游戏速度图镜像路线适配到 MetalFX；合批速度图绘制，关闭动态模糊时仍保留速度图生成 |
 | 内存 | 按图形内存账本计预算，避免重复计算 no-copy 游戏内存；完善 GPU 完成后的回收、闲置上传后备回收、分配代次跟踪和失效采样副本回收 |
@@ -98,12 +98,25 @@ Metal 引擎、原始游戏补丁、移植算法均保留原作者归属。
 
 ## 中文支持与第三方补丁
 
-在“**游戏语言**”选择“**简体中文／繁體中文**”，退出并重新启动游戏。
-游戏目录必须已有相应中文文本和字体；此设置不改变配音。
+在“**游戏语言**”选择“**简体中文／繁體中文**”，下方才会出现“**中文文本**”选项：
 
-内置 **Unlock Game Region** 区域解锁补丁的作者是 **Lance McDonald（manfightdragon）、Kyo**。
-这个补丁在上游 XML 补丁库中已经存在；本分支将其接入中文语言选择，自动作用于启动镜像，
-不会因切换语言而改写原始游戏文件。**安装包不提供汉化文本包、中文游戏数据或字体。**
+- **官方中文（区域解锁）**：使用游戏目录已有的中文文本和字体，自动应用
+  **Lance McDonald（manfightdragon）、Kyo** 的 **Unlock Game Region** 补丁。
+  这个补丁在上游 XML 中已存在，本分支新增了与语言选择的联动。
+- **社区汉化**：从 [Supuritto 的 Bloodborne Chinese Retranslation 官方文件页](https://www.nexusmods.com/bloodborne/mods/146?tab=files)
+  下载并导入 **GOTY zh-cn（简体）／GOTY zh-tw（繁体）** ZIP 或解压文件夹。
+  作者为欧美版提供的 GOTY 包将英文替换为中文，适用于 **CUSA03173 欧美年度版**的语言限制。
+  启动器保留所选中文，运行时改用英语（美国）资源槽；简繁汉化包分别保存。它是独立的中文重译，区别于港版 CUSA01363／CUSA03023 的原生中文，
+  可按文本偏好选择。
+
+两种方案均在下次启动游戏时生效，不改变配音。社区汉化仅通过临时启动视图挂载，
+不覆盖原游戏文件；它优先于其他 Mod 的英文文本／字体，即使总 Mod 开关关闭也能生效。
+切回官方中文或非中文语言即可停用，单独导入不会自动启用。
+
+**安装包与仓库不再分发汉化文本、中文游戏数据或字体。** 作者不允许转载其文件，
+因此启动器提供官方下载入口和本地导入；下载可能需要 Nexus 登录。
+启动前会校验六个英文文本／字体文件，不完整、损坏或简繁不匹配时阻止启动。
+官方模式仍需原生资源，不能假定所有欧美版转储都带有可用中文。
 
 其他帧率、分辨率、特效和调试补丁保留 [`patches/Bloodborne.xml`](patches/Bloodborne.xml)
 中的作者信息。超宽屏 UI 包和调试字体需要用户另行取得。
@@ -148,7 +161,7 @@ softwareupdate --install-rosetta --agree-to-license
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
 cd bbport-mac-optimized
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.30-source1
 ```
 
 脚本依次初始化子模块、编译 x86-64 依赖和 arm64 Vulkan 驱动、安装固定版本的
@@ -161,17 +174,17 @@ SPIRV-Cross／xbyak，构建两种架构的 Vulkan 运行组件、Metal 渲染�
 
 产物位置：
 
-- `out/source-release-0.2.29-source1/Bloodborne Optimized.app`
-- `dist/Bloodborne-Optimized-0.2.29-source1.zip`：Metal + Vulkan 完整应用
-- `dist/bbport-mac-optimized-0.2.29-source1-source.tar.gz`：对应源码及依赖
+- `out/source-release-0.2.30-source1/Bloodborne Optimized.app`
+- `dist/Bloodborne-Optimized-0.2.30-source1.zip`：Metal + Vulkan 完整应用
+- `dist/bbport-mac-optimized-0.2.30-source1-source.tar.gz`：对应源码及依赖
 - `dist/source-build-verification.json`：最终打包、签名与动态链接检查结果
 - `dist/source-build-SHA256SUMS.txt`：最终 App ZIP 与源码包的校验和
 
 请使用干净克隆；打包器会拒绝未提交的项目文件。再次生成完整 App 时换一个版本后缀，
 避免覆盖已有暂存结果。依赖已由此流程准备好后，可运行
-`BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source2`。
+`BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.30-source2`。
 保留 `.git`：GitHub 自动生成的源码 ZIP 不含子模块；Release 的源码检查包没有构建守卫所需的
-Git 元数据。`v0.2.29` 保留原发布快照，新构建入口请使用 `optimized` 分支。
+Git 元数据。`v0.2.30` 已包含此构建入口；`optimized` 分支还会继续接收后续修复。
 
 如果 SDK 与链接器不匹配，将 `SDKROOT` 改为当前编译器支持的已安装 SDK，避免旧链接器搭配新 SDK。
 分步指令、验证边界和排错见[详细构建指南](docs/release/BUILD-OPTIMIZED.md)。
@@ -180,7 +193,7 @@ Git 元数据。`v0.2.29` 保留原发布快照，新构建入口请使用 `opti
 
 - [源码、固定依赖与构建方法](docs/release/SOURCE.md)
 - [完整分支工作与第三方署名](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.29 变更](docs/release/0.2.29.md) · [反馈问题](https://github.com/WiredThings/bbport-mac-optimized/issues)
+- [0.2.30 变更](docs/release/0.2.30.md) · [反馈问题](https://github.com/WiredThings/bbport-mac-optimized/issues)
 
 感谢 **DiAvisoo、bmy/bbport-mac、deadinside28、shadPS4、Huax-1839、IFreemz、Awakenchan、
 Wooloomooloo2／Mark Hall** 及各依赖组件贡献者。

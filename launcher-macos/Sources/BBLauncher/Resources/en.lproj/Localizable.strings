@@ -123,7 +123,7 @@
 "L2 / firearm" = "L2 / firearm";
 "Language" = "Language";
 "Launcher language" = "Launcher language";
-"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "Game text changes next launch and requires matching fonts and text files. Chinese enables the region patch; voice audio is unchanged.";
+"Launcher language changes immediately. Game text changes on the next launch. Voice audio is unchanged." = "Launcher language changes immediately. Game text changes on the next launch. Voice audio is unchanged.";
 "Leave on Auto for the optimized profile" = "Leave on Auto for the optimized profile";
 "Less ghosting on characters; costs about 10% FPS" = "Reduces ghosting on moving objects.";
 "Load earlier" = "Load earlier";
@@ -382,3 +382,17 @@
 "MetalFX uses camera motion and supported object velocity." = "MetalFX uses camera motion and supported object velocity.";
 
 "Replaced unsupported upscaler %@ with %@." = "Replaced unsupported upscaler %@ with %@.";
+
+// Chinese translation source
+"Chinese text" = "Chinese text";
+"Official Chinese (region unlock)" = "Official Chinese (region unlock)";
+"Community retranslation" = "Community retranslation";
+"Import GOTY package…" = "Import GOTY package…";
+"Download from Nexus Mods" = "Download from Nexus Mods";
+"Translation verified" = "Translation verified";
+"Import the matching GOTY Chinese package to play." = "Import the matching GOTY Chinese package to play.";
+"Bloodborne Chinese Retranslation by Supuritto. Choose GOTY zh-cn for Simplified or zh-tw for Traditional Chinese." = "Bloodborne Chinese Retranslation by Supuritto. Choose GOTY zh-cn for Simplified or zh-tw for Traditional Chinese.";
+"Choose the GOTY zh-cn / zh-tw ZIP or extracted folder" = "Choose the GOTY zh-cn / zh-tw ZIP or extracted folder";
+"Import" = "Import";
+"Checking translation files…" = "Checking translation files…";
+"Could not import or verify the translation package." = "Could not import or verify the translation package.";

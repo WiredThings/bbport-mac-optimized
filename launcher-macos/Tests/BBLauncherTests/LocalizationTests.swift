@@ -3,6 +3,38 @@ import XCTest
 @testable import BBLauncher
 
 final class LocalizationTests: XCTestCase {
+    func testCommunityChineseRoutingPersistenceAndStaleEnvironment() throws {
+        let suite = "bbport.community.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(LauncherPrefs.load(from: defaults).communityChinese)
+        var prefs = LauncherPrefs()
+        prefs.communityChinese = true
+        prefs.chineseSimplifiedFolder = "/managed/simplified"
+        prefs.chineseTraditionalFolder = "/managed/traditional"
+        for language in ["10", "11", "1", "0", "18"] {
+            prefs.language = language
+            prefs.save(to: defaults)
+            let saved = LauncherPrefs.load(from: defaults)
+            XCTAssertEqual(saved, prefs)
+            let chinese = ["10", "11"].contains(language)
+            XCTAssertEqual(saved.usesCommunityChinese, chinese)
+            let profile = OptimizedProfile(prefs: saved, game: GameSettings())
+            let env = profile.applyingEnvironment(to: ["BB_CHINESE_SOURCE": "community",
+                "BB_CHINESE_LANGUAGE": "stale", "BB_CHINESE_TRANSLATION_DIR": "/stale"])
+            XCTAssertEqual(env["BB_LANGUAGE"], chinese ? "1" : language)
+            XCTAssertEqual(env["BB_CHINESE_SOURCE"], chinese ? "community" : "official")
+            XCTAssertEqual(env["BB_CHINESE_LANGUAGE"], chinese ? language : nil)
+            XCTAssertEqual(env["BB_CHINESE_TRANSLATION_DIR"], chinese ? saved.chineseTranslationFolder : nil)
+        }
+        prefs.language = "11"
+        prefs.communityChinese = false
+        let env = OptimizedProfile(prefs: prefs, game: GameSettings()).environment
+        XCTAssertEqual(env["BB_LANGUAGE"], "11")
+        XCTAssertEqual(env["BB_CHINESE_SOURCE"], "official")
+        XCTAssertNil(env["BB_CHINESE_TRANSLATION_DIR"])
+    }
+
     func testChineseGameLanguagesPersistAndReachRuntimeIndependentlyOfUI() throws {
         let suite = "bbport.languages.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

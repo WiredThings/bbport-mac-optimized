@@ -56,6 +56,10 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var gameCheck = Check(level: .error, message: "")
     @Published private(set) var uiModStatus = UIModStatus()
     @Published private(set) var uiModBusy = false
+    @Published private(set) var chineseTranslationBusy = false
+    @Published private(set) var chineseTranslationValid = false
+    @Published private(set) var chineseTranslationProblem: String?
+    private var chineseTranslationToken: UUID?
     @Published private(set) var state: RunState = .idle
     @Published private(set) var job: Job = .game
     @Published private(set) var logLines: [LogLine] = []
@@ -169,13 +173,19 @@ final class LauncherModel: ObservableObject {
     var isRunning: Bool { process != nil }
 
     var canPlay: Bool {
-        !isRunning && !uiModBusy && !uiModStatus.blocksPlay && repoCheck.allowsPlay && gameCheck.allowsPlay
+        !isRunning && !uiModBusy && !chineseTranslationBusy && !uiModStatus.blocksPlay
+            && (!prefs.usesCommunityChinese || chineseTranslationValid)
+            && repoCheck.allowsPlay && gameCheck.allowsPlay
     }
 
 
     var statusText: String {
         if uiModBusy { return L10n.key("Checking or updating UI files…") }
         if uiModStatus.blocksPlay { return uiModStatus.message }
+        if !isRunning && prefs.usesCommunityChinese {
+            if chineseTranslationBusy { return L10n.key("Checking translation files…") }
+            if !chineseTranslationValid { return L10n.key("Import the matching GOTY Chinese package to play.") }
+        }
         switch state {
         case .idle:
             if !repoCheck.allowsPlay { return repoCheck.message }
@@ -217,6 +227,11 @@ final class LauncherModel: ObservableObject {
         if prefs.ultrawide != old.ultrawide { refreshUIMod() }
         if prefs.modsFolder != old.modsFolder { refreshMods() }
         if prefs.patchesFolder != old.patchesFolder { refreshPatches() }
+        if prefs.language != old.language || prefs.communityChinese != old.communityChinese
+            || prefs.chineseSimplifiedFolder != old.chineseSimplifiedFolder
+            || prefs.chineseTraditionalFolder != old.chineseTraditionalFolder {
+            refreshChineseTranslation()
+        }
     }
 
     /// bbport.ini and the mod and patch lists of the current repository.
@@ -231,6 +246,59 @@ final class LauncherModel: ObservableObject {
     func refreshChecks() {
         repoCheck = checkOptimizedEngine(repoURL, packaged: usesBuiltInEngine, renderer: prefs.renderer)
         refreshGameCheck()
+        refreshChineseTranslation()
+    }
+
+    func chooseChineseTranslation() {
+        guard !isRunning, !chineseTranslationBusy, prefs.isChinese else { return }
+        let panel = NSOpenPanel()
+        panel.message = L10n.key("Choose the GOTY zh-cn / zh-tw ZIP or extracted folder")
+        panel.prompt = L10n.key("Import")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        refreshChineseTranslation(importing: url.path)
+    }
+
+    private func refreshChineseTranslation(importing source: String? = nil) {
+        guard !isRunning else { return }
+        guard !chineseTranslationBusy else { return }
+        let token = UUID()
+        chineseTranslationToken = token
+        chineseTranslationValid = false
+        chineseTranslationProblem = nil
+        guard prefs.usesCommunityChinese || source != nil else { return }
+        let language = prefs.language
+        let folder = source ?? prefs.chineseTranslationFolder
+        guard !folder.isEmpty, let repo = repoURL else { return }
+        let bundled = repo.appendingPathComponent("python/bin/python3").path
+        guard let python = FileManager.default.isExecutableFile(atPath: bundled) ? bundled : findPython() else { return }
+        let helper = ChineseTranslationHelper(repo: repo, python: python, data: dataURL)
+        chineseTranslationBusy = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try helper.run(source == nil ? "inspect" : "import", folder: folder, language: language) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.chineseTranslationToken == token else { return }
+                self.chineseTranslationBusy = false
+                // A source, script or repository change invalidates an outstanding inspection.
+                guard self.repoURL == repo, self.prefs.language == language,
+                      source != nil || self.prefs.chineseTranslationFolder == folder else {
+                    self.refreshChineseTranslation()
+                    return
+                }
+                switch result {
+                case .success(let report):
+                    if source != nil {
+                        if language == "10" { self.prefs.chineseTraditionalFolder = report.folder }
+                        else { self.prefs.chineseSimplifiedFolder = report.folder }
+                    }
+                    self.chineseTranslationValid = self.prefs.usesCommunityChinese && report.valid
+                case .failure(let error):
+                    self.chineseTranslationProblem = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func refreshGameCheck() {
@@ -717,6 +785,7 @@ enum Links {
     }
     static let releases = "\(home)/releases"
     static let issues = "\(home)/issues"
+    static let chineseTranslation = "https://www.nexusmods.com/bloodborne/mods/146?tab=files"
 
     @MainActor static func open(_ address: String) {
         if let url = URL(string: address) { NSWorkspace.shared.open(url) }

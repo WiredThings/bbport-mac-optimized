@@ -170,6 +170,7 @@ def main():
     parser.add_argument('--mods-dir', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--enabled', choices=('0', '1'), default='1')
+    parser.add_argument('--last-mod', type=Path, help='Validated dedicated overlay, after optional general mods')
     args = parser.parse_args()
     layers = []
     if args.enabled == '1':
@@ -183,6 +184,8 @@ def main():
         else:
             for name in selected(args.mods_dir, args.config):
                 layers.append((name, args.mods_dir / name))
+    if args.last_mod:
+        layers.append(('Chinese Retranslation', args.last_mod))
     print(build_overlay(args.game, args.out, layers))
 
 

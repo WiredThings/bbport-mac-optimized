@@ -1,9 +1,9 @@
-# Bloodborne Optimized 0.2.29: user guide
+# Bloodborne Optimized 0.2.30: user guide
 
 [简体中文](USER_GUIDE.zh-CN.md) · [Project overview](../README.md) · [Changes and credits](THIRD_PARTY_CHANGES.md)
 
-This guide covers the WiredThings **0.2.29 (0229) preview**. Older upstream guides describe
-different backends and defaults. Download the [complete public app](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29).
+This guide covers the WiredThings **0.2.30 (0230) preview**. Older upstream guides describe
+different backends and defaults. Download the [complete public app](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.30).
 
 ## Requirements and installation
 
@@ -13,7 +13,7 @@ different backends and defaults. Download the [complete public app](https://gith
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
 
-Extract `Bloodborne-Optimized-0.2.29-macOS.zip`, move **Bloodborne Optimized.app** to Applications,
+Extract `Bloodborne-Optimized-0.2.30-macOS.zip`, move **Bloodborne Optimized.app** to Applications,
 and open it. The app is ad-hoc signed, not notarized; if macOS blocks it, use **System Settings →
 Privacy & Security → Open Anyway** for this app. Rosetta can be installed through macOS or with:
 
@@ -35,7 +35,8 @@ including `eboot.bin`, `sce_sys` and updated `dvdroot_ps4` content. Keep the ori
 if you want a reversible merge. Choose the resulting full folder in the launcher; selecting only
 `CUSA…-patch`, or nesting that folder inside the base, does not merge the update.
 
-The public app supplies no game dump, decryption service, update or Chinese asset download.
+The public app contains no game dump, decryption service, update or Chinese asset payload.
+Optional community translation is downloaded separately from its author.
 A green game-folder check confirms recognized metadata; it does not validate every asset.
 
 ## First launch
@@ -55,6 +56,10 @@ variants can still compile at runtime. Clearing caches makes first-use compilati
 **Launcher language** changes immediately: follow system, English, 简体中文 or 繁體中文.
 **Game language** is independent and applies on the next game launch. Simplified Chinese uses
 PS4 language value **11**; Traditional Chinese uses **10**. Voice audio is unchanged.
+After choosing either, **Chinese text** offers official region unlock or community retranslation.
+The control is hidden for all other languages. Existing installations default to official mode.
+
+### Official Chinese (region unlock)
 
 The game must contain these files under `dvdroot_ps4`:
 
@@ -67,13 +72,44 @@ The launcher warns when required files are missing. Choosing a language cannot g
 text or fonts. Region-specific behavior was investigated on **CUSA03173 1.09**; other editions
 have not all been checked.
 
-For values 10/11, the launch pipeline automatically adds **Unlock Game Region** by
+In official mode, values 10/11 automatically add **Unlock Game Region** by
 **Lance McDonald (manfightdragon), Kyo**. It was already in upstream's patch XML; the new part is
 this branch's language-selection integration. It operates on the prepared launch image through
-`patches.bin`, retaining the source game files and original Cross/Circle convention. No external
-translation pack is installed. After restarting, the log should identify `Game language: 11`
+`patches.bin`, retaining the source game files and original Cross/Circle convention. This mode installs no external
+translation pack. After restarting, the log should identify `Game language: 11`
 (or 10) and `Unlock Game Region` in the selected patches. These log entries prove selection;
 actual text/font rendering still depends on the game files and edition.
+
+### Community retranslation (GOTY English replacement)
+
+1. Choose the desired Chinese game language, then **Chinese text → Community retranslation**.
+2. Open **Download from Nexus Mods** and obtain **Chinese Retranslation GOTY zh-cn** (Simplified)
+   or **GOTY zh-tw** (Traditional) from [Supuritto's mod page](https://www.nexusmods.com/bloodborne/mods/146?tab=files).
+   Use the GOTY packages rather than the generic Chinese/Japanese-dub package. The western
+   GOTY edition does not gain Japanese voice audio from this translation.
+3. Click **Import GOTY package…**, choose the ZIP or extracted folder, and wait for **Translation verified**.
+   Simplified and Traditional packages are imported separately; select each language to import its file.
+4. Start the game. The log identifies `Chinese source: community`, the requested Chinese value,
+   and the effective English US `BB_LANGUAGE=1`. Region unlock is skipped for this route.
+
+Only `menu/{engus,enggb}/font.gfx` and `msg/{engus,enggb}/{item,menu}.msgbnd.dcx` are imported.
+Private copies and SHA-256 manifests live in `optimized-launcher/chinese-translations` under
+Application Support. They remain outside the app/repository and survive app updates. Each import
+creates a new copy, retaining earlier imports; remove old copies only when no preference uses them.
+The import rejects unsafe ZIP paths, links, duplicate assets, incomplete packages and a detected
+Chinese-script mismatch. It verifies all six hashes again before each launch, without per-frame work.
+For English-only third-party archives without script markers, select the author's matching GOTY variant.
+
+The dedicated translation layer is applied last, independent of the general Mods switch. It wins
+text/font collisions; other mods remain loaded. Explicit known **Unlock Game Region** selections
+are skipped for that launch without altering their saved selection; renamed patches overlapping
+its addresses cause a clear conflict error. Switching to official Chinese or a non-Chinese language
+omits this layer and uses the original assets again. The importer does not back up or rewrite the
+game because its source files are never replaced. Saves, graphics options and renderer patches are unchanged.
+
+The author prohibits redistribution; the app supplies the integration and download link, not the
+translation/font payload or Nexus login credentials. Text quality is a preference: this is a
+community retranslation, not the official localization shipped with Asian editions.
 
 ## Rendering, resolution and effects
 
@@ -216,7 +252,7 @@ save folder and select the copy. Do not use app deletion or shader-cache deletio
 | Slowdown after GPU profiling | Turn GPU timing/frame statistics off for normal play; detailed timing can lower FPS |
 | High memory / crackling / crash | Exit before launching a second copy; retain the log and report scene/session details. Crackling and long-session behavior are not claimed fixed |
 | Source-folder warning in a complete app | In launcher Settings choose the built-in engine; if files are missing, re-extract the complete public ZIP |
-| Help opens an older upstream page | Update to 0.2.29; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
+| Help opens an older upstream page | Update to 0.2.30; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
 
 Report to [this fork's Issues](https://github.com/WiredThings/bbport-mac-optimized/issues), including
 app version, Mac/RAM, macOS, backend, output and scene resolution/preset, effects, scene/location,
@@ -224,5 +260,5 @@ and a short relevant log excerpt. Remove private paths where appropriate. Do not
 files or saves. Public packages omit local benchmark/analyzer tools; runtime diagnostics are optional.
 
 For source work, use [SOURCE.md](release/SOURCE.md), [build instructions](release/BUILD-OPTIMIZED.md)
-and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.29 release tag/source archive is an
+and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.30 release tag/source archive is an
 immutable build snapshot; current branch documentation can include later corrections.

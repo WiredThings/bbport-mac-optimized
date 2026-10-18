@@ -64,9 +64,29 @@ if [[ -z ${PYTHON:-} ]]; then echo 'Install Python 3 or set PYTHON.' >&2; exit 1
 game=${BB_GAME_DIR:-../CUSA03173}
 if [[ ! -f $game/eboot.bin ]]; then echo "No eboot.bin in $game (set BB_GAME_DIR)." >&2; exit 1; fi
 original_game=$game
+translation_args=(--enabled "${BB_MODS_ENABLED:-1}")
+case ${BB_CHINESE_SOURCE:-official} in
+    official) ;;
+    community)
+        if [[ ${BB_CHINESE_LANGUAGE:-} != 10 && ${BB_CHINESE_LANGUAGE:-} != 11 ]]; then
+            echo 'Chinese Retranslation: select Simplified or Traditional Chinese first.' >&2; exit 1
+        fi
+        if [[ -z ${BB_CHINESE_TRANSLATION_DIR:-} ]]; then
+            echo 'Chinese Retranslation: import the matching GOTY package in the launcher.' >&2; exit 1
+        fi
+        "$PYTHON" scripts/chinese_translation.py inspect --language "$BB_CHINESE_LANGUAGE" \
+            --folder "$BB_CHINESE_TRANSLATION_DIR" >"$out/chinese-translation-check.json" || {
+            cat "$out/chinese-translation-check.json" >&2; exit 1;
+        }
+        export BB_LANGUAGE=1
+        translation_args+=(--last-mod "$BB_CHINESE_TRANSLATION_DIR")
+        echo "Chinese Retranslation: verified GOTY assets; Chinese $BB_CHINESE_LANGUAGE via English US" >&2
+        ;;
+    *) echo 'Unknown BB_CHINESE_SOURCE (use official or community).' >&2; exit 1 ;;
+esac
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
     --mods-dir "${BB_MODS_DIR:-$data/mods}" --config "${BB_MODS_CONFIG:-$data/mods.json}" \
-    --enabled "${BB_MODS_ENABLED:-1}")
+    "${translation_args[@]}")
 # A private merged view lasts for this launch, including restarts. Cleanup only our own view.
 if [[ $game != "$(realpath "$original_game")" ]]; then
     mod_game=$game

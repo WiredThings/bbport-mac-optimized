@@ -76,14 +76,37 @@ struct LanguageSection: View {
             Picker(L10n.key("Game language"), selection: $model.prefs.language) {
                 ForEach(Catalog.languages) { Text(L10n.key($0.label)).tag($0.value) }
             }
-            if let warning = gameLanguageWarning(folder: model.prefs.gameFolder, language: model.prefs.language) {
+            if model.prefs.isChinese {
+                Picker(L10n.key("Chinese text"), selection: $model.prefs.communityChinese) {
+                    Text(L10n.key("Official Chinese (region unlock)")).tag(false)
+                    Text(L10n.key("Community retranslation")).tag(true)
+                }
+                if model.prefs.usesCommunityChinese {
+                    HStack {
+                        Button(L10n.key("Import GOTY package…")) { model.chooseChineseTranslation() }
+                            .disabled(model.isRunning || model.chineseTranslationBusy)
+                        Button(L10n.key("Download from Nexus Mods")) { Links.open(Links.chineseTranslation) }
+                        if model.chineseTranslationBusy { ProgressView().controlSize(.small) }
+                    }
+                    Label(L10n.key(model.chineseTranslationValid ? "Translation verified" : "Import the matching GOTY Chinese package to play."),
+                          systemImage: model.chineseTranslationValid ? "checkmark.circle" : "exclamationmark.triangle")
+                        .foregroundStyle(model.chineseTranslationValid ? Color.secondary : Color.orange)
+                    if let problem = model.chineseTranslationProblem {
+                        Text(problem).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                    }
+                    Text(L10n.key("Bloodborne Chinese Retranslation by Supuritto. Choose GOTY zh-cn for Simplified or zh-tw for Traditional Chinese."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if !model.prefs.usesCommunityChinese,
+               let warning = gameLanguageWarning(folder: model.prefs.gameFolder, language: model.prefs.language) {
                 Label(warning, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
         } header: {
             Text(L10n.key("Language"))
         } footer: {
-            Text(L10n.key("Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged."))
+            Text(L10n.key("Launcher language changes immediately. Game text changes on the next launch. Voice audio is unchanged."))
         }
     }
 }

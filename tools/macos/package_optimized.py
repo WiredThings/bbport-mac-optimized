@@ -15,7 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SYSTEM = ('/usr/lib/', '/System/')
-SCRIPTS = ('ultrawide_ui.py', 'mods.py', 'prepare.py', 'game_check.py', 'link_libc.py', 'link_modules.py', 'content_profile.py', 'patches.py')
+SCRIPTS = ('ultrawide_ui.py', 'mods.py', 'chinese_translation.py', 'prepare.py', 'game_check.py', 'link_libc.py', 'link_modules.py', 'content_profile.py', 'patches.py')
 FORBIDDEN = {'eboot.bin', 'param.sfo', 'icon0.png', 'pic0.png', 'pic1.png', 'sce_module', 'dvdroot_ps4',
              'savedata', 'quicksaves', 'ui-mod-backups', 'mesa-cache', 'shader-cache', 'last-run.log', 'bbport.ini', '.DS_Store', '.git'}
 

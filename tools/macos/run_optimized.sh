@@ -118,7 +118,7 @@ echo "Bloodborne Optimized: renderer=$renderer; quicksave=$BB_QUICKSAVE"
 echo "Runtime: $BB_PROBE"
 echo "Renderer: ${metal_lib:-$BB_GPU_PROCESS}"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
-echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
+echo "Game language: ${BB_LANGUAGE:-1}; Chinese source: ${BB_CHINESE_SOURCE:-official} (community request: ${BB_CHINESE_LANGUAGE:-none})"
 if [[ $renderer == metal ]]; then
     echo "Metal: direct Metal API, Rosetta host, no-copy guest buffers; cache=metal1"
     echo "Metal combined profile: clear=$BB_MTL_BATCH_CLEARS direct-copy=$BB_MTL_DIRECT_COPY staging=$BB_MTL_ADAPTIVE_STAGING tiling=$BB_MTL_TEXTURE_TILING residency=$BB_MTL_PRECISE_RESIDENCY barriers=$BB_MTL_COALESCE_BARRIERS query=$BB_MTL_QUERY_COMPUTE_CHAIN compute=$BB_MTL_PRECISE_COMPUTE half=$BB_MTL_TEXTURE_TILING_HALF fold-clears=$BB_MTL_FOLD_CLEARS"

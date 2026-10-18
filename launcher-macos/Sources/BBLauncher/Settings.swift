@@ -171,6 +171,14 @@ struct LauncherPrefs: Equatable {
     var modsEnabled = true
     var patchesFolder = ""
     var language = "1"
+    var communityChinese = false
+    var chineseSimplifiedFolder = ""
+    var chineseTraditionalFolder = ""
+    var isChinese: Bool { ["10", "11"].contains(language) }
+    var usesCommunityChinese: Bool { isChinese && communityChinese }
+    var chineseTranslationFolder: String {
+        language == "10" ? chineseTraditionalFolder : chineseSimplifiedFolder
+    }
     var uiLanguage = "system"
     var fullscreen = false
     var ultrawide = false
@@ -213,6 +221,9 @@ struct LauncherPrefs: Equatable {
         static let modsEnabled = "modsEnabled"
         static let patchesFolder = "patchesFolder"
         static let language = "language"
+        static let communityChinese = "communityChinese"
+        static let chineseSimplifiedFolder = "chineseSimplifiedFolder"
+        static let chineseTraditionalFolder = "chineseTraditionalFolder"
         static let uiLanguage = "uiLanguage"
         static let fullscreen = "fullscreen"
         static let ultrawide = "ultrawide"
@@ -256,6 +267,9 @@ struct LauncherPrefs: Equatable {
         p.modsEnabled = flag(Key.modsEnabled, p.modsEnabled)
         p.patchesFolder = text(Key.patchesFolder, p.patchesFolder)
         p.language = text(Key.language, p.language)
+        p.communityChinese = flag(Key.communityChinese, p.communityChinese)
+        p.chineseSimplifiedFolder = text(Key.chineseSimplifiedFolder, p.chineseSimplifiedFolder)
+        p.chineseTraditionalFolder = text(Key.chineseTraditionalFolder, p.chineseTraditionalFolder)
         p.uiLanguage = text(Key.uiLanguage, p.uiLanguage)
         if !Catalog.contains(L10n.languages, p.uiLanguage) { p.uiLanguage = "system" }
         p.fullscreen = flag(Key.fullscreen, p.fullscreen)
@@ -343,6 +357,9 @@ struct LauncherPrefs: Equatable {
         defaults.set(modsEnabled, forKey: Key.modsEnabled)
         defaults.set(patchesFolder, forKey: Key.patchesFolder)
         defaults.set(language, forKey: Key.language)
+        defaults.set(communityChinese, forKey: Key.communityChinese)
+        defaults.set(chineseSimplifiedFolder, forKey: Key.chineseSimplifiedFolder)
+        defaults.set(chineseTraditionalFolder, forKey: Key.chineseTraditionalFolder)
         defaults.set(uiLanguage, forKey: Key.uiLanguage)
         defaults.set(fullscreen, forKey: Key.fullscreen)
         defaults.set(ultrawide, forKey: Key.ultrawide)

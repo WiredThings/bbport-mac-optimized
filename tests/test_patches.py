@@ -23,7 +23,7 @@ SEGMENTS = [(0, 0x6000000)]
 
 
 class ChineseLanguagePatchTests(unittest.TestCase):
-    def compile_launch(self, language, extra=''):
+    def compile_launch(self, language, extra='', source='official', external=None):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
             # Only segment bounds are needed to compile patches; no game code runs.
@@ -33,10 +33,16 @@ class ChineseLanguagePatchTests(unittest.TestCase):
             struct.pack_into('<IIQQQQQQ', elf, 64, 1, 5, 0, 0, 0, 0, 0x6000000, 0)
             (out / 'eboot.elf').write_bytes(elf)
             env = {'BB_INTEL_TONEMAP_FIX': '0', 'BB_SKIP_NETWORK_CHOICE': '0'}
+            env['BB_CHINESE_SOURCE'] = source
             if language is not None:
                 env['BB_LANGUAGE'] = language
             args = ['patches.py', '--out', str(out), '--settings', str(out / 'missing.ini'),
                     '--fps', '30', '--extra', extra]
+            if external:
+                folder=out/'external'
+                folder.mkdir()
+                (folder/'region.xml').write_text(external)
+                args+=['--patches-dir',str(folder)]
             log = io.StringIO()
             with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', args), \
                     contextlib.redirect_stdout(log):
@@ -75,6 +81,23 @@ class ChineseLanguagePatchTests(unittest.TestCase):
         automatic, _ = self.compile_launch('11')
         explicit, _ = self.compile_launch('11', 'Unlock Game Region')
         self.assertEqual(explicit, automatic)
+
+    def test_community_route_suppresses_automatic_and_explicit_region_unlock(self):
+        for language in ('1', '10', '11'):
+            writes, _ = self.compile_launch(language, 'Unlock Game Region', source='community')
+            self.assertEqual(writes, [])
+
+    def test_community_route_skips_known_external_region_and_rejects_renamed_collision(self):
+        template = '''<Patch><Metadata Name="{}" AppVer="01.09" isEnabled="true">
+            <PatchList><Line Type="bytes" Address="0x023b9190" Value="b805000000c3"/></PatchList>
+            </Metadata></Patch>'''
+        writes, _ = self.compile_launch('1', source='community', external=template.format('Unlock Game Region'))
+        self.assertEqual(writes, [])
+        with self.assertRaisesRegex(ValueError, 'conflicts with an external region'):
+            self.compile_launch('1', source='community', external=template.format('Renamed region unlock'))
+        safe = template.format('Unrelated patch').replace('0x023b9190', '0x023b0000')
+        writes, _ = self.compile_launch('1', source='community', external=safe)
+        self.assertEqual(len(writes), 1)
 
 
 def immediate(writes, address):

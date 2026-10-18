@@ -60,14 +60,15 @@ def intel_cpu(cpuinfo='/proc/cpuinfo'):
 # The title's PLAY ONLINE / PLAY OFFLINE dialog: the port has no PSN, the game goes straight to the
 # main menu offline. On by default (the launcher's switch); BB_SKIP_NETWORK_CHOICE=0 shows it.
 SKIP_NETWORK_CHOICE='Skip Online/Offline Choice'
-# CUSA03173 ships Chinese text/fonts, but the game's region checks reject those
-# system languages. Use the bundled Lance McDonald/Kyo patch in the launch image;
-# setting BB_LANGUAGE alone does not bypass the checks. The source dump is untouched.
+# Official Chinese requires matching dump assets AND the region-check bypass.
+# Community GOTY retranslation instead replaces English slots and runs in English.
+# Neither route modifies the source dump.
 UNLOCK_GAME_REGION='Unlock Game Region'
 
 
 def language_patches(env=os.environ):
-    return [UNLOCK_GAME_REGION] if env.get('BB_LANGUAGE','1') in ('10','11') else []
+    return [UNLOCK_GAME_REGION] if (env.get('BB_CHINESE_SOURCE') != 'community'
+                                   and env.get('BB_LANGUAGE','1') in ('10','11')) else []
 
 
 def skip_network_choice(env=os.environ):
@@ -403,6 +404,9 @@ def main():
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
     names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
     names+=[n for n in language_patches() if n not in names]
+    community=os.environ.get('BB_CHINESE_SOURCE')=='community'
+    if community:
+        names=[n for n in names if n!=UNLOCK_GAME_REGION]
     if intel_tonemap_fix() and INTEL_TONEMAP not in names:
         names.append(INTEL_TONEMAP)
     if skip_network_choice() and SKIP_NETWORK_CHOICE not in names:
@@ -424,8 +428,16 @@ def main():
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.
-        writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
-                                                    a.patches_config),segments)
+        selected=external_selection(external_patches(a.patches_dir,a.app_version,a.xml),a.patches_config)
+        if community:
+            selected=[entry for entry in selected if entry[2].get('Name')!=UNLOCK_GAME_REGION]
+        writes+=compile_external(selected,segments)
+    if community:
+        # A renamed external region patch must not silently select the official assets.
+        region=compile_patches(a.xml,[UNLOCK_GAME_REGION],a.app_version,segments)
+        if any(offset < r+len(b) and r < offset+len(data)
+               for offset,data in writes for r,b in region):
+            raise ValueError('Chinese Retranslation conflicts with an external region patch; disable that patch')
     validate_velocity_writes(writes, settings)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).

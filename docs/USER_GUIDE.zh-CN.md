@@ -1,9 +1,9 @@
-# Bloodborne Optimized 0.2.29 使用指南
+# Bloodborne Optimized 0.2.30 使用指南
 
 [English](USER_GUIDE.md) · [项目首页](../README.zh-CN.md) · [分支工作与第三方来源](THIRD_PARTY_CHANGES.md)
 
-本指南对应 WiredThings 分支 **0.2.29（0229）预览版**。
-[下载完整安装包](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29)。
+本指南对应 WiredThings 分支 **0.2.30（0230）预览版**。
+[下载完整安装包](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.30)。
 旧上游指南中的后端、硬件测试和默认值不一定适用于此版本。
 
 ## 环境与安装
@@ -14,7 +14,7 @@
 - 自行准备的解密《血源诅咒》文件，且**已经合并 1.09 更新**。
 - 安装包自带 Python 和运行库，游玩无需 Xcode、Homebrew 或自行编译。
 
-解压 `Bloodborne-Optimized-0.2.29-macOS.zip`，把 **Bloodborne Optimized.app** 放进“应用程序”后打开。
+解压 `Bloodborne-Optimized-0.2.30-macOS.zip`，把 **Bloodborne Optimized.app** 放进“应用程序”后打开。
 应用使用临时签名，未经 Apple 公证；若被拦截，可到“系统设置 → 隐私与安全性”对该应用选择“仍要打开”。
 Rosetta 可通过 macOS 提示安装，也可在终端执行：
 
@@ -51,7 +51,10 @@ softwareupdate --install-rosetta --agree-to-license
 
 “**启动器语言**”可选跟随系统、英文、简体中文、繁体中文，立即生效。
 “**游戏语言**”独立设置，下次启动游戏生效；简体中文的 PS4 语言值是 **11**，繁体是 **10**。
-此选项不改变配音。
+此选项不改变配音。选择任一中文后才显示“中文文本”，可选官方区域解锁或社区汉化。
+其他语言隐藏该选项；旧配置默认保持官方模式。
+
+### 官方中文（区域解锁）
 
 游戏目录的 `dvdroot_ps4` 下应已有这些文件：
 
@@ -63,11 +66,37 @@ softwareupdate --install-rosetta --agree-to-license
 缺失时启动器会提示。选择中文不能生成缺少的文本或字体。
 本分支对区域限制的排查以 **CUSA03173 1.09** 为对象，其他区域版本未全部逐一验证。
 
-游戏语言为 10／11 时，启动流程自动选择 **Lance McDonald（manfightdragon）、Kyo** 的
+官方模式下，游戏语言为 10／11 时自动选择 **Lance McDonald（manfightdragon）、Kyo** 的
 **Unlock Game Region** 补丁。原补丁在上游 XML 中已经存在，本分支新增的是与语言选择联动。
 补丁通过 `patches.bin` 作用于准备后的启动镜像，保留原始游戏文件和原有 ×／○ 约定，不安装外部翻译包。
 重启后日志应有 `Game language: 11`（或 10）及所选补丁中的 `Unlock Game Region`。
 这些日志能证明选项已传入；实际文字和字体显示仍取决于游戏资源与区域版本。
+
+### 社区汉化（GOTY 英文替换）
+
+1. 选择中文游戏语言，再将“**中文文本**”切为“**社区汉化**”。
+2. 点击“**从 Nexus Mods 下载**”，从 [Supuritto 的官方文件页](https://www.nexusmods.com/bloodborne/mods/146?tab=files)
+   获取 **Chinese Retranslation GOTY zh-cn（简体）**或 **GOTY zh-tw（繁体）**。
+   不要选用于原生中文／日配的通用包；欧美年度版不会因此增加日语配音。
+3. 点击“**导入 GOTY 汉化包…**”，选 ZIP 或解压目录，等待“**汉化包已校验**”。
+   简繁包独立保存，分别选中对应游戏语言后导入即可。
+4. 启动游戏。日志应出现 `Chinese source: community`、所选中文值，实际 `BB_LANGUAGE=1`。
+   此模式使用英语（美国）槽显示汉化，不使用区域解锁。
+
+只导入六个文件：`menu/{engus,enggb}/font.gfx`，以及
+`msg/{engus,enggb}/{item,menu}.msgbnd.dcx`。
+副本与 SHA-256 清单保存在 Application Support 的 `optimized-launcher/chinese-translations`，
+不进入应用或仓库，更新应用后仍保留。每次导入建立新副本，旧导入保留；清理时不要删除仍被设置引用的目录。
+导入器拒绝危险 ZIP 路径、链接、重复、缺失文件和可识别的简繁不匹配；每次启动前重新校验，
+游戏运行时没有逐帧校验开销。纯英文槽、没有中文目录标记的包需自行确认选的是作者对应的 GOTY 简繁版本。
+
+专用汉化层最后挂载，独立于总 Mod 开关，覆盖文本／字体冲突，其余 Mod 照常加载。
+已勾选的同名 **Unlock Game Region** 仅在该次启动跳过，不改已保存选择；
+其他名称的补丁若覆盖相同地址，会明确报冲突。切回官方或非中文语言后不挂载汉化层，恢复使用原始资源。
+原游戏文件从未被替换，因而不需要通过备份恢复；存档、画质设置和现有渲染补丁不受此流程修改。
+
+作者不允许转载其资源，因此启动器只集成导入和下载入口，不携带文本、字体或 Nexus 登录信息。
+社区重译与港版原生中文的文本风格、质量属于个人选择，本项目不将主观优劣作为兼容性保证。
 
 ## 后端、分辨率与特效
 
@@ -197,11 +226,11 @@ XML 保留作者信息，但“数据库中存在”不等于“本机已启用�
 | 开过性能分析后变慢 | 正常游玩关闭 GPU 计时和帧统计；详细诊断自身会影响帧率 |
 | 高内存、爆音或闪退 | 避免同时启动两份游戏；保留日志并反馈场景和运行时长。尚未宣称爆音／长时间运行问题已修复 |
 | 完整 App 提示选源码目录 | 启动器设置中选择内置引擎；若缺文件，重新解压完整 ZIP |
-| 帮助菜单打开了旧页面 | 更新至 0.2.29；帮助和关于入口已指向本分支，中文界面打开中文指南 |
+| 帮助菜单打开了旧页面 | 更新至 0.2.30；帮助和关于入口已指向本分支，中文界面打开中文指南 |
 
 请在[本分支 Issues](https://github.com/WiredThings/bbport-mac-optimized/issues)提供：
 App 版本、Mac／内存、macOS、后端、输出与场景渲染尺寸／预设、特效、位置和相关日志片段。
 可隐去私人路径，不要上传游戏文件或存档。公开包不包含本机 benchmark／分析脚本，运行时诊断按需开启。
 
 构建源码见 [SOURCE.md](release/SOURCE.md)、[构建指南](release/BUILD-OPTIMIZED.md)及[第三方来源](THIRD_PARTY_CHANGES.md)。
-0.2.29 标签和源码包保留为构建快照；当前分支文档可以包含后续勘误，不会因此改变已有安装包。
+0.2.30 标签和源码包保留为构建快照；当前分支文档可以包含后续勘误，不会因此改变已有安装包。

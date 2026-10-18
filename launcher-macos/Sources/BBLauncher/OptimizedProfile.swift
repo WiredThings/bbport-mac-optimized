@@ -52,7 +52,8 @@ struct OptimizedProfile {
 
     var environment: [String: String] {
         var env = [
-            "BB_LANGUAGE": prefs.language,
+            "BB_LANGUAGE": prefs.usesCommunityChinese ? "1" : prefs.language,
+            "BB_CHINESE_SOURCE": prefs.usesCommunityChinese ? "community" : "official",
             "BB_NATIVE_GPU": prefs.renderer == "metal" ? "0" : "1", "BB_PREBUILT": "1",
             "BB_RENDERER": prefs.renderer,
             "BB_METAL_OBJECT_MOTION": prefs.renderer == "metal" && prefs.metalObjectMotion && settings.upscaler == "metalfx" ? "1" : "0",
@@ -68,6 +69,10 @@ struct OptimizedProfile {
             "BB_LIVE_RES": "0", "BB_PATCHES": "",
         ]
         env.merge(MetalOptimizations.environment(prefs: prefs, metalFXActive: settings.upscaler == "metalfx")) { _, selected in selected }
+        if prefs.usesCommunityChinese {
+            env["BB_CHINESE_LANGUAGE"] = prefs.language
+            env["BB_CHINESE_TRANSLATION_DIR"] = prefs.chineseTranslationFolder
+        }
         if prefs.ultrawide {
             env["BB_PATCHES"] = "Resolution Patch \(resolution) (\(aspect))"
             env["BB_DMEM_MB"] = "9152"
@@ -85,6 +90,8 @@ struct OptimizedProfile {
         // Diagnostic controls must also override stale entries when switched OFF.
         env.removeValue(forKey: "BB_GPU_PROFILE")
         env.removeValue(forKey: "BB_MTL_GPU_TIMING")
+        env.removeValue(forKey: "BB_CHINESE_LANGUAGE")
+        env.removeValue(forKey: "BB_CHINESE_TRANSLATION_DIR")
         if prefs.gpuProfile { env[gpuProfileVariable] = "1" }
         if prefs.renderer == "metal" {
             env.removeValue(forKey: "BB_VK_VALIDATION")
