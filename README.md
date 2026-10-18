@@ -1,11 +1,11 @@
-# Bloodborne Optimized for macOS
+# Blood Echoes for macOS
 
-[简体中文](README.zh-CN.md) · [Download 0.2.33](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.33) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
+[简体中文](README.zh-CN.md) · [Download 0.2.34](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.34) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
 
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current public build is **0.2.33 (0233), a preview release**.
+The current public build is **0.2.34 (0234), a preview release**.
 
 The launcher is native Apple Silicon. On the Metal path, the game and renderer host code are
 x86-64 and run through **Rosetta 2**. The project builds on bbport/shadPS4 and community renderer
@@ -17,8 +17,8 @@ Requires **Apple Silicon, macOS 26+, Rosetta 2**, and your own decrypted Bloodbo
 with **update 1.09 merged into the base game**. Python and runtime libraries are bundled;
 Xcode, Homebrew and compilation are not required to play.
 
-1. Download **Bloodborne-Optimized-0.2.33-macOS.zip** from [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.33).
-2. Extract it and move **Bloodborne Optimized.app** into Applications. Quit the old app before replacing it.
+1. Download **Blood-Echoes-0.2.34-macOS.zip** from [Releases](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.34).
+2. Extract it and move **Blood Echoes.app** into Applications. Quit the old app before replacing it.
 3. Select the merged game folder containing `eboot.bin`, `sce_sys` and `dvdroot_ps4`.
    Select the full installation, rather than the separate `CUSA…-patch` update folder.
 4. Choose launcher/game language, output resolution and fullscreen mode, then press **Play** (⌘R).
@@ -175,10 +175,10 @@ repository; this is an online source build, not an offline or byte-identical bui
 xcode-select --install   # if Xcode / Command Line Tools are not already installed
 softwareupdate --install-rosetta --agree-to-license
 
-git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
-cd bbport-mac-optimized
+git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
+cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.33-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.34-source1
 ```
 
 The script initializes submodules, builds the x86-64 libraries and arm64 Vulkan driver,
@@ -192,18 +192,18 @@ space. It never installs into `/Applications`, launches the game or edits saves/
 
 Outputs:
 
-- `out/source-release-0.2.33-source1/Bloodborne Optimized.app`
-- `dist/Bloodborne-Optimized-0.2.33-source1.zip` (complete Metal + Vulkan app)
-- `dist/bbport-mac-optimized-0.2.33-source1-source.tar.gz` (corresponding source/dependencies)
+- `out/source-release-0.2.34-source1/Blood Echoes.app`
+- `dist/Blood-Echoes-0.2.34-source1.zip` (complete Metal + Vulkan app)
+- `dist/blood-echoes-0.2.34-source1-source.tar.gz` (corresponding source/dependencies)
 - `dist/source-build-verification.json` (final packaging/signature/link checks)
 - `dist/source-build-SHA256SUMS.txt` (final app ZIP and source archive hashes)
 
 Build from a clean clone: the packager refuses uncommitted project files. Use a new version
 suffix for another final staging directory. With dependencies already prepared by this
-workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.33-source2`.
+workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.34-source2`.
 Keep the `.git` directories: GitHub's automatic source ZIP omits submodules, and the Release
 inspection source archive has no Git metadata required by the revision/patch guards.
-`v0.2.33` includes this build entry point; `optimized` also carries subsequent fixes.
+`v0.2.34` includes this build entry point; `optimized` also carries subsequent fixes.
 
 For an SDK/linker mismatch, set `SDKROOT` to an installed SDK supported by your active compiler;
 do not mix an old linker with a newer SDK. See [the detailed build guide](docs/release/BUILD-OPTIMIZED.md)
@@ -213,7 +213,7 @@ for individual commands, verification limits and troubleshooting.
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
 - [Full branch changes and third-party attribution](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.33 release notes](docs/release/0.2.33.md) · [Report a problem](https://github.com/WiredThings/bbport-mac-optimized/issues)
+- [0.2.34 release notes](docs/release/0.2.34.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
 
 Built on **DiAvisoo's optimized launcher, bmy/bbport-mac, deadinside28's bbport, shadPS4,
 Huax-1839, IFreemz, Awakenchan, Wooloomooloo2/Mark Hall**, and the component contributors.
@@ -225,3 +225,7 @@ QA apps, private route recordings or local sampling artifacts**. The credited Hu
 assets. The game uses the same cover before window initialization and during restart, and still
 reads the player's game-folder cover for its runtime icon. See the [game-icon attribution](tools/macos/resources/ATTRIBUTION.txt).
 Historical upstream notes are preserved in [UPSTREAM-README](docs/UPSTREAM-README.md) and Git history.
+
+Blood Echoes was previously named Bloodborne Optimized. The app and repository names
+changed; bundle identifiers, preferences and existing save/data paths are retained.
+No migration is required.

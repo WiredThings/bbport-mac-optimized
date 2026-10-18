@@ -2,13 +2,13 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings 0.2.33 (0233)** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.34 (0234)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.33 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.34 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
 0.2.30 added Chinese-only text-source selection and a private local importer for the community
@@ -101,7 +101,7 @@ patch database. **Its inclusion is not evidence that every entry is enabled or v
 The language feature's branch implementation is visible in
 [`scripts/patches.py`](../scripts/patches.py),
 [`Checks.swift`](../launcher-macos/Sources/BBLauncher/Checks.swift) and the
-[region-integration commit](https://github.com/WiredThings/bbport-mac-optimized/commit/5ddd80a).
+[region-integration commit](https://github.com/WiredThings/blood-echoes/commit/5ddd80a).
 It is targeted at the 01.09 patch format; CUSA03173 was the investigated region.
 
 ## Measurements and limits
@@ -133,3 +133,12 @@ Published app assets exclude game executables/data, saves, shader caches, downlo
 packs, World Warper, QA apps, recorded routes, private automation controllers and local sampling
 outputs. Reusable regression source remains in Git; private test assets and tooling are not
 part of the public package. The retired offline-library experiment is not included.
+
+## Project name (0.2.34)
+
+The maintained fork is named **Blood Echoes** and lives at
+`WiredThings/blood-echoes`. The launcher app is `Blood Echoes.app`. Upstream repository
+names and historical release filenames remain as originally published.
+Launcher bundle ID `io.github.bbport.optimized`, game bundle ID
+`io.github.bbport.optimized.game`, preference keys and Application Support/bbport paths
+are deliberately retained, so this branding update requires no save/settings migration.

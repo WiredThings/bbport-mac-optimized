@@ -140,7 +140,7 @@
 "Mods folder" = "Mods folder";
 "Motion blur" = "Motion blur";
 "Move backward" = "Move backward";
-"Move bbport into the Applications folder (drag it there in Finder), then open it again" = "Move bbport into the Applications folder (drag it there in Finder), then open it again";
+"Move Blood Echoes into the Applications folder (drag it there in Finder), then open it again" = "Move Blood Echoes into the Applications folder (drag it there in Finder), then open it again";
 "Move forward" = "Move forward";
 "Move left" = "Move left";
 "Move right" = "Move right";
@@ -270,7 +270,7 @@
 "Which frame rate patch to apply to the game (BB_FPS)" = "Which frame rate patch to apply to the game (BB_FPS)";
 "Yes" = "Yes";
 "a black window for a few minutes is expected." = "a black window for a few minutes is expected.";
-"bbport User Guide" = "bbport User Guide";
+"Blood Echoes User Guide" = "Blood Echoes User Guide";
 "bbport repository" = "bbport repository";
 "bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings" = "bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings";
 "bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead." = "bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead.";

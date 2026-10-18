@@ -111,7 +111,7 @@ def main():
                            env=dict(os.environ, DYLD_BIND_AT_LAUNCH='1'))
     assert probe.returncode == 2 and 'the game process starts this' in probe.stderr, probe.stderr
     manifest['packaged_dyld_smoke_test'] = 'passed; usage exit before GPU/guest initialization'
-    archive = args.output / f'Bloodborne-Optimized-{version}.zip'
+    archive = args.output / f'Blood-Echoes-{version}.zip'
     subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(app), str(archive)], check=True)
     manifest['archive_sha256'] = sha(archive)
     (args.output / f'{verification_name}-verification.json').write_text(json.dumps(manifest, indent=2) + '\n')

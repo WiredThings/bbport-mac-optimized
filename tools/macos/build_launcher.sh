@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tools/macos/build_launcher.sh: builds the native launcher (launcher-macos/, SwiftUI) into
-# out/Bloodborne Optimized.app. The app is native arm64; it starts run_optimized.sh with the
+# out/Blood Echoes.app. The app is native arm64; it starts run_optimized.sh with the
 # tested native renderer and x86-64 game under Rosetta 2. Needs Xcode or Command Line Tools.
 #   bash tools/macos/build_launcher.sh
-#   open "out/Bloodborne Optimized.app"
+#   open "out/Blood Echoes.app"
 # The repository path is embedded in the app (Info.plist BBRepoPath; Settings can override it).
 # The Hunter's Mark AppIcon.icns is bundled for Finder, Dock and running instances.
 # Release builds (tools/macos/package.sh): BB_RELEASE=<version> embeds no repository path and no
@@ -12,7 +12,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
 pkg=launcher-macos
-app=${BB_APP:-out/Bloodborne Optimized.app}
+app=${BB_APP:-out/Blood Echoes.app}
 work=out/launcher-build
 release=${BB_RELEASE:-}
 
@@ -59,7 +59,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleLocalizations</key>
     <array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
     <key>CFBundleDisplayName</key>
-    <string>Bloodborne Optimized</string>
+    <string>Blood Echoes</string>
     <key>CFBundleExecutable</key>
     <string>bbport</string>
     <key>CFBundleIdentifier</key>
@@ -67,7 +67,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Bloodborne Optimized</string>
+    <string>Blood Echoes</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

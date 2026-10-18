@@ -4,31 +4,23 @@
 
 ## Current M4 Metal work
 
-The launcher, runtime integration, ordered Metal adapter patches and validation notes through
-0.2.29 are on the fork's `optimized` branch:
+Blood Echoes is the maintained WiredThings fork, formerly named Bloodborne Optimized.
+Current launcher, runtime integration and ordered Metal adapter patches are published on
+the `optimized` branch of `WiredThings/blood-echoes`:
 
 ```sh
-git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
+git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
+cd blood-echoes
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.34-source1
 ```
 
-For a complete source-to-App build, use [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md) or the
-[README commands](../../README.md#build-from-source). `build_from_source.sh` builds its own
-base package and needs no old App. [METAL-BACKEND.md](METAL-BACKEND.md) is a historical
-integration note; its original baseline-overlay example is not the complete bootstrap.
-The applied submodule worktrees are represented by the versioned ordered patch series;
-`gpu/patches/metal` is part of this repository. The v0.2.29 tag and Release correspond to the current production launcher. See
-[0.2.29.md](0.2.29.md) for the current changes and validation boundaries. The downloadable
-source archive includes pinned submodule source with the adapter patches applied; private World Warper tooling,
-recorded routes, local game data and saves are excluded. Use the recursive Git clone above
-for building: unlike the inspection archive, it retains the Git metadata required by the
-revision guards in the build scripts.
+See [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md) and the [README](../../README.md#build-from-source).
+The build creates its own base app and needs no installed app or game files. The complete
+Release source archive contains pinned submodule sources with all adapter patches applied.
+Use the recursive clone to retain the Git metadata required by revision guards.
 
-The v0.2.29 tag includes the Help-link update; its source archive matches that tag.
-The earlier published v0.2.28 build is pinned to commit
-[`1186e6c955517fb1b82cee0fcde3b5c818102e69`](https://github.com/WiredThings/bbport-mac-optimized/commit/1186e6c955517fb1b82cee0fcde3b5c818102e69).
-Subsequent documentation-only changes on `optimized` do not retag or change its App/source
-assets or checksums. For the exact build snapshot, clone with `--branch v0.2.28`; for current
-documentation, use `optimized`.
+The `v0.2.34` tag is the renamed app's build snapshot; older tags and their asset filenames
+remain historical releases. Private World Warper tools, routes, game data and saves are excluded.
 
 ## Original standalone release (historical)
 

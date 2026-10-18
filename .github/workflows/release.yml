@@ -1,5 +1,5 @@
 # Deliberately manual and artifact-only. Publishing is a separate reviewed step.
-name: Optimized Mac preview
+name: Blood Echoes Mac preview
 on:
   workflow_dispatch:
     inputs:
@@ -36,6 +36,6 @@ jobs:
         run: bash tools/macos/package.sh "$PREVIEW_VERSION"
       - uses: actions/upload-artifact@v4
         with:
-          name: optimized-mac-preview
+          name: blood-echoes-mac-preview
           path: dist/*
           if-no-files-found: error

@@ -778,7 +778,7 @@ final class LauncherModel: ObservableObject {
 
 /// Web pages the app links to (Help menu, Updates).
 enum Links {
-    static let home = "https://github.com/WiredThings/bbport-mac-optimized"
+    static let home = "https://github.com/WiredThings/blood-echoes"
     static var userGuide: String {
         let filename = L10n.language.hasPrefix("zh") ? "USER_GUIDE.zh-CN.md" : "USER_GUIDE.md"
         return "\(home)/blob/optimized/docs/\(filename)"

@@ -140,7 +140,7 @@
 "Mods folder" = "模组文件夹";
 "Motion blur" = "动态模糊";
 "Move backward" = "后退";
-"Move bbport into the Applications folder (drag it there in Finder), then open it again" = "请将 bbport 移至“应用程序”文件夹，然后重新打开。";
+"Move Blood Echoes into the Applications folder (drag it there in Finder), then open it again" = "请将 Blood Echoes 移至“应用程序”文件夹，然后重新打开。";
 "Move forward" = "前进";
 "Move left" = "向左移动";
 "Move right" = "向右移动";
@@ -270,7 +270,7 @@
 "Which frame rate patch to apply to the game (BB_FPS)" = "游戏使用的帧率补丁（BB_FPS）";
 "Yes" = "是";
 "a black window for a few minutes is expected." = "可能出现持续数分钟的黑色窗口。";
-"bbport User Guide" = "bbport 使用指南";
+"Blood Echoes User Guide" = "Blood Echoes 使用指南";
 "bbport repository" = "bbport 源码目录";
 "bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings" = "未找到 bbport 源码目录，请使用 tools/macos/build_launcher.sh 重新构建，或在设置中指定。";
 "bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead." = "bbport.ini 指定的 %@ 无法在 macOS 上运行，已改用 FSR 3.1。";

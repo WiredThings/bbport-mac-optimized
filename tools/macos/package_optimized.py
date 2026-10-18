@@ -144,10 +144,10 @@ def main():
         assert sha(native / name) == sha(ROOT / name), f'Runtime source mismatch: {name}'
     dirty = run('git', '-C', ROOT, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=dirty')
     assert not dirty, 'Commit release source before packaging:\n' + dirty
-    name = 'bbport-mac-optimized-' + args.version
+    name = 'blood-echoes-' + args.version
     stage = ROOT / 'out' / 'package-optimized'
     top = stage / name
-    app = top / 'Bloodborne Optimized.app'
+    app = top / 'Blood Echoes.app'
     if not args.skip_launcher_build:
         if top.exists(): shutil.rmtree(top)
         top.mkdir(parents=True)
@@ -228,10 +228,10 @@ def main():
     copy(pyformula / 'LICENSE', pyout / 'LICENSE')
 
     print('Exporting corresponding source and license notices', flush=True)
-    source_top = stage / ('bbport-mac-optimized-' + args.version + '-source')
+    source_top = stage / ('blood-echoes-' + args.version + '-source')
     if source_top.exists(): shutil.rmtree(source_top)
     records = []
-    export_git(ROOT, source_top / 'project', records, 'bbport-mac-optimized')
+    export_git(ROOT, source_top / 'project', records, 'blood-echoes')
     seen = set()
     for arch in ('arm64', 'x86_64'):
         for dep in sorted((native / ('deps-' + arch) / 'src').iterdir()):
@@ -259,11 +259,11 @@ def main():
     if (pyformula / '.brew/python@3.11.rb').exists(): copy(pyformula / '.brew/python@3.11.rb', source_top / 'dependencies/Python-homebrew-formula.rb')
     python_version = run(py / 'bin/python3.11', '--version')
     source_revision = run('git', '-C', ROOT, 'rev-parse', 'HEAD')
-    notices = f'''Open-source components for Bloodborne Optimized {args.version}\n\nThe port is GPL-2.0-or-later; see LICENSE. Application source, build scripts,
+    notices = f'''Open-source components for Blood Echoes {args.version}\n\nThe port is GPL-2.0-or-later; see LICENSE. Application source, build scripts,
 pinned dependency sources and local patches are available at:
-https://github.com/WiredThings/bbport-mac-optimized/tree/{source_revision}
+https://github.com/WiredThings/blood-echoes/tree/{source_revision}
 Source retrieval and rebuild instructions:
-https://github.com/WiredThings/bbport-mac-optimized/blob/{source_revision}/docs/release/SOURCE.md
+https://github.com/WiredThings/blood-echoes/blob/{source_revision}/docs/release/SOURCE.md
 Component license texts are in licenses/.\n\nComponents: bbport, shadPS4, KosmicKrisp/Mesa, Vulkan Loader/Headers, SDL3, FFmpeg\n(LGPL build, no GPL/nonfree codecs), fmt, xxHash, miniz, Zydis/Zycore, LibAtrac9,\nImGui, FSR-Vulkan/FidelityFX, sirit/SPIRV-Headers, VMA, xbyak, Boost, magic_enum,\nrobin-map and DejaVu fonts. See SOURCE-MANIFEST.json for revisions.\n\nPrivate preparation runtime: {python_version}, PSF license, built by Homebrew.\nIts standard library is included; optional extensions using external libraries\nare omitted. CPython source: https://www.python.org/downloads/source/\nNo Python third-party packages are included.\n\nNo game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.\n'''
     (engine / 'THIRD-PARTY-NOTICES.txt').write_text(notices)
     (source_top / 'THIRD-PARTY-NOTICES.txt').write_text(notices)

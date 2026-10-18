@@ -1,9 +1,9 @@
-# Bloodborne Optimized 0.2.33: user guide
+# Blood Echoes 0.2.34: user guide
 
 [简体中文](USER_GUIDE.zh-CN.md) · [Project overview](../README.md) · [Changes and credits](THIRD_PARTY_CHANGES.md)
 
-This guide covers the WiredThings **0.2.33 (0233) preview**. Older upstream guides describe
-different backends and defaults. Download the [complete public app](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.33).
+This guide covers the WiredThings **0.2.34 (0234) preview**. Older upstream guides describe
+different backends and defaults. Download the [complete public app](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.34).
 
 ## Requirements and installation
 
@@ -13,7 +13,7 @@ different backends and defaults. Download the [complete public app](https://gith
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
 
-Extract `Bloodborne-Optimized-0.2.33-macOS.zip`, move **Bloodborne Optimized.app** to Applications,
+Extract `Blood-Echoes-0.2.34-macOS.zip`, move **Blood Echoes.app** to Applications,
 and open it. The app is ad-hoc signed, not notarized; if macOS blocks it, use **System Settings →
 Privacy & Security → Open Anyway** for this app. Rosetta can be installed through macOS or with:
 
@@ -242,13 +242,17 @@ save folder and select the copy. Do not use app deletion or shader-cache deletio
 | Slowdown after GPU profiling | Turn GPU timing/frame statistics off for normal play; detailed timing can lower FPS |
 | High memory / crackling / crash | Exit before launching a second copy; retain the log and report scene/session details. Crackling and long-session behavior are not claimed fixed |
 | Source-folder warning in a complete app | In launcher Settings choose the built-in engine; if files are missing, re-extract the complete public ZIP |
-| Help opens an older upstream page | Update to 0.2.33; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
+| Help opens an older upstream page | Update to 0.2.34; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
 
-Report to [this fork's Issues](https://github.com/WiredThings/bbport-mac-optimized/issues), including
+Report to [this fork's Issues](https://github.com/WiredThings/blood-echoes/issues), including
 app version, Mac/RAM, macOS, backend, output and scene resolution/preset, effects, scene/location,
 and a short relevant log excerpt. Remove private paths where appropriate. Do not upload game
 files or saves. Public packages omit local benchmark/analyzer tools; runtime diagnostics are optional.
 
 For source work, use [SOURCE.md](release/SOURCE.md), [build instructions](release/BUILD-OPTIMIZED.md)
-and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.33 release tag/source archive is an
+and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.34 release tag/source archive is an
 immutable build snapshot; current branch documentation can include later corrections.
+
+Blood Echoes was previously named Bloodborne Optimized. The app and repository names
+changed; bundle identifiers, preferences and existing save/data paths are retained.
+No migration is required.

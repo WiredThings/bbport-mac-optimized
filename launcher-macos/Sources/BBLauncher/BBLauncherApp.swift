@@ -10,7 +10,7 @@ struct BBLauncherApp: App {
     @StateObject private var model = LauncherModel.shared
 
     var body: some Scene {
-        Window("Bloodborne", id: "main") {
+        Window("Blood Echoes", id: "main") {
             ContentView()
                 .id(model.prefs.uiLanguage)
                 .environment(\.locale, L10n.locale)
@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct HelpCommands: View {
     @EnvironmentObject var model: LauncherModel
     var body: some View {
-        Button(L10n.key("bbport User Guide")) { Links.open(Links.userGuide) }
+        Button(L10n.key("Blood Echoes User Guide")) { Links.open(Links.userGuide) }
         Button(L10n.key("Downloads and Release Notes")) { Links.open(Links.releases) }
         Button(L10n.key("Report a Problem…")) { Links.open(Links.issues) }
         Divider()

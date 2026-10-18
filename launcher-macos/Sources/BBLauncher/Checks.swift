@@ -189,7 +189,7 @@ func checkEngine(_ url: URL?, version: String) -> Check {
     // Opened straight from Downloads, macOS runs a read-only copy of the app from a random place.
     if Bundle.main.bundlePath.contains("/AppTranslocation/") {
         return Check(level: .error,
-                     message: L10n.key("Move bbport into the Applications folder (drag it there in Finder), then open it again"))
+                     message: L10n.key("Move Blood Echoes into the Applications folder (drag it there in Finder), then open it again"))
     }
     if !FileManager.default.fileExists(atPath: rosettaPath) {
         return Check(level: .warning,

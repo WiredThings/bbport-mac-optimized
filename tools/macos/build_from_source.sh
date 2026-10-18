@@ -3,7 +3,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
-version=${1:-0.2.29-source1}
+version=${1:-0.2.34-source1}
 jobs=${BB_BUILD_JOBS:-2}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { echo 'Use a semantic version without v.' >&2; exit 1; }
 [[ ! -e out/source-release-$version ]] || { echo 'Output already exists; choose a new version suffix.' >&2; exit 1; }
@@ -38,19 +38,19 @@ swift test --package-path launcher-macos --jobs "$BB_SWIFT_JOBS"
 # First assemble a fresh Vulkan base FROM SOURCE, then add the rebuilt Metal runtime.
 # This base is a disposable build artifact, never /Applications or a downloaded app.
 python3 tools/macos/package_optimized.py "$version"
-baseline="$repo/out/package-optimized/bbport-mac-optimized-$version/Bloodborne Optimized.app"
+baseline="$repo/out/package-optimized/blood-echoes-$version/Blood Echoes.app"
 python3 tools/macos/package_metal.py --baseline "$baseline" --launcher "$baseline" \
     --gpu-build "$repo/out/gpu-metal" --metal-probe "$repo/out/probe-metal/bb-probe-metal" \
     --spirv-cross-source "$repo/deps-x86_64/src/SPIRV-Cross" \
-    --app "$repo/out/source-release-$version/Bloodborne Optimized.app" \
+    --app "$repo/out/source-release-$version/Blood Echoes.app" \
     --output "$repo/dist" --version "$version" --verification-name source-build
 python3 - "$version" <<'PY_CHECKSUM'
 import hashlib
 from pathlib import Path
 import sys
 version = sys.argv[1]
-files = [Path('dist') / f'Bloodborne-Optimized-{version}.zip',
-         Path('dist') / f'bbport-mac-optimized-{version}-source.tar.gz']
+files = [Path('dist') / f'Blood-Echoes-{version}.zip',
+         Path('dist') / f'blood-echoes-{version}-source.tar.gz']
 lines = []
 for path in files:
     digest = hashlib.sha256()
@@ -60,5 +60,5 @@ for path in files:
     lines.append(f'{digest.hexdigest()}  {path.name}\n')
 (Path('dist') / 'source-build-SHA256SUMS.txt').write_text(''.join(lines))
 PY_CHECKSUM
-printf '\nComplete app: %s/out/source-release-%s/Bloodborne Optimized.app\n' "$repo" "$version"
-printf 'ZIP: %s/dist/Bloodborne-Optimized-%s.zip\n' "$repo" "$version"
+printf '\nComplete app: %s/out/source-release-%s/Blood Echoes.app\n' "$repo" "$version"
+printf 'ZIP: %s/dist/Blood-Echoes-%s.zip\n' "$repo" "$version"

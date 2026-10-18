@@ -114,7 +114,7 @@ export BB_FRAME_LOG=$BB_DATA_DIR/out/frames.csv
 log=$BB_DATA_DIR/out/last-run.log
 [[ ! -f $log ]] || cp "$log" "$BB_DATA_DIR/out/previous-run.log"
 exec > >(tee "$log") 2>&1
-echo "Bloodborne Optimized: renderer=$renderer; quicksave=$BB_QUICKSAVE"
+echo "Blood Echoes: renderer=$renderer; quicksave=$BB_QUICKSAVE"
 echo "Runtime: $BB_PROBE"
 echo "Renderer: ${metal_lib:-$BB_GPU_PROCESS}"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"

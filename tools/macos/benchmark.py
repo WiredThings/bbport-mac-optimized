@@ -34,7 +34,7 @@ def validate_native_capture(text):
         raise ValueError('Native capture has no attachment metadata')
     return summary
 
-DEFAULT_APP = Path('/Applications/Bloodborne Optimized.app')
+DEFAULT_APP = Path('/Applications/Blood Echoes.app')
 DEFAULT_DATA = Path.home() / 'Library/Application Support/bbport/optimized-launcher'
 DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
 DIAGNOSTIC_OVERRIDES = {'BB_MTL_COMPILE_AUDIT', 'BB_AUDIO_STATS', 'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_COPY_AUDIT', 'BB_MTL_STAGING_AUDIT'}

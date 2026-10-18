@@ -57,7 +57,7 @@ struct ContentView: View {
             PlayBar(showLog: { openWindow(id: "log") })
         }
         .frame(minWidth: 640, minHeight: 840)
-        .navigationTitle("Bloodborne")
+        .navigationTitle("Blood Echoes")
         .navigationSubtitle(model.statusText)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshChecks()

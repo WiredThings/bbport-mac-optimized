@@ -139,7 +139,7 @@ branch, only builds the zip (as a workflow artifact) to try a build.
 ## Optimized visual launcher (local build)
 
 Build with `bash tools/macos/build_launcher.sh`, then open
-`out/Bloodborne Optimized.app`. You can copy this app into Applications; it remembers the
+`out/Blood Echoes.app`. You can copy this app into Applications; it remembers the
 frontend checkout. The working native checkout must be linked at `out/native-05-checkout`
 and contain `out/bb-probe`, `out/gpu/libbbgpu.dylib`, `out/gpu-arm64/bb-gpu`,
 `out/gpu-arm64/libbbgpu.dylib`, and the `deps-arm64` driver. Play never recompiles the engine.

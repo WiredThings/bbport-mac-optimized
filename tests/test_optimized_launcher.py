@@ -18,6 +18,7 @@ class OptimizedLauncherTests(unittest.TestCase):
         self.repo = Path(self.temp.name).resolve() / 'frontend'
         (self.repo / 'tools/macos').mkdir(parents=True)
         shutil.copy2(ROOT / 'tools/macos/run_optimized.sh', self.repo / 'tools/macos/run_optimized.sh')
+        shutil.copy2(ROOT / 'tools/macos/supervise_restart.sh', self.repo / 'tools/macos/supervise_restart.sh')
         self.native = self.repo / 'out/native-05-checkout'
         for name in ['out/bb-probe', 'out/gpu/libbbgpu.dylib', 'out/gpu-arm64/bb-gpu',
                      'out/gpu-arm64/libbbgpu.dylib', 'deps-arm64/lib/libvulkan.1.dylib',
