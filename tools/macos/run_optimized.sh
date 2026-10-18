@@ -36,6 +36,8 @@ if [[ $renderer == metal ]]; then
     export BB_MTL_QUERY_COMPUTE_CHAIN=${BB_MTL_QUERY_COMPUTE_CHAIN:-1}
     export BB_MTL_PRECISE_COMPUTE=${BB_MTL_PRECISE_COMPUTE:-1}
     export BB_MTL_TEXTURE_TILING_HALF=${BB_MTL_TEXTURE_TILING_HALF:-1}
+    # Owner accepts neutral/noisy isolated FPS; retain full-surface/hoist-safe fallback.
+    export BB_MTL_FOLD_CLEARS=${BB_MTL_FOLD_CLEARS:-1}
     unset BB_GPU_PROCESS BB_GPU_DEPS VK_DRIVER_FILES VK_ICD_FILENAMES
     unset BB_VULKAN_LIBRARY SDL_VULKAN_LIBRARY DYLD_LIBRARY_PATH BB_MAC_UNIFIED_MEMORY
 else
@@ -113,7 +115,7 @@ echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
 echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
 if [[ $renderer == metal ]]; then
     echo "Metal: direct Metal API, Rosetta host, no-copy guest buffers; cache=metal1"
-    echo "Metal combined profile: clear=$BB_MTL_BATCH_CLEARS direct-copy=$BB_MTL_DIRECT_COPY staging=$BB_MTL_ADAPTIVE_STAGING tiling=$BB_MTL_TEXTURE_TILING residency=$BB_MTL_PRECISE_RESIDENCY barriers=$BB_MTL_COALESCE_BARRIERS query=$BB_MTL_QUERY_COMPUTE_CHAIN compute=$BB_MTL_PRECISE_COMPUTE half=$BB_MTL_TEXTURE_TILING_HALF"
+    echo "Metal combined profile: clear=$BB_MTL_BATCH_CLEARS direct-copy=$BB_MTL_DIRECT_COPY staging=$BB_MTL_ADAPTIVE_STAGING tiling=$BB_MTL_TEXTURE_TILING residency=$BB_MTL_PRECISE_RESIDENCY barriers=$BB_MTL_COALESCE_BARRIERS query=$BB_MTL_QUERY_COMPUTE_CHAIN compute=$BB_MTL_PRECISE_COMPUTE half=$BB_MTL_TEXTURE_TILING_HALF fold-clears=$BB_MTL_FOLD_CLEARS"
 else
     echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"
     echo "Renderer memory fixes: command-trim=$BB_CMDBUF_TRIM, driver-pool-fix=$BB_KK_POOL_FIX"

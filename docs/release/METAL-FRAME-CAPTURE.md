@@ -1,5 +1,11 @@
 # Single-frame attachment audit and color-clear batching (0.2.18)
 
+Current profile note: the owner later enabled the nine-flag combined profile, including
+clear batching, after the [0.2.19 combined comparison](METAL-BENCHMARK-GUARD-V3.md).
+The standalone 0.2.18 results below remain historical. The subsequent
+[attachment lifetime audit](METAL-ATTACHMENT-LIFETIME.md) evaluates folding queued clears
+into later render load actions; it does not authorize discarding arbitrary guest stores.
+
 ## Capture scope and the 16 GB host
 
 The new owner save loads directly into Central Yharnam. It was frozen as a new cohort;

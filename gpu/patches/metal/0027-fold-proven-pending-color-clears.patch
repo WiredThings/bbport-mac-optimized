@@ -1,0 +1,347 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -262,6 +262,11 @@
+     /// ClosePhysical without the rasterizer's RenderList (the replay thread's part).
+     void CloseNative(EncoderKind kind);
+     void FlushColorClears();
++    /// Consume only an exact, full-surface pending clear batch. No unknown lifetime inference.
++    const void* FoldColorClears(const void* descriptor);
++    /// Hoisted work may read the clear values before the held pass: restore and flush first.
++    void RestoreFoldedClears();
++    void CommitFoldedClears();
+     /// Gives the held pass to the replay thread (waits for a free slot).
+     void PostReplay();
+     /// Waits until the replay thread's jobs are done (never called on that thread).
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler_impl.h
+@@ -34,6 +34,13 @@
+     MTLRenderPassDescriptor* held_pass;
+     MTLRenderPassDescriptor* pending_clears = nil;
+     unsigned pending_clear_count=0;
++    // A pending clear batch can become the next pass's load actions. Retain its existing
++    // descriptor only until the pass is released; a hoisted dispatch restores the old order.
++    MTLRenderPassDescriptor* folded_clears = nil;
++    MTLRenderPassDescriptor* folded_pass = nil; ///< owns the copied descriptor across bridged return
++    std::array<MTLLoadAction,8> folded_original_loads{};
++    std::array<MTLClearColor,8> folded_original_colors{};
++    u64 clear_folded=0, clear_folded_targets=0, clear_fold_fallbacks=0;
+     bool pending_clear_barrier=false;
+     u64 clear_queued=0,clear_passes=0;
+     std::chrono::steady_clock::time_point clear_reported{};
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -73,6 +73,34 @@
+             WaitFence(impl, kind, slot);
+         }
+     }
++}
++
++// Full clears have no resource payload, and the queue is drained before every other GPU
++// encoder. Only this local boundary proves a dead clear-store / next-load pair. Attachment
++// adjacency in a diagnostic trace alone is insufficient (guest pointers/aliases may read).
++bool FoldClearsEnabled() {
++    static const bool enabled=[] {const char* v=std::getenv("BB_MTL_FOLD_CLEARS");return v&&v[0]=='1';}();
++    return enabled;
++}
++void CaptureClearLifetime(const char* action, uintptr_t queue, unsigned count) {
++    if(VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format(
++            "{{\"op\":\"clear_lifetime\",\"queue\":{},\"action\":\"{}\",\"targets\":{}}}",queue,action,count));
++}
++// Render-pass clears cover the pass's effective size, which may be clipped by a smaller MRT.
++// All queued targets are standalone 2D, single-mip/slice images (QueueColorClear's contract).
++bool FullClearExtent(MTLRenderPassDescriptor* pass, id<MTLTexture> target) {
++    if(pass.renderTargetArrayLength>1 ||
++       (pass.renderTargetWidth && pass.renderTargetWidth<target.width) ||
++       (pass.renderTargetHeight && pass.renderTargetHeight<target.height))return false;
++    auto large_enough=[&](MTLRenderPassAttachmentDescriptor* a) {
++        if(!a.texture)return true;
++        return a.level<a.texture.mipmapLevelCount &&
++            std::max<NSUInteger>(1,a.texture.width>>a.level)>=target.width &&
++            std::max<NSUInteger>(1,a.texture.height>>a.level)>=target.height;
++    };
++    for(unsigned i=0;i<8;++i)if(!large_enough(pass.colorAttachments[i]))return false;
++    return large_enough(pass.depthAttachment) && large_enough(pass.stencilAttachment);
+ }
+ 
+ bool PreciseHostResidency() {
+@@ -263,11 +291,14 @@
+ }
+ 
+ void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest, bool bound_only) {
++    // Host/direct encoders execute immediately; folding cannot cross hoisted work here.
++    if(kind==EncoderKind::Render) pass_descriptor=FoldColorClears(pass_descriptor);
+     EndEncoder();
+     if (kind == EncoderKind::None) {
+         return;
+     }
+     OpenPhysical(kind, pass_descriptor, std::exchange(need_fence_wait, false), guest, bound_only);
++    if(kind==EncoderKind::Render) CommitFoldedClears();
+     open_encoder = kind;
+ }
+ 
+@@ -383,6 +414,7 @@
+         commands_active = true;
+         return;
+     }
++    pass_descriptor=FoldColorClears(pass_descriptor);
+     if (holding && !render_tail_pending && replay_enabled && open_encoder == EncoderKind::Render &&
+         !BbToggle::Experiment(BbToggle::MtlNoReplayThread)) {
+         PostReplay(); // the held pass is encoded on the replay thread while this one is recorded
+@@ -419,6 +451,7 @@
+     if (!holding) {
+         return;
+     }
++    CommitFoldedClears();
+     holding = false;
+     hoisting = false;
+     // What goes before the pass first: the hoisted compute encoder, whose writes the pass waits
+@@ -444,6 +477,7 @@
+ }
+ 
+ void Scheduler::PostReplay() {
++    CommitFoldedClears(); // recording thread, before the immutable descriptor goes to replay
+     const u32 posted = replay_posted.load(std::memory_order_relaxed); // (only this thread posts)
+     WaitReplay(posted + 1 - ReplayDepth); // a free slot
+     const u32 slot = posted % ReplayDepth;
+@@ -559,6 +593,7 @@
+ void Scheduler::ComputeEncoder(const char* label, bool bound_only) {
+     JoinReplay();
+     if (holding && hoisting) {
++        RestoreFoldedClears(); // a dispatch may read ANY queued color, including indirect aliases
+         // Before the held pass: one compute encoder for everything hoisted into this pass, after
+         // every encoder before it (the barrier Vulkan records before a hoisted dispatch).
+         if (!impl->compute) {
+@@ -628,11 +663,83 @@
+     if(std::getenv("BB_FRAME_STATS")) {
+         const auto now=std::chrono::steady_clock::now();
+         if(now-impl->clear_reported>std::chrono::seconds(5)) {
+-            std::printf("Metal color clear batching: clears=%llu, batches=%llu; standalone existing proxies, no new textures\n",(unsigned long long)impl->clear_queued,(unsigned long long)impl->clear_passes);
++            std::printf("Metal color clear batching: clears=%llu, batches=%llu; standalone existing proxies, no new textures; folded=%llu targets=%llu hoist-fallbacks=%llu\n",(unsigned long long)impl->clear_queued,(unsigned long long)impl->clear_passes,(unsigned long long)impl->clear_folded,(unsigned long long)impl->clear_folded_targets,(unsigned long long)impl->clear_fold_fallbacks);
+             impl->clear_reported=now;
+         }
+     }
+     return true;
++}
++
++const void* Scheduler::FoldColorClears(const void* raw) {
++    if(!FoldClearsEnabled() || !impl->pending_clears || impl->folded_clears ||
++       open_encoder!=EncoderKind::None || holding || render_tail_pending || running_render_tail)
++        return raw;
++    auto* pass=(__bridge MTLRenderPassDescriptor*)raw;
++    if(!pass)return raw;
++    auto* clears=impl->pending_clears;
++    // All-or-nothing: an unmatched target's clear may have a shader/CPU/alias reader later.
++    for(unsigned i=0;i<impl->pending_clear_count;++i) {
++        auto target=clears.colorAttachments[i].texture;
++        bool match=false;
++        for(unsigned slot=0;slot<8;++slot) {
++            auto a=pass.colorAttachments[slot];
++            if(a.texture!=target)continue;
++            if(a.level || a.slice || a.depthPlane || a.resolveTexture ||
++               (a.loadAction!=MTLLoadActionLoad && a.loadAction!=MTLLoadActionClear) ||
++               !FullClearExtent(pass,target))return raw;
++            if(match)return raw; // reject duplicate binding of one target
++            match=true;
++        }
++        if(!match)return raw;
++    }
++    // The descriptor is already retained by the existing clear queue; no texture/buffer/cache
++    // allocation. Copy only the incoming CPU descriptor so the caller's load state is unchanged.
++    pass=[pass copy];
++    for(unsigned slot=0;slot<8;++slot) {
++        auto a=pass.colorAttachments[slot];
++        impl->folded_original_loads[slot]=a.loadAction;
++        impl->folded_original_colors[slot]=a.clearColor;
++        for(unsigned i=0;i<impl->pending_clear_count;++i) {
++            if(a.texture==clears.colorAttachments[i].texture && a.loadAction==MTLLoadActionLoad) {
++                a.loadAction=MTLLoadActionClear;
++                a.clearColor=clears.colorAttachments[i].clearColor;
++            }
++        }
++    }
++    impl->folded_clears=clears;
++    impl->folded_pass=pass;
++    impl->pending_clears=nil;
++    impl->pending_clear_count=0;
++    need_fence_wait|=std::exchange(impl->pending_clear_barrier,false);
++    return (__bridge const void*)pass;
++}
++
++void Scheduler::CommitFoldedClears() {
++    if(!impl->folded_clears)return;
++    unsigned count=0;
++    for(unsigned i=0;i<8;++i)if(impl->folded_clears.colorAttachments[i].texture)++count;
++    ++impl->clear_folded;impl->clear_folded_targets+=count;
++    CaptureClearLifetime("folded",(uintptr_t)this,count);
++    impl->folded_clears=nil;
++    impl->folded_pass=nil;
++}
++
++void Scheduler::RestoreFoldedClears() {
++    if(!impl->folded_clears)return;
++    // Only called before the first real hoisted compute dispatch. Keep the original clear
++    // before it; the held pass keeps its ORIGINAL load/clear action after the dispatch.
++    for(unsigned i=0;i<8;++i) {
++        impl->held_pass.colorAttachments[i].loadAction=impl->folded_original_loads[i];
++        impl->held_pass.colorAttachments[i].clearColor=impl->folded_original_colors[i];
++    }
++    impl->pending_clears=impl->folded_clears;impl->folded_clears=nil;
++    impl->folded_pass=nil;
++    for(unsigned i=0;i<8;++i)if(impl->pending_clears.colorAttachments[i].texture)++impl->pending_clear_count;
++    ++impl->clear_fold_fallbacks;
++    CaptureClearLifetime("hoist_fallback",(uintptr_t)this,impl->pending_clear_count);
++    // Honor dependencies on BOTH sides, including the pending clear's original barrier.
++    need_fence_wait=true;impl->pending_clear_barrier=true;
++    FlushColorClears();
+ }
+ 
+ void Scheduler::FlushColorClears() {
+diff --git a/tests/test_mtl_scheduler.mm b/tests/test_mtl_scheduler.mm
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -823,9 +823,141 @@
+     puts("precise residency: host/guest compute upgrade, mixed/hoisted access, held/direct/replayed guest-pointer draws and exact pixels passed");
+ }
+ 
++
++// Real Metal pixels and scheduler boundaries, not just descriptor shape. The clear values
++// must remain visible to hoisted indirect work, render tails and later native readers.
++static void TestClearFolding(Metal::Device& device) {
++    auto gpu=device.GetImpl().device;
++    const bool enabled=std::getenv("BB_MTL_FOLD_CLEARS") && std::getenv("BB_MTL_FOLD_CLEARS")[0]=='1';
++    const bool held=!(std::getenv("BB_MTL_HOLD") && std::getenv("BB_MTL_HOLD")[0]=='0');
++    std::vector<id> retained_textures; // command buffers deliberately do not retain resources
++    auto make=[&](unsigned n=4) {
++        auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:n height:n mipmapped:NO];
++        d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
++        d.storageMode=MTLStorageModePrivate;
++        auto texture=[gpu newTextureWithDescriptor:d];retained_textures.push_back(texture);return texture;
++    };
++    auto descriptor=[&](id<MTLTexture> t) {
++        auto d=[MTLRenderPassDescriptor renderPassDescriptor];
++        d.colorAttachments[0].texture=t;d.colorAttachments[0].loadAction=MTLLoadActionLoad;
++        d.colorAttachments[0].storeAction=MTLStoreActionStore;return d;
++    };
++    auto read=[&](Scheduler& q,id<MTLTexture> t,unsigned r,unsigned g,unsigned b) {
++        id<MTLBuffer> out=[gpu newBufferWithLength:1024 options:MTLResourceStorageModeShared];
++        q.BlitEncoder("clear fold exact pixel read");
++        [q.GetImpl().blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
++          sourceSize:MTLSizeMake(t.width,t.height,1) toBuffer:out destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:1024];
++        q.Finish();
++        auto bytes=static_cast<const unsigned char*>(out.contents);
++        for(unsigned y=0;y<t.height;++y)for(unsigned x=0;x<t.width;++x) {
++            auto p=bytes+y*256+x*4;CHECK(p[0]==r&&p[1]==g&&p[2]==b&&p[3]==255);
++        }
++        CHECK(!q.HasFailed());
++    };
++    // Both direct-host and held/posted guest passes consume the exact same queued clears.
++    for(bool guest:{false,true})for(bool own_clear:{false,true}) {
++        Scheduler q(device,"fold exact clear");auto t=make();auto pass=descriptor(t);
++        if(own_clear) {pass.colorAttachments[0].loadAction=MTLLoadActionClear;pass.colorAttachments[0].clearColor=MTLClearColorMake(0,1,0,1);}
++        CHECK(q.QueueColorClear((__bridge void*)t,{1,0,0,1}));q.MemoryBarrier();
++        VideoCore::RenderState state{};
++        if(guest)q.RenderEncoder((__bridge void*)pass,state);else q.HostRenderEncoder((__bridge void*)pass);
++        CHECK(pass.colorAttachments[0].loadAction==(own_clear?MTLLoadActionClear:MTLLoadActionLoad));
++        if(guest && held) {
++            // No-dispatch BeginHoist/EndHoist is harmless. ReplayDepth path commits once.
++            q.BeginHoist();q.EndHoist();
++            auto next=descriptor(make());next.colorAttachments[0].loadAction=MTLLoadActionClear;
++            q.RenderEncoder((__bridge void*)next,state);
++        }
++        read(q,t,own_clear?0:255,own_clear?255:0,0);
++        CHECK(q.GetImpl().clear_folded==unsigned(enabled));
++        CHECK(q.GetImpl().clear_passes==unsigned(!enabled));
++        CHECK(!q.GetImpl().folded_clears);
++    }
++    // Several MRT clears, including a repeated target, remain exact with one folded batch.
++    {
++        Scheduler q(device,"fold MRT");auto a=make(),b=make();auto pass=descriptor(a);
++        pass.colorAttachments[1].texture=b;pass.colorAttachments[1].loadAction=MTLLoadActionLoad;pass.colorAttachments[1].storeAction=MTLStoreActionStore;
++        CHECK(q.QueueColorClear((__bridge void*)a,{1,0,0,1}));CHECK(q.QueueColorClear((__bridge void*)b,{0,1,0,1}));
++        CHECK(q.QueueColorClear((__bridge void*)a,{0,0,1,1}));q.MemoryBarrier();
++        q.RenderEncoder((__bridge void*)pass,VideoCore::RenderState{});
++        read(q,a,0,0,255);read(q,b,0,255,0);CHECK(q.GetImpl().clear_folded_targets==(enabled?2:0));
++    }
++    // A real hoisted kernel must see red, then write blue; the subsequent Load must retain blue.
++    if(held) {
++        NSError* error=nil;
++        NSString* src=@"#include <metal_stdlib>\nusing namespace metal;\nkernel void test(texture2d<float,access::read_write> t [[texture(0)]],device uint* out [[buffer(0)]],uint2 p [[thread_position_in_grid]]){float4 x=t.read(p);out[p.y*4+p.x]=uint(x.r*255.0f);t.write(float4(0,0,1,1),p);}";
++        auto lib=[gpu newLibraryWithSource:src options:nil error:&error];CHECK(lib);
++        auto kernel=Pipeline(gpu,lib,@"test");
++        Scheduler q(device,"fold hoist fallback");auto t=make();auto pass=descriptor(t);
++        auto out=[gpu newBufferWithLength:64 options:MTLResourceStorageModeShared];
++        CHECK(q.QueueColorClear((__bridge void*)t,{1,0,0,1}));q.MemoryBarrier();
++        q.RenderEncoder((__bridge void*)pass,VideoCore::RenderState{});
++        q.BeginHoist();q.ComputeEncoder("clear must precede hoist",true);
++        CHECK(!q.GetImpl().folded_clears);
++        auto c=q.GetImpl().compute;[c setComputePipelineState:kernel];[c setTexture:t atIndex:0];[c setBuffer:out offset:0 atIndex:0];
++        [c dispatchThreads:MTLSizeMake(4,4,1) threadsPerThreadgroup:MTLSizeMake(4,4,1)];q.EndHoist();
++        read(q,t,0,0,255);for(unsigned i=0;i<16;++i)CHECK(static_cast<const u32*>(out.contents)[i]==255);
++        CHECK(q.GetImpl().clear_folded==0);CHECK(q.GetImpl().clear_fold_fallbacks==unsigned(enabled));
++    }
++    for(unsigned reason=0;reason<6;++reason) {
++        Scheduler q(device,"fold rejection preserves content");auto t=make(),other=make();auto pass=descriptor(t);
++        CHECK(q.QueueColorClear((__bridge void*)t,{1,0,0,1}));
++        switch(reason) {
++        case 0: CHECK(q.QueueColorClear((__bridge void*)other,{0,1,0,1}));break; // unmatched target
++        case 1: pass.renderTargetWidth=2;pass.renderTargetHeight=2;break; // partial extent
++        case 2: pass.colorAttachments[1].texture=make(2);pass.colorAttachments[1].loadAction=MTLLoadActionClear;pass.colorAttachments[1].storeAction=MTLStoreActionStore;break;
++        case 3: pass.colorAttachments[0].loadAction=MTLLoadActionDontCare;break;
++        case 4: q.SetRenderTail([&]{});q.RequestRenderTail();break;
++        case 5: q.BlitEncoder("intervening read boundary");q.EndEncoder();break;
++        }
++        q.HostRenderEncoder((__bridge void*)pass);q.EndRendering();q.Finish();
++        CHECK(q.GetImpl().clear_folded==0);CHECK(!q.GetImpl().folded_clears);
++        if(reason!=3)read(q,t,255,0,0);
++        if(reason==0)read(q,other,0,255,0);
++    }
++    puts("clear folding: exact host/guest/replayed/MRT pixels, hoisted read/write fallback, render-tail, extent and unmatched-resource rejection passed");
++}
++
++
++static void TestClearFoldBlending(Metal::Device& device) {
++    auto gpu=device.GetImpl().device;NSError* error=nil;
++    NSString* src=@"#include <metal_stdlib>\nusing namespace metal;\nvertex float4 v(uint id [[vertex_id]]){return float4(id==1?3.0f:-1.0f,id==2?3.0f:-1.0f,0,1);}\nfragment float4 f(){return float4(0.123f,0.234f,0.345f,0.37f);}";
++    auto options=[MTLCompileOptions new];options.mathMode=MTLMathModeSafe;
++    auto lib=[gpu newLibraryWithSource:src options:options error:&error];CHECK(lib);
++    for(auto format:{MTLPixelFormatRGBA8Unorm,MTLPixelFormatRGBA8Unorm_sRGB,MTLPixelFormatRGBA16Float,MTLPixelFormatRG11B10Float,MTLPixelFormatRGB10A2Unorm}) {
++        auto pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=[lib newFunctionWithName:@"v"];pd.fragmentFunction=[lib newFunctionWithName:@"f"];
++        auto a=pd.colorAttachments[0];a.pixelFormat=format;a.blendingEnabled=YES;
++        a.sourceRGBBlendFactor=MTLBlendFactorSourceAlpha;a.destinationRGBBlendFactor=MTLBlendFactorOneMinusSourceAlpha;
++        a.sourceAlphaBlendFactor=MTLBlendFactorOne;a.destinationAlphaBlendFactor=MTLBlendFactorOneMinusSourceAlpha;
++        auto pso=[gpu newRenderPipelineStateWithDescriptor:pd error:&error];CHECK(pso);
++        for(auto color:{MTLClearColorMake(0,0,0,0),MTLClearColorMake(1,1,1,1),MTLClearColorMake(.1,.2,.3,.4),MTLClearColorMake(.5001,.9999,.0001,.3333)}) {
++            std::array<id<MTLBuffer>,2> outputs;std::array<id<MTLTexture>,2> textures;
++            for(unsigned variant=0;variant<2;++variant) {
++                auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:4 height:4 mipmapped:NO];td.storageMode=MTLStorageModePrivate;td.usage=MTLTextureUsageRenderTarget;
++                textures[variant]=[gpu newTextureWithDescriptor:td];auto texture=textures[variant];
++                outputs[variant]=[gpu newBufferWithLength:1024 options:MTLResourceStorageModeShared];
++                Scheduler q(device,"clear fold blend equivalence");
++                auto pass=[MTLRenderPassDescriptor renderPassDescriptor];pass.colorAttachments[0].texture=texture;pass.colorAttachments[0].loadAction=MTLLoadActionClear;pass.colorAttachments[0].clearColor=color;pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++                if(variant==0) {q.HostRenderEncoder((__bridge void*)pass);q.EndRendering();}
++                else CHECK(q.QueueColorClear((__bridge void*)texture,{color.red,color.green,color.blue,color.alpha}));
++                pass.colorAttachments[0].loadAction=MTLLoadActionLoad;q.HostRenderEncoder((__bridge void*)pass);
++                auto r=q.GetImpl().render;[r setRenderPipelineState:pso];[r setViewport:MTLViewport{0,0,4,4,0,1}];[r drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++                q.BlitEncoder();[q.GetImpl().blit copyFromTexture:texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(4,4,1) toBuffer:outputs[variant] destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:1024];q.Finish();CHECK(!q.HasFailed());
++            }
++            const unsigned row_bytes=format==MTLPixelFormatRGBA16Float?32:16;bool equal=true;
++            for(unsigned y=0;y<4;++y)if(std::memcmp(static_cast<const char*>(outputs[0].contents)+y*256,static_cast<const char*>(outputs[1].contents)+y*256,row_bytes)!=0)equal=false;
++            if(!equal)printf("clear fold blend mismatch: format=%u clear=(%.8f,%.8f,%.8f,%.8f)\n",unsigned(format),color.red,color.green,color.blue,color.alpha);
++            CHECK(equal);
++        }
++    }
++    puts("clear folding: full-surface blended color matches separate clear/store/load at original pixel precision");
++}
++
+ int main() {
+     @autoreleasepool {
+         Metal::Device device;
++        if(std::getenv("BB_TEST_CLEAR_BLEND_ONLY")){TestClearFoldBlending(device);return failures?1:0;}
++        if(std::getenv("BB_TEST_CLEAR_FOLD_ONLY")){TestClearFolding(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_COLOR_CLEAR_BATCH_ONLY")){TestColorClearBatch(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_NATIVE_CAPTURE_ONLY")){TestNativeMetadata(device);return failures?1:0;}
+         NSError* error = nil;

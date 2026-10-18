@@ -53,3 +53,10 @@ class AttachmentReportTests(unittest.TestCase):
   with self.assertRaises(ValueError):a.analyze(self.text(bad))
   bad=[dict(r) for r in rows];bad[4]['kind']=1;bad[-1]['kind']=1
   with self.assertRaises(ValueError):a.analyze(self.text(bad))
+
+ def test_lifetime_audit_does_not_claim_complete_reader_coverage(self):
+  rows=self.rows();rows[4:4]=[dict(op='clear_lifetime',queue=1,action='folded',targets=2),dict(op='clear_lifetime',queue=1,action='hoist_fallback',targets=1)]
+  r=a.analyze(self.text(rows));self.assertFalse(r['attachment_lifetime_audit']['complete_reader_graph']);self.assertEqual(r['proven_clear_folding'],dict(batches=1,targets=2,hoist_fallbacks=1))
+  for value in [dict(targets=0),dict(targets=9),dict(targets=True),dict(action='discard_unknown')]:
+   bad=[dict(r) for r in rows];bad[4].update(value)
+   with self.assertRaises(ValueError):a.analyze(self.text(bad))

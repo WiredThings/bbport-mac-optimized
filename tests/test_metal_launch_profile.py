@@ -32,12 +32,12 @@ class MetalLaunchProfileTests(unittest.TestCase):
             return dict(line.split('=',1) for line in (root/'data/environment.txt').read_text().splitlines() if '=' in line)
     def test_normal_play_enables_measured_profile_without_diagnostic_input(self):
         env=self.launch()
-        for key in c.CANDIDATES:self.assertEqual(env[key],'1')
+        for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS'):self.assertEqual(env[key],'1')
         for key in ('BB_PAD_FILE','BB_PAD_FILE_ONLY','BB_BENCHMARK_MUTE','BB_FRAME_LOG_ONLY','BB_MTL_COPY_AUDIT','BB_CAPTURE_NATIVE','MTL_CAPTURE_ENABLED'):
             self.assertNotIn(key,env)
     def test_benchmark_can_disable_all_defaults_and_keeps_isolated_controls(self):
-        env=self.launch(True,{key:'0' for key in c.CANDIDATES})
-        for key in c.CANDIDATES:self.assertEqual(env[key],'0')
+        env=self.launch(True,{key:'0' for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS')})
+        for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS'):self.assertEqual(env[key],'0')
         for key in ('BB_PAD_FILE_ONLY','BB_BENCHMARK_MUTE','BB_FRAME_LOG_ONLY'):self.assertEqual(env[key],'1')
 
 if __name__=='__main__':unittest.main()

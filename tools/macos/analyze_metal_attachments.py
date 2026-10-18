@@ -10,7 +10,7 @@ def analyze(text):
     rows=[json.loads(line[7:]) for line in text.splitlines() if line.startswith('NATIVE ')]
     if not rows or rows[0].get('op')!='frame' or rows[0].get('truncated',True):
         raise ValueError('Missing or truncated single-frame metadata')
-    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[];compute_access=[];texture_tiling=[]
+    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[];compute_access=[];texture_tiling=[];clear_lifetime=[]
     for row in rows[1:]:
         op=row['op'];queue=row.get('queue')
         if op=='open':
@@ -49,6 +49,12 @@ def analyze(text):
             if not isinstance(requested,int) or not isinstance(dropped,int) or not 0<=dropped<=requested:
                 raise ValueError('Invalid render barrier counters')
             render_barriers.append(row)
+        elif op=='clear_lifetime':
+            if row.get('action') not in ('folded','hoist_fallback') or type(row.get('targets')) is not int or not 1<=row['targets']<=8:
+                raise ValueError('Invalid clear lifetime decision')
+            # Decisions are emitted by the recording thread before a held pass can be posted;
+            # they need not sit inside a physical encoder. Not an arbitrary dead-store proof.
+            clear_lifetime.append(row)
         elif op=='attachment':
             if queue not in current:raise ValueError('Attachment without an encoder')
             current[queue]['attachments'].append(row)
@@ -68,8 +74,18 @@ def analyze(text):
             active=[]
         active.append(c)
     if len(active)>1:runs.append(active)
+    lifetimes={}
+    for index,node in enumerate(nodes):
+        for attachment in node['attachments']:
+            # Observed object/level/slice/aspect only; no alias or 3D depth-plane proof.
+            # A depth/stencil pair is not two independent allocations.
+            key=(node['queue'],attachment['id'],attachment.get('level',0),attachment.get('slice',0),attachment['slot'] if attachment['slot']<0 else 0)
+            life=lifetimes.setdefault(key,dict(first=index,last=index,loads=0,clears=0,stores=0))
+            life['last']=index;life['loads']+=attachment['load']==1;life['clears']+=attachment['load']==2;life['stores']+=attachment['store']==1
     return dict(frame=rows[0]['frame'],metadata_bytes=rows[0].get('bytes'),encoders=len(nodes),
                 render=counts[1],compute=counts[2],blit=counts[3],attachments=sum(len(n['attachments']) for n in nodes),
+                attachment_lifetime_audit=dict(attachment_aspect_keys=len(lifetimes),loads=sum(v['loads'] for v in lifetimes.values()),clears=sum(v['clears'] for v in lifetimes.values()),stores=sum(v['stores'] for v in lifetimes.values()),complete_reader_graph=False),
+                proven_clear_folding=dict(batches=sum(r['action']=='folded' for r in clear_lifetime),targets=sum(r['targets'] for r in clear_lifetime if r['action']=='folded'),hoist_fallbacks=sum(r['action']=='hoist_fallback' for r in clear_lifetime)) if clear_lifetime else None,
                 full_color_clear_passes=clears,consecutive_clear_runs=runs,
                 render_barriers=dict(lists=len(render_barriers),requested=sum(r['requested'] for r in render_barriers) if render_barriers else None,dropped=sum(r['dropped'] for r in render_barriers) if render_barriers else None),
                 occlusion_snapshots=dict(events=len(query_snapshots),chained_events=sum(q['chained'] for q in query_snapshots),counter_slots=sum(q['count'] for q in query_snapshots)) if query_snapshots else None,

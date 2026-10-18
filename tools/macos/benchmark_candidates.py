@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Same-binary ABBA of all overnight candidates. Never enables the normal launcher."""
+"""Same-binary interleaved A/B of selected candidates. Never enables the normal launcher."""
 import argparse
 import importlib.util
 import json
@@ -41,26 +41,33 @@ def summarize(path):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,required=True)
-    p.add_argument('--name',required=True);args=p.parse_args()
+    p.add_argument('--name',required=True)
+    p.add_argument('--order',choices=('ABBA','BAAB'),default='ABBA')
+    p.add_argument('--candidate',action='append',choices=sorted(b.OVERRIDES-b.DIAGNOSTIC_OVERRIDES),help='Toggle only these flags; default is the accepted nine-flag bundle')
+    args=p.parse_args()
+    candidates=tuple(args.candidate) if args.candidate else CANDIDATES
+    if len(set(candidates))!=len(candidates):p.error('Duplicate candidate')
     if not re.fullmatch('[A-Za-z0-9_-]{1,36}',args.name):p.error('Use a short name')
     out=args.workspace/(args.name+'.json')
     if out.exists():raise ValueError('Refusing to overwrite an existing suite')
     baseline_swap=b.pressure()['swap_mib']
-    report=dict(status='running',guard_policy=b.GUARD_POLICY,candidates=list(CANDIDATES),runs=[],
-                installed_app_changed=False,notes=['Same-binary all-OFF/all-ON ABBA; includes previously unhelpful clear batching at user request.',
+    report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),runs=[],
+                installed_app_changed=False,notes=[f'Same-binary {args.order}; A is selected-OFF, B is selected-ON; all other launch defaults retained.',
                 'Warning pressure is recorded, not excluded. No frames trimmed.',
-                'Combined result cannot attribute gains to individual flags.'])
+                'When several flags are selected, the combined result cannot attribute gains to each flag.'])
     b.write_json(out,report)
     try:
-        for label,value in [('a1','0'),('b1','1'),('b2','1'),('a2','0')]:
+        counts={'a':0,'b':0}
+        for group in args.order.lower():
+            counts[group]+=1;label=group+str(counts[group]);value='0' if group=='a' else '1'
             if b.pressure()['swap_mib']-baseline_swap>2048:raise RuntimeError('Suite total swap growth exceeded 2 GiB')
             name=args.name+'-'+label
             report.update(active=name);b.write_json(out,report)
             cmd=[sys.executable,str(Path(__file__).with_name('benchmark.py')),'run','--workspace',str(args.workspace),
                  '--app',str(args.app),'--name',name,'--mute','--minimal-stats']
-            for key in CANDIDATES:cmd+=['--env',key+'='+value]
-            cmd+=['--env','BB_MTL_FRAGMENT_UNIFORMS=0']
-            print('Starting '+name+' all candidates='+value,flush=True)
+            for key in candidates:cmd+=['--env',key+'='+value]
+            if 'BB_MTL_FRAGMENT_UNIFORMS' not in candidates:cmd+=['--env','BB_MTL_FRAGMENT_UNIFORMS=0']
+            print('Starting '+name+' selected candidates='+value,flush=True)
             with (args.workspace/(name+'.console.log')).open('w') as log:
                 done=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=os.environ)
             if done.returncode:raise RuntimeError('Run failed: '+name+'; see console log')
