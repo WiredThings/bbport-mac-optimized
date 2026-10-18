@@ -3,12 +3,13 @@ import XCTest
 
 final class MetalOptimizationTests: XCTestCase {
     func testDefaultsMatchAcceptedProfileAndExperimentsStayOff() {
-        XCTAssertEqual(MetalOptimizations.all.count, 24)
-        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 24)
-        XCTAssertEqual(MetalOptimizations.adopted.count, 19)
+        XCTAssertEqual(MetalOptimizations.all.count, 25)
+        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 25)
+        XCTAssertEqual(MetalOptimizations.adopted.count, 20)
         XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 5)
         let prefs = LauncherPrefs()
-        let env = OptimizedProfile(prefs: prefs, game: GameSettings()).environment
+        var game = GameSettings(); game.upscaler = "metalfx"
+        let env = OptimizedProfile(prefs: prefs, game: game).environment
         for option in MetalOptimizations.all {
             XCTAssertEqual(env[option.id], option.defaultOn ? "1" : "0", option.id)
             XCTAssertEqual(option.defaultOn, [.adopted, .adoptedExperimental, .bundle].contains(option.evidence))
@@ -22,7 +23,8 @@ final class MetalOptimizationTests: XCTestCase {
         for option in MetalOptimizations.all {
             var prefs = LauncherPrefs()
             prefs.metalOptimizations[option.id] = !option.defaultOn
-            let env = OptimizedProfile(prefs: prefs, game: GameSettings()).environment
+            var game = GameSettings(); game.upscaler = "metalfx"
+            let env = OptimizedProfile(prefs: prefs, game: game).environment
             XCTAssertEqual(env[option.id], option.defaultOn ? "0" : "1", option.id)
         }
     }
@@ -97,6 +99,48 @@ final class MetalOptimizationTests: XCTestCase {
         XCTAssertNil(env["BB_MTL_PROXY_CLEAR_FILE"])
         XCTAssertEqual(env["BB_MTL_FULL_USAGE"], "0")
         XCTAssertEqual(env["BB_MTL_PROXY_CLEAR"], "1")
+    }
+
+    func testMetalFXDependencyPreservesStoredChoiceAndQuality() {
+        var prefs = LauncherPrefs()
+        prefs.metalOptimizations["BB_MTL_UPSCALE_ALPHA"] = true
+        var game = GameSettings(); game.upscaler = "off"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_MTL_UPSCALE_ALPHA"], "0")
+        XCTAssertEqual(prefs.metalOptimizations["BB_MTL_UPSCALE_ALPHA"], true)
+        game.upscaler = "metalfx"
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_MTL_UPSCALE_ALPHA"], "1")
+        prefs.ultrawide = true
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: game).environment["BB_MTL_UPSCALE_ALPHA"], "0")
+    }
+
+    func testNewReclaimerImportsLegacyOverrideEvenWithOlderControlDictionary() throws {
+        let name = "bbport.reclaim-migration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["BB_MTL_DIRECT_COPY": true], forKey: "metalOptimizations")
+        defaults.set("BB_TEXTURE_INVALID_RECLAIM=0 BB_MTL_DIRECT_COPY=0", forKey: "extraEnv")
+        var prefs = LauncherPrefs.load(from: defaults)
+        XCTAssertEqual(prefs.metalOptimizations["BB_TEXTURE_INVALID_RECLAIM"], false)
+        XCTAssertEqual(prefs.metalOptimizations["BB_MTL_DIRECT_COPY"], true)
+        XCTAssertEqual(OptimizedProfile(prefs: prefs, game: GameSettings()).environment["BB_TEXTURE_INVALID_RECLAIM"], "0")
+        prefs.metalOptimizations = MetalOptimizations.defaults
+        prefs.save(to: defaults)
+        XCTAssertEqual(LauncherPrefs.load(from: defaults).metalOptimizations["BB_TEXTURE_INVALID_RECLAIM"], true)
+    }
+
+    func testDiagnosticsAndUnsupportedBackendFlagsCannotOutliveControls() {
+        var prefs = LauncherPrefs()
+        let stale = ["BB_MTL_GPU_TIMING": "1", "BB_GPU_PROFILE": "1", "BB_PREUPLOAD": "1", "BB_VK_VALIDATION": "1"]
+        var env = OptimizedProfile(prefs: prefs, game: GameSettings()).applyingEnvironment(to: stale)
+        for key in stale.keys { XCTAssertNil(env[key], key) }
+        prefs.gpuProfile = true
+        env = OptimizedProfile(prefs: prefs, game: GameSettings()).applyingEnvironment(to: stale)
+        XCTAssertEqual(env["BB_MTL_GPU_TIMING"], "1")
+        XCTAssertNil(env["BB_GPU_PROFILE"])
+        prefs.renderer = "vulkan"
+        env = OptimizedProfile(prefs: prefs, game: GameSettings()).applyingEnvironment(to: stale)
+        XCTAssertEqual(env["BB_GPU_PROFILE"], "1")
+        XCTAssertNil(env["BB_MTL_GPU_TIMING"])
     }
 
     func testEveryOptionHasEnglishAndChineseDescriptions() {

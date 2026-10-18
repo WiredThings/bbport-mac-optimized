@@ -51,17 +51,50 @@ def minimum(path):
     if not matches: matches = re.findall(r'LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)', text)
     return max((tuple(map(int, v.split('.'))) for v in matches), default=(0,))
 
+# Local automation has a separate development distribution, never a public app payload.
+DEVELOPMENT_TOOL_NAMES = {
+    'benchmark.py', 'benchmark_candidates.py', 'benchmark_control.py',
+    'benchmark_control_client.py', 'benchmark_routes.py', 'build_dev_world_warper.py',
+}
+
+def development_tool(relative):
+    path = Path(relative)
+    return (len(path.parts) >= 3 and path.parts[:2] == ('tools', 'macos') and
+            (path.parts[2] == 'dev' or path.name in DEVELOPMENT_TOOL_NAMES or
+             path.name.startswith('analyze_metal_') or path.name == 'analyze_texture_retention.py'))
+
+def strip_development_tools(engine):
+    """Remove only known developer tool paths from an owned staging app, never user data."""
+    engine = Path(engine)
+    removed = []
+    for path in sorted(engine.rglob('*'), reverse=True):
+        relative = path.relative_to(engine)
+        if development_tool(relative):
+            if path.is_file() or path.is_symlink():
+                path.unlink(); removed.append(str(relative))
+            elif path.is_dir():
+                path.rmdir()
+    return sorted(removed)
+
+
 def inspect_payload(root, *, source=False):
     files = []
     for p in sorted(root.rglob('*')):
         rel = p.relative_to(root)
+        if not source:
+            assert not any(development_tool(Path(*rel.parts[i:])) for i in range(len(rel.parts))), f'Development tool in public app: {rel}'
         assert not (set(rel.parts) & FORBIDDEN), f'Prohibited file: {rel}'
         assert not re.search(r'(SPRJ\d+|\.sl2$|\.pkg$|\.self$|\.sprx$|\.gfx$|\.dcx$)', str(rel), re.I), f'Game/save file: {rel}'
         if p.is_symlink():
             assert source and not os.path.isabs(os.readlink(p)) and p.resolve().is_relative_to(root.resolve()), f'Unsafe symlink: {rel}'
             files.append({'path': str(rel), 'symlink': os.readlink(p)})
             continue
-        if p.is_file(): files.append({'path': str(rel), 'bytes': p.stat().st_size, 'sha256': sha(p)})
+        if p.is_file():
+            if not source:
+                assert p.name != 'DEVELOPMENT-WORLD-WARPER.json', 'Development app cannot be released'
+                if p.name in ('bb-probe', 'bb-probe-metal'):
+                    assert b'BB_DEVELOPMENT_WORLD_WARPER_V1' not in p.read_bytes(), 'Development world warper in release probe'
+            files.append({'path': str(rel), 'bytes': p.stat().st_size, 'sha256': sha(p)})
     return files
 
 
@@ -259,6 +292,10 @@ Component license texts are in licenses/.\n\nComponents: bbport, shadPS4, Kosmic
     copy(ROOT / 'docs/release/READ-ME-FIRST.txt', top / 'Read Me First.txt')
     copy(ROOT / 'docs/release/0.1.0.md', top / 'Release Notes.md')
     copy(ROOT / 'LICENSE', top / 'LICENSE.txt')
+    strip_development_tools(engine)
+    # Contents changed after smoke checks: refresh only the outer app signature.
+    subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     files = inspect_payload(top)
     source_files = inspect_payload(source_top, source=True)
     audit = {'version': args.version, 'commit': run('git', '-C', ROOT, 'rev-parse', 'HEAD'),

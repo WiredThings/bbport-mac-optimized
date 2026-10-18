@@ -133,6 +133,11 @@ final class LauncherModel: ObservableObject {
     var profile: OptimizedProfile { OptimizedProfile(prefs: prefs, game: game) }
 
     static var applicationSupportURL: URL {
+        if Bundle.main.bundleIdentifier == "io.github.bbport.optimized.options-qa",
+           let path = Bundle.main.object(forInfoDictionaryKey: "BBPreviewDataPath") as? String,
+           path.hasPrefix("/"), !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("bbport", isDirectory: true)
@@ -526,9 +531,6 @@ final class LauncherModel: ObservableObject {
                           ("BB_VK_VALIDATION", p.vkValidation)] {
             if on { env[key] = "1" } else { env.removeValue(forKey: key) }
         }
-        env.removeValue(forKey: "BB_GPU_PROFILE")
-        if p.gpuProfile { env[profile.gpuProfileVariable] = "1" }
-        // Explicit Metal timing in extraEnv remains available for bounded diagnostic sessions.
         // Do not allow diagnostics to capture controller input or trigger a restore at launch.
         for key in ["BB_PAD_FILE", "BB_PAD_REPLAY", "BB_PAD_RECORD", "BB_PRESET_FILE", "BB_TOGGLE_FILE",
                     "BB_CAPTURE_TRIGGER", "BB_PRESENT_DUMP_TRIGGER", "BB_TIMEOUT", "BB_QUICKLOAD_PENDING",

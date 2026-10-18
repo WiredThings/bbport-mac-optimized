@@ -43,3 +43,21 @@ patches.json
 
 # Explicit launcher artwork requested by the owner; provenance is beside the image.
 !launcher-macos/Sources/BBLauncher/Resources/Artwork/HuntersMark.png
+
+# Private development automation and local World Warper integration are not published.
+/tools/macos/dev/
+/tools/macos/build_dev_world_warper.py
+/tools/macos/benchmark_control.py
+/tools/macos/benchmark_control_client.py
+/tools/macos/benchmark_routes.py
+/tools/macos/analyze_metal_retention.py
+/tools/macos/analyze_texture_retention.py
+/tests/test_world_warper.py
+/tests/test_world_warper_entry.c
+/tests/test_world_warper_state.c
+/tests/test_benchmark_control.py
+/tests/test_benchmark_control_client.py
+/tests/test_benchmark_routes.py
+/tests/test_metal_retention_analysis.py
+/tests/test_texture_retention_analysis.py
+/docs/release/METAL-RETENTION-DIAGNOSTICS.md

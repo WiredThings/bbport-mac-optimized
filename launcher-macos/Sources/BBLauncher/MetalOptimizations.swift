@@ -18,6 +18,7 @@ struct MetalOptimization: Identifiable, Sendable {
     let defaultOn: Bool
     let evidence: OptimizationEvidence
     var requires: [String] = []
+    var requiresMetalFX = false
 }
 
 enum MetalOptimizations {
@@ -28,7 +29,8 @@ enum MetalOptimizations {
         .init(id: "BB_MTL_PROXY_CLEAR", title: "Clear the existing scene copy directly", note: "Avoids a native-resolution round trip. About 5% faster in the earlier matched scene test.", defaultOn: true, evidence: .adopted),
         .init(id: "BB_MTL_VERTEX_MATH", title: "Inline strict vertex math", note: "Retains explicit FMA and rounding rules. Adopted after correctness checks and scene comparisons.", defaultOn: true, evidence: .adoptedExperimental),
         .init(id: "BB_MTL_PROXY_LEAN", title: "Preserve scene-texture compression eligibility", note: "Avoids unused format-view capabilities; real format reinterpretation retains its original path.", defaultOn: true, evidence: .adoptedExperimental),
-        .init(id: "BB_MTL_UPSCALE_ALPHA", title: "Merge MetalFX alpha upscaling", note: "Removes a separate alpha enlargement copy on the MetalFX path without changing output resolution.", defaultOn: true, evidence: .adoptedExperimental),
+        .init(id: "BB_MTL_UPSCALE_ALPHA", title: "Merge MetalFX alpha upscaling", note: "Removes a separate alpha enlargement copy on the MetalFX path without changing output resolution.", defaultOn: true, evidence: .adoptedExperimental, requiresMetalFX: true),
+        .init(id: "BB_TEXTURE_INVALID_RECLAIM", title: "Reclaim invalid sampled textures", note: "Reclaims idle CPU-invalid sampled copies after GPU completion. Valid caches and their capacities are retained.", defaultOn: true, evidence: .adopted),
         .init(id: "BB_MTL_IDLE_STAGING_DISCARD", title: "Reclaim idle staging backing", note: "Reclaims only completed, idle backing. Pool capacities and reusable objects are retained.", defaultOn: true, evidence: .adopted),
         .init(id: "BB_MTL_RELEASE_WARM_ARCHIVE", title: "Release the startup compilation archive", note: "Drops the compilation-only object after prewarm while retaining all active pipelines.", defaultOn: true, evidence: .adopted),
         .init(id: "BB_MTL_BATCH_CLEARS", title: "Batch color attachment clears", note: "Combines compatible clears; uncertain cases keep separate operations.", defaultOn: true, evidence: .bundle),
@@ -55,18 +57,19 @@ enum MetalOptimizations {
     static func requested(_ option: MetalOptimization, prefs: LauncherPrefs) -> Bool {
         prefs.metalOptimizations[option.id] ?? option.defaultOn
     }
-    static func dependenciesMet(_ option: MetalOptimization, prefs: LauncherPrefs) -> Bool {
-        option.requires.allSatisfy { id in
+    static func dependenciesMet(_ option: MetalOptimization, prefs: LauncherPrefs, metalFXActive: Bool = true) -> Bool {
+        if option.requiresMetalFX && !metalFXActive { return false }
+        return option.requires.allSatisfy { id in
             guard let parent = all.first(where: { $0.id == id }) else { return false }
-            return enabled(parent, prefs: prefs)
+            return enabled(parent, prefs: prefs, metalFXActive: metalFXActive)
         }
     }
-    static func enabled(_ option: MetalOptimization, prefs: LauncherPrefs) -> Bool {
-        requested(option, prefs: prefs) && dependenciesMet(option, prefs: prefs)
+    static func enabled(_ option: MetalOptimization, prefs: LauncherPrefs, metalFXActive: Bool = true) -> Bool {
+        requested(option, prefs: prefs) && dependenciesMet(option, prefs: prefs, metalFXActive: metalFXActive)
     }
-    static func environment(prefs: LauncherPrefs) -> [String: String] {
+    static func environment(prefs: LauncherPrefs, metalFXActive: Bool = true) -> [String: String] {
         guard prefs.renderer == "metal" else { return [:] }
-        var env = Dictionary(uniqueKeysWithValues: all.map { ($0.id, enabled($0, prefs: prefs) ? "1" : "0") })
+        var env = Dictionary(uniqueKeysWithValues: all.map { ($0.id, enabled($0, prefs: prefs, metalFXActive: metalFXActive) ? "1" : "0") })
         if env["BB_MTL_PROXY_LEAN"] == "1" { env["BB_MTL_FULL_USAGE"] = "0" }
         if env["BB_MTL_RELAXED_MATH"] == "1" { env["BB_MTL_STRICT_FLOAT"] = "0" }
         return env

@@ -34,7 +34,7 @@ struct OptimizedProfile {
     }
 
     var presentMode: String {
-        prefs.renderer == "metal" && prefs.presentMode == "FifoRelaxed" ? "Mailbox" : prefs.presentMode
+        prefs.renderer == "metal" && ["FifoRelaxed", "Immediate"].contains(prefs.presentMode) ? "Mailbox" : prefs.presentMode
     }
 
     var gpuProfileVariable: String { prefs.renderer == "metal" ? "BB_MTL_GPU_TIMING" : "BB_GPU_PROFILE" }
@@ -67,7 +67,7 @@ struct OptimizedProfile {
             "BB_UPSCALER": settings.upscaler, "BB_UPSCALE_PRESET": String(settings.preset),
             "BB_LIVE_RES": "0", "BB_PATCHES": "",
         ]
-        env.merge(MetalOptimizations.environment(prefs: prefs)) { _, selected in selected }
+        env.merge(MetalOptimizations.environment(prefs: prefs, metalFXActive: settings.upscaler == "metalfx")) { _, selected in selected }
         if prefs.ultrawide {
             env["BB_PATCHES"] = "Resolution Patch \(resolution) (\(aspect))"
             env["BB_DMEM_MB"] = "9152"
@@ -82,6 +82,14 @@ struct OptimizedProfile {
         for option in MetalOptimizations.all { env.removeValue(forKey: option.id) }
         for key in ["BB_MTL_CLEAR_DISCARD_FILE", "BB_MTL_OVERWRITE_DISCARD_FILE", "BB_MTL_PROXY_CLEAR_FILE",
                     "BB_MTL_VERTEX_MATH_FILE", "BB_MTL_UPSCALE_ALPHA_FILE"] { env.removeValue(forKey: key) }
+        // Diagnostic controls must also override stale entries when switched OFF.
+        env.removeValue(forKey: "BB_GPU_PROFILE")
+        env.removeValue(forKey: "BB_MTL_GPU_TIMING")
+        if prefs.gpuProfile { env[gpuProfileVariable] = "1" }
+        if prefs.renderer == "metal" {
+            env.removeValue(forKey: "BB_VK_VALIDATION")
+            env.removeValue(forKey: "BB_PREUPLOAD")
+        }
         env.merge(environment) { _, selected in selected }
         return env
     }

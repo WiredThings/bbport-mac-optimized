@@ -4,7 +4,7 @@
 "%@ has no tools/macos/run.sh: set the repository in Settings" = "%@ 中没有 tools/macos/run.sh，请在设置中指定源码目录。";
 "%@ is already mapped to %@. Choose another key." = "%@ 已用于“%@”，请选择其他按键。";
 "%@ version %@ found; the port expects 01.09 (the game merged with update 1.09)" = "检测到 %@ 版本 %@；移植版需要 01.09（本体与 1.09 更新合并后的完整目录）";
-"0: the display refresh rate (up to 120 Hz); set a number for another limit" = "0 表示跟随显示器刷新率（最高 120 Hz）；可填写其他帧率上限。";
+"0: the display refresh rate (up to 120 Hz); set a number for another limit" = "0：不额外限制帧率";
 "30 (as on PS4)" = "30（PS4 原版）";
 "AMD FSR 3.1 temporal upscaling" = "AMD FSR 3.1 时序超分辨率";
 "Advanced" = "高级设置";
@@ -32,7 +32,7 @@
 "Checking or updating UI files…" = "正在检查或更新界面文件…";
 "Checkout" = "源码目录";
 "Choose" = "选择";
-"Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes." = "可选择喜欢的界面布局。关闭超宽屏也会恢复先前文件；若先前已有界面模组，则保留原有布局。更改前请停止游戏。";
+"Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes." = "先前文件可能已包含其他界面模组。更改前需退出游戏。";
 "Choose the bbport repository (with tools/macos/run.sh)" = "选择 bbport 源码目录（包含 tools/macos/run.sh）";
 "Choose the extracted UI fix folder to back up and install its .gfx files" = "选择已解压的界面修正目录，将先备份再安装 .gfx 文件";
 "Choose the extracted UI mod folder (optional)." = "选择已解压的界面模组文件夹（可选）。";
@@ -81,7 +81,7 @@
 "English (United Kingdom)" = "英语（英国）";
 "Expanded" = "已展开";
 "Extra variables" = "额外环境变量";
-"Extra variables are space-separated. The app manages resolution, renderer, saves and input settings." = "额外环境变量以空格分隔。分辨率、渲染器、存档、语言和输入设置由启动器管理。";
+"Extra variables are space-separated. The app manages resolution, renderer, saves and input settings." = "以空格分隔 NAME=value；启动器选项优先。";
 "Extract each mod into its own folder (with dvdroot_ps4, or chr/, parts/, … directly). When files collide, the mod lower in the list wins. Applied at start." = "请将每个模组解压到独立文件夹（包含 dvdroot_ps4，或直接包含 chr/、parts/ 等）。发生文件冲突时，列表靠后的模组优先；在启动时应用。";
 "FIFO (VSync)" = "FIFO（垂直同步）";
 "FIFO Relaxed" = "宽松 FIFO";
@@ -123,9 +123,9 @@
 "L2 / firearm" = "L2／射击";
 "Language" = "语言";
 "Launcher language" = "启动器语言";
-"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "启动器语言立即生效。游戏语言在下次启动时生效，需要游戏目录中包含对应文本和字体文件；不会改变语音。";
+"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "游戏文字在下次启动时切换，需有对应文本和字体。中文会自动启用区域补丁，语音不变。";
 "Leave on Auto for the optimized profile" = "优化配置建议保留自动选项";
-"Less ghosting on characters; costs about 10% FPS" = "减少角色拖影，帧率约降低 10%";
+"Less ghosting on characters; costs about 10% FPS" = "减少运动物体拖影。";
 "Load earlier" = "提前加载";
 "Load later" = "延后加载";
 "Load mods" = "加载模组";
@@ -166,7 +166,7 @@
 "Open last-run.log" = "打开 last-run.log";
 "Optimized Apple Silicon renderer · Settings apply when you press Play." = "Apple Silicon 优化渲染器 · 设置在启动游戏时生效。";
 "Optimized native renderer ready" = "优化版原生渲染器已就绪";
-"Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files." = "可选：下载并解压界面修正模组，选择其文件夹后会先备份再安装。取消“启用界面修正”可恢复先前文件。";
+"Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files." = "选择已解压的界面模组安装；关闭后恢复先前文件。";
 "Options / game menu" = "Options／游戏菜单";
 "Patches folder" = "补丁文件夹";
 "Performance" = "性能";
@@ -230,14 +230,14 @@
 "The folder does not exist" = "文件夹不存在";
 "The game exited" = "游戏已退出";
 "The game exited with code %@: see the log" = "游戏已退出，退出码 %@；请查看日志";
-"The game starts straight at its main menu, offline" = "以离线模式直接进入游戏主菜单";
+"The game starts straight at its main menu, offline" = "以离线模式进入主菜单。";
 "The game's own anti-aliasing" = "游戏自带抗锯齿";
 "The native graphics driver is missing." = "缺少原生图形驱动。";
 "The optimized native build is missing. See Settings for the source checkout." = "缺少优化版原生构建，请在设置中检查源码目录。";
 "The optimized renderer libraries are missing." = "缺少优化版渲染器库。";
 "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling." = "选择已在 out/ 中完成原生构建的优化版源码目录。启动器直接运行预先构建的原生渲染器。";
 "The port is not built yet: run bash tools/macos/build.sh in Terminal" = "尚未构建游戏引擎，请在终端运行 bash tools/macos/build.sh。";
-"The port's display, effects and patch settings as pages after Screen/Sound" = "在画面／声音选项后添加显示、特效和补丁设置页";
+"The port's display, effects and patch settings as pages after Screen/Sound" = "增加显示、特效和补丁设置页面。";
 "The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language." = "所选中文需要对应的文本和字体文件。当前游戏目录缺少部分资源，游戏可能回退到其他语言。";
 "The update failed: see the log" = "更新失败，请查看日志";
 "Third-party patches" = "第三方补丁";
@@ -246,7 +246,7 @@
 "Touchpad right" = "触摸板右侧";
 "Triangle / heal" = "△／回血";
 "Turkish" = "土耳其语";
-"Two-stage GPU pipeline" = "两阶段 GPU 流水线";
+"Two-stage GPU pipeline" = "并行绘制准备";
 "UI mod folder" = "界面模组文件夹";
 "Ultra Performance (x3)" = "超级性能（3 倍）";
 "Ultra Quality (x1.25)" = "超高质量（1.25 倍）";
@@ -254,7 +254,7 @@
 "Ultrawide UI Fixes on Nexus Mods ↗" = "Nexus Mods 超宽屏界面修正 ↗";
 "Ultrawide uses native rendering; upscaling is disabled." = "超宽屏使用原生渲染，已禁用超分辨率。";
 "Unlocked (patch)" = "解锁帧率（补丁）";
-"Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches." = "M2 测试采用解锁帧率模式。60 和 90 帧模式使用固定时间步长补丁。";
+"Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches." = "解锁模式使用可变时间步长，60／90 帧使用固定时间步长。";
 "Up to date. If the log says the Mac app was rebuilt, quit and reopen it." = "已是最新版本。若日志显示 Mac 应用已重新构建，请退出后重新打开。";
 "Updated" = "已更新";
 "Updating…" = "正在更新…";
@@ -288,10 +288,10 @@
 "Metal presentation mode" = "Metal 显示同步模式";
 
 "Occlusion culling (experimental)" = "遮挡剔除（实验）";
-"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "使用保守的可见性查询。若物体或灯光闪烁，请关闭；下次启动游戏生效。";
+"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "若物体或光照闪烁，可关闭此项。";
 
 "Game object motion vectors (experimental)" = "游戏物体速度图（实验）";
-"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "保留游戏速度图；动态模糊遵循“特效”设置。需要重启游戏。";
+"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "使用游戏速度图减少拖影；动态模糊由“游戏特效”控制。";
 "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX 合并相机运动与受支持的游戏物体速度图。暂不支持 RCAS 和 HDR。";
 
 /* Backend capability audit */
@@ -343,24 +343,42 @@
 "Applies only to verified direct bindings; pointer-based and unknown workloads retain full coverage." = "仅适用于确认过的直接绑定；指针访问与未知任务仍保留完整覆盖。";
 "Uses the same nearest resolve and tiling result, avoiding an intermediate full-size copy." = "保持原有最近邻还原与平铺结果，省去中间全尺寸副本。";
 "Adopted by choice despite noisy isolated FPS; the safe full-surface fallback remains." = "尽管单项帧率波动较大，仍按你的选择采用；保留安全的完整表面回退。";
-"Correctness tested, but repeatable gameplay benefit is unconfirmed; may increase compilation or resource overhead." = "已测试正确性，但尚无可重复的游戏收益；可能增加编译或资源开销。";
-"Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison." = "省去小缓冲区复制，但会增加计算通道切换。无可重复提帧收益；此前一次对照内存约增加 37 MiB。";
-"V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache." = "V2 浮点规则：收益未确认，浮点结果可能变化。切换后会重建着色器缓存。";
-"Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them." = "此前加载归档时进程内存约增加 0.6 GiB，默认关闭。关闭后忽略已有归档，不删除文件。";
-"Adopted" = "已采用";
+"Correctness tested, but repeatable gameplay benefit is unconfirmed; may increase compilation or resource overhead." = "帧率收益未确认，可能增加编译或资源开销。";
+"Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison." = "帧率收益未确认；一次对照中多用约 37 MiB 内存。";
+"V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache." = "可能改变浮点结果，收益未确认；切换后需重建着色器。";
+"Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them." = "此前加载时多用约 0.6 GiB 内存；关闭后忽略归档文件，保留文件。";
+"Adopted" = "已验证";
 "Adopted bundle" = "组合采用";
 "Experimental" = "实验性";
-"Higher memory use" = "内存代价较高";
+"Higher memory use" = "内存开销较高";
 "Metal optimizations" = "Metal 优化";
-"Applies on the next game launch. Resolution, effects and cache capacities are not changed by these defaults." = "下次启动游戏时生效。默认配置不改变分辨率、特效和缓存容量。";
-"Adopted optimizations (default on)" = "已采用的优化（默认开启）";
+"Applies on the next game launch. Resolution, effects and cache capacities are not changed by these defaults." = "下次启动生效；悬停可查看详情。不改变画质和缓存容量。";
+"Adopted optimizations (default on)" = "默认开启";
 "Some options were accepted as a bundle; individual FPS gains are not established." = "部分选项以组合方式验证并采用，尚不能确认每一项各自的帧率收益。";
-"Experimental optimizations (default off)" = "实验性优化（默认关闭）";
+"Experimental optimizations (default off)" = "可选实验";
 "Experimental does not mean faster. Read each result and cost before enabling an option." = "实验性不代表更快，启用前请查看对应的测试结论和代价。";
 "Restore recommended optimization defaults" = "恢复建议的优化默认值";
 "These controls target the bundled Metal engine and override matching developer environment entries. Quicksave, saves and game-quality settings are retained." = "这些选项用于内置 Metal 引擎，并优先于开发者环境变量中的同名设置；不会重置快速存档、存档和画质设置。";
 "Requires: %@" = "需要先启用：%@";
-"Experimental · adopted" = "实验性·已采用";
-"Experimental · adopted bundle" = "实验性·组合采用";
-"Reuse cross-chunk reads within one draw" = "在单次绘制内复用跨块读取";
-"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "仅在同一条绘制或计算指令内复用完整快照或子区间；写入、映射变化和环形缓冲区绕回后失效。不新增 GPU 缓冲区，帧率收益尚未确认。";
+"Experimental · adopted" = "实验性";
+"Experimental · adopted bundle" = "组合采用";
+"Reuse cross-chunk reads within one draw" = "复用跨块读取快照";
+"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "复用单次绘制内的读取快照，写入后失效。不增加 GPU 缓冲；帧率收益未确认。";
+
+"Reclaim invalid sampled textures" = "回收失效采样纹理";
+
+"Reclaims idle CPU-invalid sampled copies after GPU completion. Valid caches and their capacities are retained." = "GPU 完成使用后，回收闲置且因 CPU 写入而失效的副本；保留有效缓存与缓存容量。";
+
+"VSync" = "垂直同步";
+
+"Unsynced" = "不同步";
+
+"Shaders may compile when entering a scene for the first time." = "首次进入场景时可能需要编译着色器。";
+
+"Settings apply on the next game launch." = "设置在下次启动游戏时生效。";
+
+"Resolution is the output size. Upscaling is in Advanced." = "这里选择输出分辨率；升频设置在“高级设置”中。";
+
+"MetalFX uses camera motion and supported object velocity." = "MetalFX 使用相机运动和已支持物体的速度图。";
+
+"Replaced unsupported upscaler %@ with %@." = "已将不支持的升频器 %@ 替换为 %@。";

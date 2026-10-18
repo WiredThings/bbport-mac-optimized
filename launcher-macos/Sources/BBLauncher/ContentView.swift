@@ -84,7 +84,6 @@ struct LanguageSection: View {
             Text(L10n.key("Language"))
         } footer: {
             Text(L10n.key("Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged."))
-            Text(L10n.key("Chinese automatically enables the bundled region unlock patch at launch. Original game files are unchanged."))
         }
     }
 }
@@ -156,12 +155,11 @@ struct PlayBar: View {
             }
             return model.lastProblem ?? L10n.key("Details are in the log.")
         case .running, .stopping:
-            return L10n.key("The first launch after a build or a shader-cache reset compiles shaders: ")
-                + L10n.key("a black window for a few minutes is expected.")
+            return L10n.key("Shaders may compile when entering a scene for the first time.")
         case let .exited(status, bySignal) where status != 0 && !bySignal:
             return model.lastProblem ?? L10n.key("Details are in the log (Help ▸ Show the Last Run's Log).")
         default:
-            return L10n.key("Optimized Apple Silicon renderer · Settings apply when you press Play.")
+            return L10n.key("Settings apply on the next game launch.")
         }
     }
 
@@ -333,15 +331,10 @@ struct BasicDisplaySection: View {
         } header: {
             Text(L10n.key("Display"))
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.prefs.ultrawide
-                     ? L10n.key("Native ultrawide resolution. 3840 × 1080 is the tested M2 Max setting; higher resolutions cost more performance.")
-                     : L10n.key("Native resolution by default. Optional upscaling is in Advanced."))
-                Label(L10n.key("Graphical glitches after loading? Restarting the game often clears them."),
-                      systemImage: "info.circle")
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(.secondary)
+            Text(model.prefs.ultrawide
+                 ? L10n.key("Ultrawide uses native rendering; upscaling is disabled.")
+                 : L10n.key("Resolution is the output size. Upscaling is in Advanced."))
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -402,16 +395,15 @@ struct DisplaySection: View {
                 }
             } label: {
                 Text(L10n.key("Display"))
-                Text(L10n.key("Where the game's window opens"))
             }
-            Picker(selection: $model.prefs.presentMode) {
+            Picker(selection: Binding(get: { model.profile.presentMode }, set: { model.prefs.presentMode = $0 })) {
                 ForEach(Catalog.presentModes(renderer: model.prefs.renderer)) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Present mode"))
-                Text(L10n.key(model.prefs.renderer == "metal" ? "Metal presentation mode" : "KosmicKrisp has no Mailbox and uses FIFO instead"))
             }
-            Toggle(L10n.key("Allow HDR"), isOn: $model.prefs.hdr)
-                .disabled(model.prefs.renderer == "metal")
+            if model.prefs.renderer != "metal" {
+                Toggle(L10n.key("Allow HDR"), isOn: $model.prefs.hdr)
+            }
             Toggle(L10n.key("Show FPS"), isOn: $model.game.showFPS)
         } header: {
             Text(L10n.key("Display"))
@@ -428,7 +420,6 @@ struct FrameRateSection: View {
                 ForEach(Catalog.fpsModes) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Mode"))
-                Text(L10n.key("Which frame rate patch to apply to the game (BB_FPS)"))
             }
             LabeledContent {
                 HStack(spacing: 4) {
@@ -475,18 +466,20 @@ struct UpscalerSection: View {
                     Text(model.profile.metalRenderResolution).monospacedDigit()
                 }
             }
-            Toggle(L10n.key("Sharpening (RCAS)"), isOn: $model.game.sharpen)
-                .disabled(upscaler == "off" || model.prefs.renderer == "metal")
-            LabeledContent(L10n.key("Sharpness")) {
-                HStack {
-                    Slider(value: $model.game.sharpness, in: 0...2, step: 0.05)
-                        .frame(minWidth: 140)
-                    Text(String(format: "%.2f", model.game.sharpness))
-                        .monospacedDigit()
-                        .frame(width: 36, alignment: .trailing)
+            if model.prefs.renderer != "metal" {
+                Toggle(L10n.key("Sharpening (RCAS)"), isOn: $model.game.sharpen)
+                    .disabled(upscaler == "off")
+                LabeledContent(L10n.key("Sharpness")) {
+                    HStack {
+                        Slider(value: $model.game.sharpness, in: 0...2, step: 0.05)
+                            .frame(minWidth: 140)
+                        Text(String(format: "%.2f", model.game.sharpness))
+                            .monospacedDigit()
+                            .frame(width: 36, alignment: .trailing)
+                    }
                 }
+                .disabled(upscaler == "off" || !model.game.sharpen)
             }
-            .disabled(upscaler == "off" || !model.game.sharpen || model.prefs.renderer == "metal")
             if model.prefs.renderer == "metal" {
                 Toggle(isOn: $model.prefs.metalObjectMotion) {
                     Text(L10n.key("Game object motion vectors (experimental)"))
@@ -504,12 +497,12 @@ struct UpscalerSection: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if model.prefs.renderer == "metal" {
-                    Text(L10n.key("MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable."))
+                    Text(L10n.key("MetalFX uses camera motion and supported object velocity."))
                 }
                 if let replaced = model.game.replacedUpscaler {
-                    Text(L10n.format("bbport.ini asked for %@, which macOS cannot run; FSR 3.1 is selected instead.", String(describing: replaced)))
+                    Text(L10n.format("Replaced unsupported upscaler %@ with %@.", replaced, model.prefs.renderer == "metal" ? "MetalFX" : "FSR 3.1"))
                 }
-                Text(model.prefs.ultrawide ? L10n.key("Ultrawide uses native rendering; upscaling is disabled.") : L10n.key("Off renders every pixel at the selected resolution."))
+                if model.prefs.ultrawide { Text(L10n.key("Ultrawide uses native rendering; upscaling is disabled.")) }
             }
             .foregroundStyle(.secondary)
         }
@@ -551,9 +544,6 @@ struct EffectsSection: View {
             }
         } header: {
             Text(L10n.key("Game effects"))
-        } footer: {
-            Text(L10n.key("Game patches, applied at start."))
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -567,15 +557,15 @@ struct PerformanceSection: View {
                 ForEach(Catalog.drawPipe) { Text(L10n.key($0.label)).tag($0.value) }
             } label: {
                 Text(L10n.key("Two-stage GPU pipeline"))
-                Text(L10n.key("Leave on Auto for the optimized profile"))
             }
-            Picker(selection: $model.prefs.preupload) {
-                ForEach(Catalog.preupload) { Text(L10n.key($0.label)).tag($0.value) }
-            } label: {
-                Text(L10n.key("Background upload of game data"))
-                Text(L10n.key(model.prefs.renderer == "metal" ? "Metal reads unified memory directly; background upload is unused." : "Full can mean fewer hitches when areas load"))
+            if model.prefs.renderer != "metal" {
+                Picker(selection: $model.prefs.preupload) {
+                    ForEach(Catalog.preupload) { Text(L10n.key($0.label)).tag($0.value) }
+                } label: {
+                    Text(L10n.key("Background upload of game data"))
+                    Text(L10n.key("Full can mean fewer hitches when areas load"))
+                }
             }
-            .disabled(model.prefs.renderer == "metal")
             Picker(L10n.key("GPU data readbacks by the CPU"), selection: $model.prefs.readbacks) {
                 ForEach(Catalog.readbacks) { Text(L10n.key($0.label)).tag($0.value) }
             }
@@ -679,18 +669,17 @@ struct DeveloperSection: View {
 
             Toggle(isOn: $model.prefs.frameStats) {
                 Text(L10n.key("Frame statistics in the log"))
-                Text("BB_FRAME_STATS")
             }
             Toggle(isOn: $model.prefs.gpuProfile) {
                 Text(L10n.key("GPU profile in the log"))
-                Text(model.profile.gpuProfileVariable)
                 Text(L10n.key("Diagnostic timing can lower FPS; leave off for normal play."))
             }
-            Toggle(isOn: $model.prefs.vkValidation) {
-                Text(L10n.key("Vulkan validation layers"))
-                Text(L10n.key("Much slower; needs the validation layers installed"))
+            if model.prefs.renderer != "metal" {
+                Toggle(isOn: $model.prefs.vkValidation) {
+                    Text(L10n.key("Vulkan validation layers"))
+                    Text(L10n.key("Much slower; needs the validation layers installed"))
+                }
             }
-            .disabled(model.prefs.renderer == "metal")
             TextField(text: $model.prefs.extraEnv, prompt: Text("NAME=value NAME2=value")) {
                 Text(L10n.key("Extra variables"))
             }

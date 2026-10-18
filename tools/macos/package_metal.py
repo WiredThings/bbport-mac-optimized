@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 
-from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loads, minimum, run, sha
+from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loads, minimum, run, sha, strip_development_tools
 
 VERSION = '0.2.0-metal1'
 UPSTREAM = '11992198df6306dacf6ec37de57ee920db1acc11'
@@ -31,6 +31,8 @@ def select_metal_probe(baseline, explicit=None):
         source = Path(baseline) / 'Contents/Resources/bbport/bin/bb-probe'
     if not source.is_file():
         raise FileNotFoundError(f'Missing game runtime: {source}')
+    if b'BB_DEVELOPMENT_WORLD_WARPER_V1' in source.read_bytes():
+        raise ValueError('Development world warper probe cannot enter a release app')
     return source
 
 
@@ -50,10 +52,12 @@ def main():
     assert re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', args.version)
     assert re.fullmatch(r'[A-Za-z0-9-]+', args.verification_name)
     baseline, app = args.baseline.resolve(), args.app.resolve()
+    if (baseline/'Contents/Resources/bbport/DEVELOPMENT-WORLD-WARPER.json').exists():
+        raise ValueError('A development World Warper app cannot be a production baseline')
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -218,8 +222,11 @@ def main():
                     cross_chunk_snapshot_reuse_decision='Experimental OFF: target path was not exercised in four gameplay comparisons; no FPS gain established',
                     cross_chunk_snapshot_reuse_enable='BB_MTL_GATHER_REUSE=1',
                     cross_chunk_snapshot_reuse_scope='same draw/dispatch packet; <=512 bytes CPU metadata; no GPU allocation',
-                    launcher_optimization_controls=24,
-                    launcher_optimization_default_on=19,
+                    cpu_invalid_sampled_copy_reclaim_default=True,
+                    cpu_invalid_sampled_copy_reclaim_fallback='BB_TEXTURE_INVALID_RECLAIM=0',
+                    cpu_invalid_sampled_copy_reclaim_scope='Explicit CpuDirty, idle >=2s, unbound and GPU complete; no targets/storage/display/depth/MSAA/proxy or valid-cache eviction',
+                    launcher_optimization_controls=25,
+                    launcher_optimization_default_on=20,
                     launcher_optimization_default_off=5,
                     offline_library_experiment_removed=True,
                     compile_audit_default=False,compile_audit_enable='BB_MTL_COMPILE_AUDIT=1 (private diagnostic benchmark only)',
@@ -249,6 +256,7 @@ def main():
                        'Game velocity mirror adapted from IFreemz/shadPS4-Bloodborne-DLSS-FSR 149f63645bbb40fa587daa68fbf003b1f6dbcd7d (GPL-2.0-or-later).\n' +
                        'Launcher icon: Bloodborne Hunter\'s Mark in-game artwork, hosted by Bloodborne Wiki; see licenses/icons/HuntersMark-ATTRIBUTION.txt.\n' +
                        'Integration source and adapter patches: https://github.com/WiredThings/bbport-mac-optimized/tree/optimized\n')
+    strip_development_tools(engine)
     inspect_payload(engine)
     for p in (lib, probe):
         for ref in loads(p):

@@ -3,7 +3,7 @@
 ## Current M4 Metal work
 
 The launcher, runtime integration, ordered Metal adapter patches and validation notes through
-0.2.16 are on the fork's `optimized` branch:
+0.2.28 are on the fork's `optimized` branch:
 
 ```sh
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
@@ -11,9 +11,12 @@ git clone --recurse-submodules --branch optimized https://github.com/WiredThings
 
 Follow [METAL-BACKEND.md](METAL-BACKEND.md) for the pinned Metal engine and build settings.
 The applied submodule worktrees are represented by the versioned ordered patch series;
-`gpu/patches/metal` is part of this repository. The latest local installation and app/source
-archives do not by themselves create a GitHub Release. See
-[METAL-ALPHA-MERGE.md](METAL-ALPHA-MERGE.md) for the current change and validation boundaries.
+`gpu/patches/metal` is part of this repository. The v0.2.28 tag and Release correspond to the current production launcher. See
+[0.2.28.md](0.2.28.md) for the current changes and validation boundaries. The downloadable
+source archive includes pinned submodule source with the adapter patches applied; private World Warper tooling,
+recorded routes, local game data and saves are excluded. Use the recursive Git clone above
+for building: unlike the inspection archive, it retains the Git metadata required by the
+revision guards in the build scripts.
 
 ## Original standalone release (historical)
 
@@ -37,4 +40,4 @@ The committed FSR-Vulkan and Mesa patches were checked against the exact local d
 
 Python 3.11 is bundled with its license; the precise version appears in `THIRD-PARTY-NOTICES.txt` inside the app. CPython source is available from [python.org](https://www.python.org/downloads/source/). Boost, magic_enum and robin-map headers come from the Homebrew packages used by the build scripts.
 
-The packager also produces a local source export containing checked-out project and dependency sources. Only the standalone app ZIP is uploaded as a release asset; source is accessible through this tagged repository and the pinned dependency links above. Component license notices are included in the app.
+The packager also produces a local source export containing checked-out project and dependency sources. The public Release includes the app ZIP and a source archive with pinned submodule source. Source is also accessible through this tagged repository and the dependency links above. Component license notices are included in the app.

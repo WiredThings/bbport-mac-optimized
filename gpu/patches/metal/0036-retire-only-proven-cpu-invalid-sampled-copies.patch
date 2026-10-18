@@ -1,0 +1,186 @@
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <xxhash.h>
++#include <filesystem>
+ 
+ #include "bbport_toggles.h"
+ #include "bbport_sections.h"
+@@ -1464,8 +1465,106 @@
+     };
+ 
+     CollectReleasedGuestImages();
++    AuditGuestImages();
+     GarbageCollectImages();
++    CollectInvalidGuestImages();
+     GarbageCollectSamplers();
++}
++
++void TextureCache::CollectInvalidGuestImages() {
++    // Candidate remains opt-in until the isolated native-travel comparison passes.
++    static const bool enabled = [] {
++        const auto* e = std::getenv("BB_TEXTURE_INVALID_RECLAIM");
++        return e && e[0] == '1';
++    }();
++    if (!enabled || !BbResourceLifetime::Enabled() || BbToggle::Disabled(BbToggle::TextureCollector)) return;
++    const auto now = std::chrono::steady_clock::now();
++    if (now - invalid_collect_time < std::chrono::seconds(1)) return;
++    invalid_collect_time = now;
++    // Do not churn actively rewritten textures. GC history uses wall-clock seconds,
++    // not an assumed frame rate, and touches on every cache binding.
++    const u64 cutoff = gc_tick_at_second[(gc_second - 2) % gc_tick_at_second.size()];
++    if (!cutoff) return;
++    backend.BeforeImageAccess();
++    std::scoped_lock lock{mutex};
++    std::vector<ImageId> candidates;
++    u64 bytes = 0;
++    for (const auto& [index, tag] : guest_image_owners) {
++        const ImageId id{index};const auto& image=slot_images[id];
++        if (image.lru_touched_tick >= cutoff || !image.CanReleaseInvalidBacking()) continue;
++        candidates.push_back(id);
++        for (const auto& backing:image.backing_images)
++            if (backing.image.native || backing.image.image) bytes+=backing.image.size_bytes;
++        if (candidates.size()>=32 || bytes>=(16ULL<<20)) break;
++    }
++    if (candidates.empty()) return;
++    backend.EndRendering();
++    for (const auto id:candidates) FreeImage(id);
++    invalid_collected_images+=candidates.size();invalid_collected_bytes+=bytes;
++    std::printf("Texture invalid reclaim: images=%llu capacity=%llu bytes; CPU-invalid, idle, GPU-complete copies only; valid cache unchanged\n",
++        (unsigned long long)invalid_collected_images,(unsigned long long)invalid_collected_bytes);
++}
++
++void TextureCache::AuditGuestImages() {
++    // Private diagnostics only: stream metadata, never read texture pixels or create GPU resources.
++    static const char* directory = std::getenv("BB_TEXTURE_AUDIT_DIR");
++    if (!directory || !*directory || !BbResourceLifetime::Enabled()) return;
++    const auto now = std::chrono::steady_clock::now();
++    if (now - image_audit_time < std::chrono::seconds(1)) return;
++    image_audit_time = now;
++    const std::filesystem::path root{directory};
++    FILE* request = std::fopen((root / "request").c_str(), "r");
++    if (!request) return;
++    unsigned sequence = 0;
++    const bool valid = std::fscanf(request, "%u", &sequence) == 1;
++    std::fclose(request);
++    if (!valid || sequence != image_audit_sequence + 1 || sequence > 32) return;
++    const auto final = root / ("textures-" + std::to_string(sequence) + ".csv");
++    const auto pending = root / "textures.pending";
++    FILE* output = std::fopen(pending.c_str(), "w");
++    if (!output) return;
++    backend.BeforeImageAccess();
++    std::scoped_lock lock{mutex};
++    std::fprintf(output, "uid,address,guest_bytes,host_bytes,retired_bytes,width,height,format,tile,flags,usage,binding,proxy,access_tick,write_tick,gpu_complete,lru_tick,current_tick,gc_tick,tag_generation,tag_domain,tag_state,current_owner,depth,samples\n");
++    u64 count = 0, capacity = 0, dirty_safe = 0;
++    for (const auto& [index, tag] : guest_image_owners) {
++        const auto& image = slot_images[ImageId{index}];
++        if (False(image.flags & ImageFlagBits::Registered)) continue;
++        u64 bytes = 0, retired = 0;
++        for (const auto& backing : image.backing_images) {
++            if (!backing.image.native && !backing.image.image) continue;
++            bytes += backing.image.size_bytes;
++            if (backing.retired) retired += backing.image.size_bytes;
++        }
++        const u32 usage = image.usage.texture | image.usage.storage << 1 |
++            image.usage.render_target << 2 | image.usage.depth_target << 3 | image.usage.vo_surface << 4;
++        const u32 binding = image.binding.is_bound | image.binding.is_target << 1 |
++            image.binding.needs_rebind << 2 | image.binding.force_general << 3;
++        const bool complete = backend.IsFreeKnown(image.tick_accessed_last) &&
++            (!image.gpu_write_tick || backend.IsFreeKnown(image.gpu_write_tick));
++        const auto owner = BbResourceLifetime::Get().Owner(image.guest_begin, image.info.guest_size);
++        // The image UID is monotonic; address reuse is not mistaken for object survival.
++        const unsigned state = unsigned(BbResourceLifetime::Get().Status(tag));
++        if (image.CanReleaseInvalidBacking()) dirty_safe += bytes;
++        ++count; capacity += bytes;
++        const auto u = [](u64 n) { return static_cast<unsigned long long>(n); };
++        std::fprintf(output, "%llu,%llu,%llu,%llu,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%u,%llu,%llu,%llu,%llu,%u,%u,%llu,%u,%u\n",
++            u(image.image_uid), u(image.guest_begin), u(image.info.guest_size), u(bytes), u(retired),
++            image.info.size.width, image.info.size.height, u32(image.info.pixel_format), u32(image.info.tile_mode),
++            u32(image.flags), usage, binding, unsigned(image.scene_proxy), u(image.tick_accessed_last),
++            u(image.gpu_write_tick), unsigned(complete), u(image.lru_touched_tick), u(backend.CurrentTick()),
++            u(gc_tick), u(tag.generation), unsigned(tag.domain), state, u(owner.generation),
++            unsigned(image.info.props.is_depth || bool(image.depth_id)), image.info.num_samples);
++        if (count >= 16384) break;
++    }
++    const bool ok = !std::ferror(output);
++    const bool closed = std::fclose(output) == 0;
++    std::error_code error;
++    if (ok && closed) std::filesystem::rename(pending, final, error);
++    if (!ok || !closed || error) return;
++    image_audit_sequence = sequence;
++    std::printf("Texture retention audit: sequence=%u images=%llu capacity=%llu cpu-invalid-safe=%llu; metadata only, no collection change\n",
++        sequence, (unsigned long long)count, (unsigned long long)capacity, (unsigned long long)dirty_safe);
+ }
+ 
+ void TextureCache::TouchImage(const Image& image) {
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.h
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+@@ -401,6 +401,8 @@
+     }
+ 
+     void CollectReleasedGuestImages();
++    void AuditGuestImages();
++    void CollectInvalidGuestImages();
+     void AssociateGuestImage(ImageId image_id);
+     void GarbageCollectImages();
+     void GarbageCollectSamplers();
+@@ -419,6 +421,10 @@
+     u64 total_used_memory = 0;
+     std::unordered_map<u32, BbResourceLifetime::Tag> guest_image_owners;
+     std::chrono::steady_clock::time_point guest_collect_time{};
++    std::chrono::steady_clock::time_point image_audit_time{};
++    u64 image_audit_sequence{};
++    std::chrono::steady_clock::time_point invalid_collect_time{};
++    u64 invalid_collected_images{}, invalid_collected_bytes{};
+     u64 gc_evictions = 0, gc_downloads = 0; ///< bbport: pressure report
+     std::chrono::steady_clock::time_point gc_report_time{};
+     /// bbport: gc_tick at each of the last 64 seconds (GarbageCollectImages).
+--- a/gpu/shadps4/video_core/texture_cache/image.cpp
++++ b/gpu/shadps4/video_core/texture_cache/image.cpp
+@@ -93,6 +93,13 @@
+         !scene_proxy && !binding.is_bound && !binding.is_target && !binding.needs_rebind &&
+         backend->IsFreeKnown(tick_accessed_last) &&
+         (!gpu_write_tick || backend->IsFreeKnown(gpu_write_tick));
++}
++
++bool Image::CanReleaseInvalidBacking() const {
++    // An explicit CPU write already invalidated this native copy. Mere inactivity,
++    // unknown allocation ownership and a MaybeCpuDirty page are not sufficient.
++    return True(flags & ImageFlagBits::CpuDirty) && !info.props.is_depth && !depth_id &&
++        info.num_samples == 1 && CanReleaseGuestBacking();
+ }
+ 
+ UniqueImage::~UniqueImage() {
+--- a/gpu/shadps4/video_core/texture_cache/image.h
++++ b/gpu/shadps4/video_core/texture_cache/image.h
+@@ -128,6 +128,7 @@
+     }
+ 
+     bool CanReleaseGuestBacking() const;
++    bool CanReleaseInvalidBacking() const;
+ 
+     bool SafeToDownload() const {
+         return True(flags & ImageFlagBits::GpuModified) && False(flags & (ImageFlagBits::Dirty));
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1311,6 +1311,18 @@
+         CHECK(!image.CanReleaseGuestBacking()); // pending recording/submission cannot retire
+         Settle(f);
+         CHECK(image.CanReleaseGuestBacking());
++        CHECK(!image.CanReleaseInvalidBacking()); // keep a valid cold cache entry
++        image.flags|=ImageFlagBits::MaybeCpuDirty;
++        CHECK(!image.CanReleaseInvalidBacking()); // adjacent page writes are not proof
++        image.flags|=ImageFlagBits::CpuDirty;
++        CHECK(image.CanReleaseInvalidBacking());
++        image.binding.is_bound=1;CHECK(!image.CanReleaseInvalidBacking());image.binding.is_bound=0;
++        image.usage.render_target=1;CHECK(!image.CanReleaseInvalidBacking());image.usage.render_target=0;
++        image.info.props.is_depth=true;CHECK(!image.CanReleaseInvalidBacking());image.info.props.is_depth=false;
++        image.depth_id=ImageId{1};CHECK(!image.CanReleaseInvalidBacking());image.depth_id={};
++        image.flags=ImageFlagBits::Registered|ImageFlagBits::CpuDirty|ImageFlagBits::GpuModified;
++        CHECK(!image.CanReleaseInvalidBacking());
++        image.flags=ImageFlagBits::Registered;
+         image.usage.render_target=1;CHECK(!image.CanReleaseGuestBacking());image.usage.render_target=0;
+         image.usage.depth_target=1;CHECK(!image.CanReleaseGuestBacking());image.usage.depth_target=0;
+         image.usage.storage=1;CHECK(!image.CanReleaseGuestBacking());image.usage.storage=0;

@@ -30,6 +30,17 @@ final class OptimizedProfileTests: XCTestCase {
         XCTAssertEqual(profile.gpuProfileVariable, "BB_GPU_PROFILE")
     }
 
+    func testMetalPresentChoicesRepresentDistinctRuntimeBehaviors() {
+        XCTAssertEqual(Catalog.presentModes(renderer: "metal").map(\.value), ["Fifo", "Mailbox"])
+        for mode in ["Mailbox", "Immediate", "FifoRelaxed"] {
+            var prefs = LauncherPrefs(); prefs.presentMode = mode
+            XCTAssertEqual(OptimizedProfile(prefs: prefs, game: GameSettings()).presentMode, "Mailbox")
+            XCTAssertEqual(prefs.presentMode, mode)
+            prefs.renderer = "vulkan"
+            XCTAssertEqual(OptimizedProfile(prefs: prefs, game: GameSettings()).presentMode, mode)
+        }
+    }
+
     func testGameVelocityPersistenceAndBackendIsolation() {
         let suite = "bbport.velocity.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

@@ -4,7 +4,7 @@
 "%@ has no tools/macos/run.sh: set the repository in Settings" = "%@ has no tools/macos/run.sh: set the repository in Settings";
 "%@ is already mapped to %@. Choose another key." = "%@ is already mapped to %@. Choose another key.";
 "%@ version %@ found; the port expects 01.09 (the game merged with update 1.09)" = "%@ version %@ found; the port expects 01.09 (the game merged with update 1.09)";
-"0: the display refresh rate (up to 120 Hz); set a number for another limit" = "0: the display refresh rate (up to 120 Hz); set a number for another limit";
+"0: the display refresh rate (up to 120 Hz); set a number for another limit" = "0: no additional frame limit";
 "30 (as on PS4)" = "30 (as on PS4)";
 "AMD FSR 3.1 temporal upscaling" = "AMD FSR 3.1 temporal upscaling";
 "Advanced" = "Advanced";
@@ -32,7 +32,7 @@
 "Checking or updating UI files…" = "Checking or updating UI files…";
 "Checkout" = "Checkout";
 "Choose" = "Choose";
-"Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes." = "Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes.";
+"Choose any UI layout you prefer. Turning off Ultrawide also restores your previous files. If those files already had a UI mod, that layout will remain. Stop the game before making changes." = "Previous files may already contain a UI mod. Stop the game before changing this.";
 "Choose the bbport repository (with tools/macos/run.sh)" = "Choose the bbport repository (with tools/macos/run.sh)";
 "Choose the extracted UI fix folder to back up and install its .gfx files" = "Choose the extracted UI fix folder to back up and install its .gfx files";
 "Choose the extracted UI mod folder (optional)." = "Choose the extracted UI mod folder (optional).";
@@ -81,7 +81,7 @@
 "English (United Kingdom)" = "English (United Kingdom)";
 "Expanded" = "Expanded";
 "Extra variables" = "Extra variables";
-"Extra variables are space-separated. The app manages resolution, renderer, saves and input settings." = "Extra variables are space-separated. The app manages resolution, renderer, saves and input settings.";
+"Extra variables are space-separated. The app manages resolution, renderer, saves and input settings." = "Space-separated NAME=value entries. Launcher controls take precedence.";
 "Extract each mod into its own folder (with dvdroot_ps4, or chr/, parts/, … directly). When files collide, the mod lower in the list wins. Applied at start." = "Extract each mod into its own folder (with dvdroot_ps4, or chr/, parts/, … directly). When files collide, the mod lower in the list wins. Applied at start.";
 "FIFO (VSync)" = "FIFO (VSync)";
 "FIFO Relaxed" = "FIFO Relaxed";
@@ -123,9 +123,9 @@
 "L2 / firearm" = "L2 / firearm";
 "Language" = "Language";
 "Launcher language" = "Launcher language";
-"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged.";
+"Launcher language changes immediately. Game language applies on the next launch and requires the matching text and font files in your game dump. Voice audio is unchanged." = "Game text changes next launch and requires matching fonts and text files. Chinese enables the region patch; voice audio is unchanged.";
 "Leave on Auto for the optimized profile" = "Leave on Auto for the optimized profile";
-"Less ghosting on characters; costs about 10% FPS" = "Less ghosting on characters; costs about 10% FPS";
+"Less ghosting on characters; costs about 10% FPS" = "Reduces ghosting on moving objects.";
 "Load earlier" = "Load earlier";
 "Load later" = "Load later";
 "Load mods" = "Load mods";
@@ -166,7 +166,7 @@
 "Open last-run.log" = "Open last-run.log";
 "Optimized Apple Silicon renderer · Settings apply when you press Play." = "Optimized Apple Silicon renderer · Settings apply when you press Play.";
 "Optimized native renderer ready" = "Optimized native renderer ready";
-"Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files." = "Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files.";
+"Optional: download and extract your preferred UI fix, then choose its folder to back up and install it. Uncheck Enable UI fix to restore the previous files." = "Choose an extracted UI mod to install. Disabling restores the previous files.";
 "Options / game menu" = "Options / game menu";
 "Patches folder" = "Patches folder";
 "Performance" = "Performance";
@@ -230,14 +230,14 @@
 "The folder does not exist" = "The folder does not exist";
 "The game exited" = "The game exited";
 "The game exited with code %@: see the log" = "The game exited with code %@: see the log";
-"The game starts straight at its main menu, offline" = "The game starts straight at its main menu, offline";
+"The game starts straight at its main menu, offline" = "Starts offline at the main menu.";
 "The game's own anti-aliasing" = "The game's own anti-aliasing";
 "The native graphics driver is missing." = "The native graphics driver is missing.";
 "The optimized native build is missing. See Settings for the source checkout." = "The optimized native build is missing. See Settings for the source checkout.";
 "The optimized renderer libraries are missing." = "The optimized renderer libraries are missing.";
 "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling." = "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling.";
 "The port is not built yet: run bash tools/macos/build.sh in Terminal" = "The port is not built yet: run bash tools/macos/build.sh in Terminal";
-"The port's display, effects and patch settings as pages after Screen/Sound" = "The port's display, effects and patch settings as pages after Screen/Sound";
+"The port's display, effects and patch settings as pages after Screen/Sound" = "Adds display, effects and patch pages.";
 "The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language." = "The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language.";
 "The update failed: see the log" = "The update failed: see the log";
 "Third-party patches" = "Third-party patches";
@@ -246,7 +246,7 @@
 "Touchpad right" = "Touchpad right";
 "Triangle / heal" = "Triangle / heal";
 "Turkish" = "Turkish";
-"Two-stage GPU pipeline" = "Two-stage GPU pipeline";
+"Two-stage GPU pipeline" = "Parallel draw preparation";
 "UI mod folder" = "UI mod folder";
 "Ultra Performance (x3)" = "Ultra Performance (x3)";
 "Ultra Quality (x1.25)" = "Ultra Quality (x1.25)";
@@ -254,7 +254,7 @@
 "Ultrawide UI Fixes on Nexus Mods ↗" = "Ultrawide UI Fixes on Nexus Mods ↗";
 "Ultrawide uses native rendering; upscaling is disabled." = "Ultrawide uses native rendering; upscaling is disabled.";
 "Unlocked (patch)" = "Unlocked (patch)";
-"Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches." = "Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches.";
+"Unlocked is the tested M2 setting. The 60 and 90 modes use fixed-timestep patches." = "Unlocked uses variable timesteps; 60 and 90 use fixed timesteps.";
 "Up to date. If the log says the Mac app was rebuilt, quit and reopen it." = "Up to date. If the log says the Mac app was rebuilt, quit and reopen it.";
 "Updated" = "Updated";
 "Updating…" = "Updating…";
@@ -288,10 +288,10 @@
 "Metal presentation mode" = "Metal presentation mode";
 
 "Occlusion culling (experimental)" = "Occlusion culling (experimental)";
-"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "Conservative visibility queries. Disable if objects or lights flicker; applies on next launch.";
+"Conservative visibility queries. Disable if objects or lights flicker; applies on next launch." = "Disable if objects or lights flicker.";
 
 "Game object motion vectors (experimental)" = "Game object motion vectors (experimental)";
-"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "Preserves game velocity; motion blur follows the Effects setting. Restart required.";
+"Preserves game velocity; motion blur follows the Effects setting. Restart required." = "Uses game velocity to reduce ghosting. Motion blur follows Effects.";
 "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable." = "MetalFX combines camera motion with supported game object velocity. RCAS and HDR are unavailable.";
 
 /* Backend capability audit */
@@ -343,24 +343,42 @@
 "Applies only to verified direct bindings; pointer-based and unknown workloads retain full coverage." = "Applies only to verified direct bindings; pointer-based and unknown workloads retain full coverage.";
 "Uses the same nearest resolve and tiling result, avoiding an intermediate full-size copy." = "Uses the same nearest resolve and tiling result, avoiding an intermediate full-size copy.";
 "Adopted by choice despite noisy isolated FPS; the safe full-surface fallback remains." = "Adopted by choice despite noisy isolated FPS; the safe full-surface fallback remains.";
-"Correctness tested, but repeatable gameplay benefit is unconfirmed; may increase compilation or resource overhead." = "Correctness tested, but repeatable gameplay benefit is unconfirmed; may increase compilation or resource overhead.";
-"Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison." = "Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison.";
-"V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache." = "V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache.";
-"Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them." = "Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them.";
-"Adopted" = "Adopted";
+"Correctness tested, but repeatable gameplay benefit is unconfirmed; may increase compilation or resource overhead." = "FPS benefit unconfirmed; may add compilation or resource overhead.";
+"Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison." = "FPS benefit unconfirmed; about 37 MiB more memory in one comparison.";
+"V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache." = "May change floating-point results; FPS benefit unconfirmed. Switching rebuilds shaders.";
+"Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them." = "Earlier loading used about 0.6 GiB more memory. Off ignores archive files without deleting them.";
+"Adopted" = "Verified";
 "Adopted bundle" = "Adopted bundle";
 "Experimental" = "Experimental";
 "Higher memory use" = "Higher memory use";
 "Metal optimizations" = "Metal optimizations";
-"Applies on the next game launch. Resolution, effects and cache capacities are not changed by these defaults." = "Applies on the next game launch. Resolution, effects and cache capacities are not changed by these defaults.";
-"Adopted optimizations (default on)" = "Adopted optimizations (default on)";
+"Applies on the next game launch. Resolution, effects and cache capacities are not changed by these defaults." = "Next launch. Hover over an option for details; quality and cache capacities are unchanged.";
+"Adopted optimizations (default on)" = "Enabled by default";
 "Some options were accepted as a bundle; individual FPS gains are not established." = "Some options were accepted as a bundle; individual FPS gains are not established.";
-"Experimental optimizations (default off)" = "Experimental optimizations (default off)";
+"Experimental optimizations (default off)" = "Optional experiments";
 "Experimental does not mean faster. Read each result and cost before enabling an option." = "Experimental does not mean faster. Read each result and cost before enabling an option.";
 "Restore recommended optimization defaults" = "Restore recommended optimization defaults";
 "These controls target the bundled Metal engine and override matching developer environment entries. Quicksave, saves and game-quality settings are retained." = "These controls target the bundled Metal engine and override matching developer environment entries. Quicksave, saves and game-quality settings are retained.";
 "Requires: %@" = "Requires: %@";
-"Experimental · adopted" = "Experimental · adopted";
-"Experimental · adopted bundle" = "Experimental · adopted bundle";
-"Reuse cross-chunk reads within one draw" = "Reuse cross-chunk reads within one draw";
-"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established.";
+"Experimental · adopted" = "Experimental";
+"Experimental · adopted bundle" = "Adopted bundle";
+"Reuse cross-chunk reads within one draw" = "Reuse cross-chunk snapshots";
+"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "Reuses read snapshots within a draw or dispatch; writes invalidate them. No extra GPU buffers; FPS benefit unconfirmed.";
+
+"Reclaim invalid sampled textures" = "Reclaim invalid sampled textures";
+
+"Reclaims idle CPU-invalid sampled copies after GPU completion. Valid caches and their capacities are retained." = "Reclaims idle CPU-invalid copies after GPU completion; valid cached textures and cache capacities are retained.";
+
+"VSync" = "VSync";
+
+"Unsynced" = "Unsynced";
+
+"Shaders may compile when entering a scene for the first time." = "Shaders may compile when entering a scene for the first time.";
+
+"Settings apply on the next game launch." = "Settings apply on the next game launch.";
+
+"Resolution is the output size. Upscaling is in Advanced." = "Resolution is the output size. Upscaling is in Advanced.";
+
+"MetalFX uses camera motion and supported object velocity." = "MetalFX uses camera motion and supported object velocity.";
+
+"Replaced unsupported upscaler %@ with %@." = "Replaced unsupported upscaler %@ with %@.";

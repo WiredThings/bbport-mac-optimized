@@ -1,3 +1,29 @@
+# Bloodborne Optimized for macOS
+
+Download [0.2.28 for Apple Silicon](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.28).
+This fork defaults to direct Metal rendering and includes the memory-lifetime, two-level GPU
+address table, motion-vector and launcher updates documented in the
+[0.2.28 release notes](docs/release/0.2.28.md).
+
+Requires macOS 26+, Rosetta 2, and your own decrypted Bloodborne files merged with update 1.09.
+Extract the ZIP, move **Bloodborne Optimized.app** to Applications, choose the merged game folder,
+and press **Play**. Existing save folders are preserved. The app is ad-hoc signed, not notarized.
+
+The Metal path uses x86-64 host code through Rosetta; direct Metal rendering does not mean the
+game itself is ARM-native. Resolution, effects and cache capacities are preserved by the default
+optimizations. No game data, saves, shader caches or development mods are distributed; the
+credited Hunter's Mark launcher icon is the intentional artwork asset.
+
+- [Current releases](https://github.com/WiredThings/bbport-mac-optimized/releases)
+- [Optimization controls and evidence](docs/release/METAL-OPTIMIZATION-CONTROLS.md)
+- [Source and build instructions](docs/release/SOURCE.md)
+- [Report an issue](https://github.com/WiredThings/bbport-mac-optimized/issues)
+
+The original standalone overview below describes the earlier Vulkan-based upstream release;
+its M2 measurements and 0.1.0 download links are historical.
+
+---
+
 # bbport-mac-optimized
 
 Bloodborne on Apple Silicon, with an optimized renderer, ultrawide support and a simple Mac launcher.

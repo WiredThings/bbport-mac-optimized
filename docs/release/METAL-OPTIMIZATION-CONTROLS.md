@@ -1,12 +1,12 @@
-# Metal optimization controls — 0.2.26
+# Metal optimization controls — 0.2.28
 
-The launcher exposes 24 runtime controls under **Advanced → Metal optimizations**, in English,
+The launcher exposes 25 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. Existing object-motion and occlusion controls stay
 in their current sections. No resolution, effects, save state or cache capacity is changed.
 
 ## Defaults and evidence
 
-The 19 already adopted controls retain their current ON defaults. A missing preference uses
+The 20 already adopted controls retain their current ON defaults. A missing preference uses
 the current runtime default; existing explicit preferences remain authoritative.
 
 - The two-level address table, direct scene-copy clear and idle/startup object reclamation
@@ -82,3 +82,31 @@ Retained local evidence: `outputs/benchmark-m4-offline-libraries/retirement.json
 The experiment illustrates that offline Metal IR does not eliminate final GPU pipeline
 compilation or supply unknown runtime descriptors. It does not establish that precompilation
 is useless in engines with a complete pipeline manifest.
+
+## 0.2.28 launcher audit
+
+All 25 optimization IDs were matched to concrete current Metal engine consumers. The new
+CPU-invalid sampled-copy reclaimer is now visible, retaining its already enabled 0.2.27
+default. Existing dictionaries and legacy explicit overrides are preserved. Valid cache
+capacity, image quality, game saves and existing effect choices are unchanged.
+
+- Metal shows only its actual VSync / unsynchronized presentation choices. Legacy Immediate
+  and relaxed-FIFO selections use their previous effective unsynchronized behavior, without
+  rewriting the stored preference merely to display it. Vulkan retains all four choices.
+- HDR, RCAS/sharpness, preupload and Vulkan validation are shown only for Vulkan. Their stored
+  preferences survive backend changes. CPU readback controls remain because the current
+  memory tracker still consumes them; they were not classified as unused without evidence.
+- MetalFX alpha merging is gated by actual MetalFX availability, including ultrawide forcing
+  upscaling off. Its requested preference is retained when temporarily unavailable.
+- GPU timing OFF removes both legacy profiling variables from the effective environment;
+  Metal also drops Vulkan validation and unused preupload entries.
+- Frame-limit zero now correctly says no additional limit. Old M2/Max benchmark recommendations,
+  generic restart advice, a misleading native-renderer claim and repeated explanatory footers
+  were removed. Adopted-row detail is in help; optional experiments keep concise visible
+  uncertainty/cost notes. Badges distinguish verified, experimental and adopted-bundle evidence.
+- English, Simplified Chinese and Traditional Chinese resources remain in sync. This is a
+  launcher-only update; the production probe and renderer are byte-identical to 0.2.27.
+
+The full-app QA bundle uses a distinct preference domain and a QA-only data path. Production
+ignores that path override. Tests cover every flag, dependency gating, legacy migration,
+backend isolation, presentation aliases, diagnostic precedence and localized format arguments.
