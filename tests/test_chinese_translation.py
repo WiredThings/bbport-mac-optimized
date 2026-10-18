@@ -172,3 +172,46 @@ sys.exit(42)
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertFalse((data / 'out/observed.json').exists())
+
+    def test_supervised_reloads_rebuild_and_remove_community_views(self):
+        folder = Path(translation.import_package(self.archive(), self.data, '11')['folder'])
+        game = self.root/'game'; game.mkdir()
+        (game/'eboot.bin').write_bytes(b'original')
+        runtime = self.root/'runtime'; scripts=runtime/'scripts'; scripts.mkdir(parents=True)
+        tools=runtime/'tools/macos'; tools.mkdir(parents=True)
+        shutil.copy2(ROOT/'run.sh',runtime/'run.sh')
+        shutil.copy2(ROOT/'tools/macos/supervise_restart.sh',tools/'supervise_restart.sh')
+        for name in ('mods.py','chinese_translation.py'):
+            shutil.copy2(ROOT/'scripts'/name,scripts/name)
+        for name in ('prepare.py','link_libc.py','link_modules.py','content_profile.py','patches.py'):
+            (scripts/name).write_text("import sys\nfrom pathlib import Path\n"
+                "out=Path(sys.argv[sys.argv.index('--out')+1]);(out/'patches.dmem').write_text('5056\\n')\n")
+        canonical=runtime/'bin/bb-probe-metal';canonical.parent.mkdir()
+        canonical.write_text('#!/bin/bash\nexit 99\n');canonical.chmod(0o755)
+        helper=runtime/'bin/Bloodborne Game.app/Contents/MacOS/bb-probe-metal'
+        helper.parent.mkdir(parents=True)
+        helper.write_text('#!'+sys.executable+'\n'+'''import json,os,sys
+from pathlib import Path
+state=Path(os.environ['BB_DATA_DIR'])/'reloads.json'
+entries=json.loads(state.read_text()) if state.exists() else []
+game=Path(sys.argv[sys.argv.index('--app0')+1])
+assert (game/'dvdroot_ps4/menu/engus/font.gfx').read_bytes().startswith(b'community')
+assert all(not Path(entry['view']).exists() for entry in entries)
+entries.append(dict(view=str(game),pending=os.environ.get('BB_QUICKLOAD_PENDING')))
+state.write_text(json.dumps(entries))
+sys.exit([76,75,0][len(entries)-1])
+''');helper.chmod(0o755)
+        (runtime/'.packaged').touch()
+        data=self.root/'session'
+        env={k:v for k,v in os.environ.items() if not k.startswith('BB_')}
+        env.update(PYTHON=sys.executable,BB_PREBUILT='1',BB_RENDERER='metal',BB_PROBE=str(canonical),
+                   BB_DATA_DIR=str(data),BB_GAME_DIR=str(game),BB_MODS_ENABLED='0',
+                   BB_CHINESE_SOURCE='community',BB_CHINESE_LANGUAGE='11',BB_CHINESE_TRANSLATION_DIR=str(folder),
+                   BB_PC_MODEL='1',BB_AUTO_NOHIZ='0',BB_RENDER_RES='1920x1080')
+        result=subprocess.run(['/bin/bash',str(tools/'supervise_restart.sh')],env=env,
+                              capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        entries=json.loads((data/'reloads.json').read_text())
+        self.assertEqual([x['pending'] for x in entries],[None,'1',None])
+        self.assertTrue(all(not Path(x['view']).exists() for x in entries))
+        self.assertEqual((game/'eboot.bin').read_bytes(),b'original')

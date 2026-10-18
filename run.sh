@@ -246,6 +246,13 @@ else
     bash build.sh
     probe=${BB_PROBE:-out/bb-probe}  # BB_PROBE: a wrapper (gdb) around it
 fi
+# Keep BB_PROBE pointing to bin/ for capability-tool discovery above. Only the
+# final executable lives in the nested app; its dylib paths are relocated at packaging.
+game_app=$PWD/bin/Bloodborne\ Game.app/Contents/MacOS/bb-probe-metal
+if [[ ${BB_RENDERER:-} == metal && -f .packaged && -x $game_app ]]; then
+    probe=$game_app
+    echo "Game application: $probe"
+fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then
     "$probe" "${probe_args[@]}" &

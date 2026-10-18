@@ -8,6 +8,7 @@
 #include <cpuid.h>
 #include "runtime.h"
 #include "runtime_quicksave.h"
+#include "runtime_restart_protocol.h"
 #include "platform.h"
 #include "gpu/bbgpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
@@ -357,6 +358,11 @@ void runtime_restart(void) {
     __sync_synchronize();
 #ifndef _WIN32
 #ifdef __APPLE__
+    /* exec replaces the image but keeps its PID alive: AppKit's Dock registration
+     * then survives into another Cocoa initialization. Let the waiting shell reap
+     * this process first. The status also carries quickload's one-shot flag. */
+    const int restart_status = runtime_supervised_restart_status();
+    if (restart_status) _exit(restart_status);
     for (int fd=3, top=getdtablesize(); fd<top; ++fd) close(fd);
 #else
     syscall(SYS_close_range, 3u, ~0u, 0u);

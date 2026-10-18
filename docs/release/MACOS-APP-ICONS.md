@@ -50,3 +50,22 @@ profile evidence, not relabeled as a new FPS measurement for this UI-only librar
 Local evidence: `outputs/metal-game-icon-tests` and `outputs/metal-game-icon-compatibility`.
 Packaging checks linkage/signatures and icon declarations; installation preserves current
 settings and saves and retains a rollback app.
+
+## Quickload identity and process lifetime (0.2.32)
+
+The game now runs inside `bin/Bloodborne Game.app`, with the stable bundle identifier
+`io.github.bbport.optimized.game`. The canonical runtime stays in `bin/` for capability
+discovery and build tooling; the packaged nested copy has relocated dylib references and
+the same runtime instructions. The existing game-cover icon override is unchanged.
+
+On the Metal macOS path, `supervise_restart.sh` owns game preparation and waits for each
+game to exit. The runtime exits with status 75 for restart or 76 for quickload, instead
+of replacing a live Cocoa process using exec. Only the quickload status forwards the
+one-shot restore flag. The old PID, save lock and GPU allocations are gone before the
+next game starts; mod/translation views are removed by the existing run.sh exit trap.
+The supervisor also forwards termination and waits for its child. Other exits are final.
+The unsupervised/Vulkan fallback retains its existing behavior.
+
+Tests cover process separation, one-shot quickload, failure/termination propagation,
+community-overlay cleanup over repeated restarts, and the real nested bundle identity.
+No cache budget, resolution, graphics effect or render-pass behavior changes.

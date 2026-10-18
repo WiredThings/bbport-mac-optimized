@@ -126,4 +126,7 @@ else
     echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"
     echo "Renderer memory fixes: command-trim=$BB_CMDBUF_TRIM, driver-pool-fix=$BB_KK_POOL_FIX"
 fi
+if [[ $(uname -s) == Darwin && $renderer == metal ]]; then
+    exec bash tools/macos/supervise_restart.sh "$@"
+fi
 exec bash run.sh "$@"
