@@ -40,3 +40,6 @@ patches.json
 
 # User-downloaded game UI mods: never commit or distribute
 /downloads/
+
+# Explicit launcher artwork requested by the owner; provenance is beside the image.
+!launcher-macos/Sources/BBLauncher/Resources/Artwork/HuntersMark.png
