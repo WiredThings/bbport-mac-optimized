@@ -4,12 +4,27 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import tempfile
 
 from package_optimized import loads, SYSTEM
 
 GAME_BUNDLE_ID = 'io.github.bbport.optimized.game'
 GAME_APP = Path('bin/Bloodborne Game.app')
 GAME_ICON = Path(__file__).parent / 'resources/BloodborneGame.icns'
+
+
+def sign_game_app(bundle):
+    # File Provider can attach Finder metadata immediately after a resource is
+    # replaced. Sign a metadata-free temporary copy, then copy signed bytes back.
+    bundle = Path(bundle)
+    with tempfile.TemporaryDirectory(prefix='bb-game-bundle-sign-') as directory:
+        clean = Path(directory) / bundle.name
+        subprocess.run(['ditto', '--norsrc', '--noextattr', str(bundle), str(clean)], check=True)
+        executable = clean / 'Contents/MacOS/bb-probe-metal'
+        subprocess.run(['codesign', '--force', '--sign', '-', str(executable)], check=True)
+        subprocess.run(['codesign', '--force', '--sign', '-', str(clean)], check=True)
+        subprocess.run(['codesign', '--verify', '--strict', str(clean)], check=True)
+        subprocess.run(['ditto', '--norsrc', '--noextattr', str(clean), str(bundle)], check=True)
 
 
 def create_game_app(app):
@@ -47,6 +62,5 @@ def create_game_app(app):
     # Use the game cover even before SDL initializes and after the runtime icon
     # override is discarded. The launcher's Hunter's Mark stays on the outer app.
     shutil.copy2(GAME_ICON, resources / 'AppIcon.icns')
-    subprocess.run(['codesign', '--force', '--sign', '-', str(executable)], check=True)
-    subprocess.run(['codesign', '--force', '--sign', '-', str(bundle)], check=True)
+    sign_game_app(bundle)
     return executable
