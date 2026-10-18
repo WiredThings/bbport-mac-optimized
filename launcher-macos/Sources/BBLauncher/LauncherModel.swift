@@ -710,10 +710,13 @@ final class LauncherModel: ObservableObject {
 
 /// Web pages the app links to (Help menu, Updates).
 enum Links {
-    static let home = "https://github.com/DiAvisoo/bbport-mac-optimized"
-    static let userGuide = "https://github.com/DiAvisoo/bbport-mac-optimized/blob/codex/release-v0.1.0/docs/USER_GUIDE.md"
-    static let releases = "https://github.com/DiAvisoo/bbport-mac-optimized/releases"
-    static let issues = "https://github.com/DiAvisoo/bbport-mac-optimized/issues"
+    static let home = "https://github.com/WiredThings/bbport-mac-optimized"
+    static var userGuide: String {
+        let filename = L10n.language.hasPrefix("zh") ? "USER_GUIDE.zh-CN.md" : "USER_GUIDE.md"
+        return "\(home)/blob/optimized/docs/\(filename)"
+    }
+    static let releases = "\(home)/releases"
+    static let issues = "\(home)/issues"
 
     @MainActor static func open(_ address: String) {
         if let url = URL(string: address) { NSWorkspace.shared.open(url) }

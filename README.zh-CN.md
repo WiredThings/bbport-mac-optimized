@@ -1,10 +1,10 @@
 # Bloodborne Optimized：macOS 血源运行器
 
-[English](README.md) · [下载 0.2.28](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.28) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
+[English](README.md) · [下载 0.2.29](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
 
 这是 [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized) 的
 **WiredThings 分支**，提供独立 macOS 启动器、**直接 Metal 渲染**、**MetalFX 时域升频**，
-以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.28（0228）预览版**。
+以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.29（0229）预览版**。
 
 启动器本身是原生 Apple Silicon 程序；Metal 路径中的游戏与渲染器宿主代码仍是 x86-64，
 通过 **Rosetta 2** 运行。项目基于 bbport、shadPS4 和社区渲染器工作，不是 FS／Sony 官方 PC 版。
@@ -14,8 +14,8 @@
 需要 **Apple Silicon Mac、macOS 26 或更新版本、Rosetta 2**，以及自行准备的、
 **已合并 1.09 更新的解密游戏文件**。安装包自带 Python 和运行库，游玩无需安装 Xcode、Homebrew 或自行编译。
 
-1. 从 [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.28)
-   下载 **Bloodborne-Optimized-0.2.28-macOS.zip**。
+1. 从 [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29)
+   下载 **Bloodborne-Optimized-0.2.29-macOS.zip**。
 2. 解压并把 **Bloodborne Optimized.app** 放进“应用程序”；更新前先退出旧启动器和游戏。
 3. 选择同时包含 `eboot.bin`、`sce_sys`、`dvdroot_ps4` 的完整合并目录，
    不要只选择单独的 `CUSA…-patch` 更新目录。
@@ -24,6 +24,60 @@
 
 应用使用临时签名，未经过 Apple 公证。若被 macOS 拦截，可在“系统设置 → 隐私与安全性”中
 对这个应用选择“仍要打开”。更新合并、按键、存档位置和故障排查详见[使用指南](docs/USER_GUIDE.zh-CN.md)。
+
+## 制作游戏目录
+
+当前运行时针对 **CUSA03173 本体 + 1.09 更新**。模拟器可以分别挂载本体和更新，
+这个启动器则需要一个**完整的合并目录**；不能直接选 PKG、未解密文件或单独的更新目录。
+
+1. 准备自己导出的解密本体和同版本区域的 1.09 更新。如果导出结果外面包着 `app0`，
+   应进入其中，找到直接包含 `eboot.bin` 的那一级。
+2. 把完整本体复制到一个**新目录**，再将更新目录的**内容**覆盖进去：子目录要合并，
+   同名文件用更新版替换，本体独有文件保留。包括更新中的 `eboot.bin`、`sce_sys/param.sfo`、
+   `sce_module` 和 `dvdroot_ps4` 内容。不是把 `CUSA03173-patch` 整个文件夹放进本体。
+3. 在启动器“游戏文件夹”选择合并结果。目录名字不限，结构应为：
+
+```text
+CUSA03173-1.09/          ← 启动器选择这一层
+├── eboot.bin           ← 来自 1.09 更新
+├── sce_sys/
+│   └── param.sfo       ← APP_VER = 01.09
+├── sce_module/
+│   └── libc.prx
+└── dvdroot_ps4/
+    ├── menu/
+    ├── msg/
+    ├── map/
+    ├── shader/
+    └── …               ← 其余本体和更新资源也须保留
+```
+
+macOS 可按下面的例子操作，先把三个路径改成你实际解压的位置：
+
+```sh
+GAME_BASE="$HOME/Downloads/shadps4-game/CUSA03173"
+GAME_UPDATE="$HOME/Downloads/shadps4-game/CUSA03173-patch"
+GAME_MERGED="$HOME/Downloads/shadps4-game/CUSA03173-1.09"
+
+mkdir "$GAME_MERGED" && \
+  rsync -aL "$GAME_BASE/" "$GAME_MERGED/" && \
+  rsync -aL "$GAME_UPDATE/" "$GAME_MERGED/"
+```
+
+目标必须是**尚不存在的新目录**；如果已存在，命令会停止。两份来源目录保持原样；
+命令不使用 `--delete`，`-L` 会把符号链接指向的文件实体复制进新目录。请预留一份完整游戏的空间。
+路径末尾的 `/` 表示复制里面的内容。使用 Finder 时应合并子目录，别把整个本体资源目录
+替换成内容较少的更新目录，否则本体独有资源会丢失。
+
+不要选同时装着本体、更新的上一级目录，也不要直接选 `dvdroot_ps4`。`menu` 应留在
+`dvdroot_ps4` 内，不需要移到游戏根目录。超宽屏 UI 管理要求 `dvdroot_ps4` 和其下的 `menu`
+是真实目录，不能是符号链接。`missing folder or unsupported link: menu` 表示缺少此目录或它是链接，
+常见原因是只选了更新、或者合并时把本体子目录整体替换掉了。
+
+仅显示 **01.09** 还不够：启动时还会校验实际加载的可执行映像，并检查着色器解压是否正常。
+不能只换 `param.sfo` 却留下 1.00 的 `eboot.bin`；改文件夹名、改版本标记也无效。
+本项目不提供游戏、本体更新或中文文本／字体。检查方法见[使用指南](docs/USER_GUIDE.zh-CN.md)，
+语言要求见[中文支持](#中文支持与第三方补丁)。
 
 ## 本分支做了哪些工作
 
@@ -83,7 +137,7 @@ Metal 引擎、原始游戏补丁、移植算法均保留原作者归属。
 
 - [源码、固定依赖与构建方法](docs/release/SOURCE.md)
 - [完整分支工作与第三方署名](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.28 变更](docs/release/0.2.28.md) · [反馈问题](https://github.com/WiredThings/bbport-mac-optimized/issues)
+- [0.2.29 变更](docs/release/0.2.29.md) · [反馈问题](https://github.com/WiredThings/bbport-mac-optimized/issues)
 
 感谢 **DiAvisoo、bmy/bbport-mac、deadinside28、shadPS4、Huax-1839、IFreemz、Awakenchan、
 Wooloomooloo2／Mark Hall** 及各依赖组件贡献者。

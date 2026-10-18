@@ -5,7 +5,7 @@
 ## Current M4 Metal work
 
 The launcher, runtime integration, ordered Metal adapter patches and validation notes through
-0.2.28 are on the fork's `optimized` branch:
+0.2.29 are on the fork's `optimized` branch:
 
 ```sh
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
@@ -13,14 +13,15 @@ git clone --recurse-submodules --branch optimized https://github.com/WiredThings
 
 Follow [METAL-BACKEND.md](METAL-BACKEND.md) for the pinned Metal engine and build settings.
 The applied submodule worktrees are represented by the versioned ordered patch series;
-`gpu/patches/metal` is part of this repository. The v0.2.28 tag and Release correspond to the current production launcher. See
-[0.2.28.md](0.2.28.md) for the current changes and validation boundaries. The downloadable
+`gpu/patches/metal` is part of this repository. The v0.2.29 tag and Release correspond to the current production launcher. See
+[0.2.29.md](0.2.29.md) for the current changes and validation boundaries. The downloadable
 source archive includes pinned submodule source with the adapter patches applied; private World Warper tooling,
 recorded routes, local game data and saves are excluded. Use the recursive Git clone above
 for building: unlike the inspection archive, it retains the Git metadata required by the
 revision guards in the build scripts.
 
-The published v0.2.28 build is pinned to commit
+The v0.2.29 tag includes the Help-link update; its source archive matches that tag.
+The earlier published v0.2.28 build is pinned to commit
 [`1186e6c955517fb1b82cee0fcde3b5c818102e69`](https://github.com/WiredThings/bbport-mac-optimized/commit/1186e6c955517fb1b82cee0fcde3b5c818102e69).
 Subsequent documentation-only changes on `optimized` do not retag or change its App/source
 assets or checksums. For the exact build snapshot, clone with `--branch v0.2.28`; for current

@@ -1,11 +1,11 @@
 # Bloodborne Optimized for macOS
 
-[简体中文](README.zh-CN.md) · [Download 0.2.28](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.28) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
+[简体中文](README.zh-CN.md) · [Download 0.2.29](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
 
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current public build is **0.2.28 (0228), a preview release**.
+The current public build is **0.2.29 (0229), a preview release**.
 
 The launcher is native Apple Silicon. On the Metal path, the game and renderer host code are
 x86-64 and run through **Rosetta 2**. The project builds on bbport/shadPS4 and community renderer
@@ -17,7 +17,7 @@ Requires **Apple Silicon, macOS 26+, Rosetta 2**, and your own decrypted Bloodbo
 with **update 1.09 merged into the base game**. Python and runtime libraries are bundled;
 Xcode, Homebrew and compilation are not required to play.
 
-1. Download **Bloodborne-Optimized-0.2.28-macOS.zip** from [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.28).
+1. Download **Bloodborne-Optimized-0.2.29-macOS.zip** from [Releases](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.29).
 2. Extract it and move **Bloodborne Optimized.app** into Applications. Quit the old app before replacing it.
 3. Select the merged game folder containing `eboot.bin`, `sce_sys` and `dvdroot_ps4`.
    Select the full installation, rather than the separate `CUSA…-patch` update folder.
@@ -27,6 +27,66 @@ Xcode, Homebrew and compilation are not required to play.
 The app is ad-hoc signed, not Apple-notarized. If macOS blocks it, use the app-specific
 **Open Anyway** option in System Settings → Privacy & Security. See the
 [guide](docs/USER_GUIDE.md) for merging updates, controls, save locations and troubleshooting.
+
+## Prepare the game folder
+
+The supported runtime is built for **CUSA03173 with update 1.09**. Unlike an emulator
+that mounts the base game and update separately, this launcher needs one **complete merged
+folder**. A PKG, an encrypted dump, or the update folder alone is not enough.
+
+1. Prepare your own decrypted base-game and matching 1.09 update dumps. If an extraction
+   contains an `app0` wrapper, use the folder *inside* it that contains `eboot.bin`.
+2. Copy the complete base game into a **new directory**, then overlay the **contents** of
+   the update onto it. Merge subdirectories, overwrite matching files and keep files only
+   present in the base. This includes the update's `eboot.bin`, `sce_sys/param.sfo`,
+   `sce_module` and `dvdroot_ps4` contents. Do not nest `CUSA03173-patch` inside the base.
+3. Select the resulting directory in **Game folder**. Its name is arbitrary; its structure
+   should be:
+
+```text
+CUSA03173-1.09/          ← select this directory
+├── eboot.bin           ← from update 1.09
+├── sce_sys/
+│   └── param.sfo       ← APP_VER = 01.09
+├── sce_module/
+│   └── libc.prx
+└── dvdroot_ps4/
+    ├── menu/
+    ├── msg/
+    ├── map/
+    ├── shader/
+    └── …               ← keep all other base/update resources
+```
+
+For example, on macOS, adjust these three paths to match your extracted folders, then run:
+
+```sh
+GAME_BASE="$HOME/Downloads/shadps4-game/CUSA03173"
+GAME_UPDATE="$HOME/Downloads/shadps4-game/CUSA03173-patch"
+GAME_MERGED="$HOME/Downloads/shadps4-game/CUSA03173-1.09"
+
+mkdir "$GAME_MERGED" && \
+  rsync -aL "$GAME_BASE/" "$GAME_MERGED/" && \
+  rsync -aL "$GAME_UPDATE/" "$GAME_MERGED/"
+```
+
+Use a **new, nonexistent** destination; the commands stop if it already exists. They leave
+the two source folders untouched, overlay without `--delete`, and materialize linked files
+(`-L`) into the copy. Allow space for a complete second installation. The trailing `/` means
+copy the directory's contents. With Finder, merge subfolders rather than replacing an entire
+base resource directory with the smaller update directory.
+
+Select neither the parent holding both dumps nor `dvdroot_ps4` itself. Keep `menu` inside
+`dvdroot_ps4`; do not move it to the game root. For ultrawide UI management, `dvdroot_ps4`
+and `dvdroot_ps4/menu` must be real directories, not symbolic links. `missing folder or
+unsupported link: menu` means that directory is absent or linked, often because only the
+update was selected or subfolders were replaced instead of merged.
+
+Seeing **01.09** alone is insufficient: the startup check also verifies the loaded executable
+image and tests shader extraction. A 1.09 `param.sfo` alongside a 1.00 `eboot.bin` is invalid;
+renaming a folder or editing metadata cannot repair it. This app does not supply game files,
+updates or Chinese text/font assets. See the [guide](docs/USER_GUIDE.md#prepare-the-game-folder)
+for game-file checks and [Chinese support](#chinese-game-text-and-community-patches).
 
 ## What this fork adds
 
@@ -93,7 +153,7 @@ share it. Choose a copied save folder for isolated trials.
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
 - [Full branch changes and third-party attribution](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.28 release notes](docs/release/0.2.28.md) · [Report a problem](https://github.com/WiredThings/bbport-mac-optimized/issues)
+- [0.2.29 release notes](docs/release/0.2.29.md) · [Report a problem](https://github.com/WiredThings/bbport-mac-optimized/issues)
 
 Built on **DiAvisoo's optimized launcher, bmy/bbport-mac, deadinside28's bbport, shadPS4,
 Huax-1839, IFreemz, Awakenchan, Wooloomooloo2/Mark Hall**, and the component contributors.
