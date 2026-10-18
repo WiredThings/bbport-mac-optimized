@@ -1,5 +1,7 @@
 # Source for the standalone release
 
+[User guide](../USER_GUIDE.md) · [中文使用指南](../USER_GUIDE.zh-CN.md) · [Third-party provenance](../THIRD_PARTY_CHANGES.md)
+
 ## Current M4 Metal work
 
 The launcher, runtime integration, ordered Metal adapter patches and validation notes through
@@ -17,6 +19,12 @@ source archive includes pinned submodule source with the adapter patches applied
 recorded routes, local game data and saves are excluded. Use the recursive Git clone above
 for building: unlike the inspection archive, it retains the Git metadata required by the
 revision guards in the build scripts.
+
+The published v0.2.28 build is pinned to commit
+[`1186e6c955517fb1b82cee0fcde3b5c818102e69`](https://github.com/WiredThings/bbport-mac-optimized/commit/1186e6c955517fb1b82cee0fcde3b5c818102e69).
+Subsequent documentation-only changes on `optimized` do not retag or change its App/source
+assets or checksums. For the exact build snapshot, clone with `--branch v0.2.28`; for current
+documentation, use `optimized`.
 
 ## Original standalone release (historical)
 

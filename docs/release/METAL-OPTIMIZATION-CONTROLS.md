@@ -1,7 +1,9 @@
 # Metal optimization controls — 0.2.28
 
 The launcher exposes 25 runtime controls under **Advanced → Metal optimizations**, in English,
-Simplified Chinese and Traditional Chinese. Existing object-motion and occlusion controls stay
+Simplified Chinese and Traditional Chinese. The displayed badges are **Verified**,
+**Experimental**, **Adopted bundle**, and **Higher memory use**; stored/source keys may retain
+older badge wording for localization compatibility. Existing object-motion and occlusion controls stay
 in their current sections. No resolution, effects, save state or cache capacity is changed.
 
 ## Defaults and evidence
@@ -13,9 +15,9 @@ the current runtime default; existing explicit preferences remain authoritative.
   remain adopted. The address table reduces capacity by about 0.9 GiB relative to the flat
   table; direct clear improved the earlier matched scene by about 5%.
 - Attachment discard, strict vertex inlining, lean texture usage and alpha merge are marked
-  **Experimental · adopted** where isolated full-game FPS benefit remains uncertain.
+  **Experimental** in the default-on group where isolated full-game FPS benefit remains uncertain.
 - The ten accepted clear/copy/staging/residency/tiling/barrier/query controls are marked
-  **Experimental · adopted bundle**. Their ON defaults preserve the owner's previous choice
+  **Adopted bundle**. Their ON defaults preserve the owner's previous choice
   and accepted bundle memory tradeoff; the badge does not claim an isolated gain per flag.
 - Five optional experiments remain OFF: same-packet cross-chunk snapshot reuse,
   fragment-parameter specialization, inline small writes,
@@ -45,8 +47,8 @@ remains available to native tests; ordinary startup already calls it only when o
 
 Native tests verify ON save/next-start hits, OFF with an existing file (zero archive hits and
 byte-identical file preservation), OFF without release (no destructor-created file), retained
-pipeline identity, late pipeline creation and GPU output. The original 33-patch series reconstructs
-idempotently. Swift tests exercise every toggle, defaults, parent gates, persistence, migration,
+pipeline identity, late pipeline creation and GPU output. The archive-persistence check originally covered 33 patches; the current 0.2.28 series has
+36 patches and reconstructs idempotently. Swift tests exercise every toggle, defaults, parent gates, persistence, migration,
 reset, environment precedence, backend isolation and all three localized descriptions.
 
 ## Retired offline-library experiment
