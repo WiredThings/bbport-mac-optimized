@@ -69,3 +69,22 @@ The unsupervised/Vulkan fallback retains its existing behavior.
 Tests cover process separation, one-shot quickload, failure/termination propagation,
 community-overlay cleanup over repeated restarts, and the real nested bundle identity.
 No cache budget, resolution, graphics effect or render-pass behavior changes.
+
+## Matching default game cover (0.2.33)
+
+The nested game bundle now uses `tools/macos/resources/BloodborneGame.icns` as its
+default AppIcon, instead of copying the launcher's Hunter's Mark. It is derived from the
+local game's cover using the same aspect fit, 1024-pixel canvas, 96-pixel margin,
+832-pixel face, 184-pixel corner radius and shadow as the runtime icon. The ICNS includes
+all ten standard 16..1024-pixel representations. No game files are required to build it
+from source: the derived icon and its attribution are tracked. The original cover PNG
+is not distributed. This supersedes the original 0.2.21 note about the game cover never
+being bundled.
+
+The launcher's icon remains Hunter's Mark. Game startup and teardown can therefore fall
+back to a matching cover, without briefly displaying the launcher's symbol. Runtime
+cover selection, supervised restart, rendering code, settings and saves are unchanged.
+
+The owner confirmed repeated in-game F3 restarts no longer accumulate Dock tiles in
+0.2.32. For 0.2.33, packaging checks require the game icon to equal the tracked cover
+and differ from the unchanged launcher icon.

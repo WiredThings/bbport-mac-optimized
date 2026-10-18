@@ -2,13 +2,13 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings 0.2.32 (0232)** release, compared with the optimized upstream
+Scope: the public **WiredThings 0.2.33 (0233)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.32 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.33 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
 0.2.30 added Chinese-only text-source selection and a private local importer for the community
@@ -17,6 +17,8 @@ GOTY retranslation. 0.2.31 removes the incorrect official-Chinese asset warning 
 0.2.32 fixes macOS quickload restarts: a supervisor waits for process exit before restarting,
 forwards quickload once, and launches the game in a stable nested application bundle.
 The rendering library and translation assets are unchanged.
+0.2.33 replaces the nested game bundle's Hunter's Mark placeholder with a normalized game
+cover, avoiding icon changes during F3 restart. The launcher retains Hunter's Mark.
 
 ## Inherited foundations and imported work
 
@@ -90,7 +92,7 @@ patch database. **Its inclusion is not evidence that every entry is enabled or v
 | Restore Debug Camera | Lance McDonald (manfightdragon) | Optional; default game combination Cross + L3 / keyboard Space + Z |
 | Restore Debug Menu | Whitehawkx, auser1337; separate [Nexus #253 font package](https://www.nexusmods.com/bloodborne/mods/253) | Optional; validates required font resources. No downloaded font/mod files are bundled |
 | Ultrawide UI pack | User-selected [Nexus #202 download](https://www.nexusmods.com/bloodborne/mods/202), retaining the chosen pack's author/terms | Optional install/backup/restore manager; no `.gfx` pack is included |
-| Launcher Hunter's Mark artwork | Bloodborne artwork, hosted by [Bloodborne Wiki](https://www.bloodborne-wiki.com/2015/03/hunters-mark.html); [attribution](../launcher-macos/Sources/BBLauncher/Resources/Artwork/ATTRIBUTION.txt) | Credited icon asset with macOS margins/corners. The separate game's Dock cover is read from the user's `sce_sys/icon0.png`, not shipped |
+| Launcher Hunter's Mark artwork | Bloodborne artwork, hosted by [Bloodborne Wiki](https://www.bloodborne-wiki.com/2015/03/hunters-mark.html); [attribution](../launcher-macos/Sources/BBLauncher/Resources/Artwork/ATTRIBUTION.txt) | Credited icon asset with macOS margins/corners. The game additionally bundles a normalized cover as its default icon to match the runtime cover; [game-cover attribution](../tools/macos/resources/ATTRIBUTION.txt). Neither original game files nor saves are included |
 
 **中文支持的归属：**本分支提供启动器汉化和游戏中文选项联动；区域解锁原补丁由 Lance McDonald、Kyo
 编写且上游已收录。玩家自己的游戏仍需带有中文文本和字体，配音不变；发行包没有额外的汉化文本包。

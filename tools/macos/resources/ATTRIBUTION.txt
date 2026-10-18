@@ -1,0 +1,16 @@
+Bloodborne game application icon
+
+Source: the PS4 Bloodborne game-cover artwork in sce_sys/icon0.png,
+provided locally by the owner for this application icon.
+Copyright in the artwork remains with its original rights holders.
+This artwork is not covered by the source code's GPL license.
+
+BloodborneGame.icns is the derived macOS icon: aspect-fitted artwork,
+rounded corners, transparent margins and shadow. The original game icon file,
+game executable, other game assets and user saves are not included here.
+The launcher retains its separate Hunter's Mark icon and attribution.
+
+Recreate from a local source image:
+  swift tools/macos/make_app_icon.swift /tmp/BloodborneGame.iconset /path/to/sce_sys/icon0.png
+  iconutil -c icns /tmp/BloodborneGame.iconset -o tools/macos/resources/BloodborneGame.icns
+The prebuilt derived icon is tracked so source builds need no game files.

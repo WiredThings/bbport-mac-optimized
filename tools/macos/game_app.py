@@ -9,6 +9,7 @@ from package_optimized import loads, SYSTEM
 
 GAME_BUNDLE_ID = 'io.github.bbport.optimized.game'
 GAME_APP = Path('bin/Bloodborne Game.app')
+GAME_ICON = Path(__file__).parent / 'resources/BloodborneGame.icns'
 
 
 def create_game_app(app):
@@ -43,7 +44,9 @@ def create_game_app(app):
     (bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     resources = bundle / 'Contents/Resources'
     resources.mkdir()
-    shutil.copy2(app / 'Contents/Resources/AppIcon.icns', resources / 'AppIcon.icns')
+    # Use the game cover even before SDL initializes and after the runtime icon
+    # override is discarded. The launcher's Hunter's Mark stays on the outer app.
+    shutil.copy2(GAME_ICON, resources / 'AppIcon.icns')
     subprocess.run(['codesign', '--force', '--sign', '-', str(executable)], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', str(bundle)], check=True)
     return executable

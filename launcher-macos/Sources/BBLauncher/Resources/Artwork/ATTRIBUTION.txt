@@ -7,5 +7,6 @@ Image: https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEh4xoxKqLjc5Tc_
 
 The launcher build only scales, clips rounded corners and adds transparent
 outer padding/shadow. It does not replace or redraw the rune. This artwork
-is not covered by the code's GPL license. The separate game-process Dock
-icon is read from the user's game folder at runtime, not bundled here.
+is not covered by the code's GPL license. The separate game-process Dock icon uses a normalized cover in
+tools/macos/resources/BloodborneGame.icns, with its own attribution.
+Its runtime icon is still read from the user's game folder.

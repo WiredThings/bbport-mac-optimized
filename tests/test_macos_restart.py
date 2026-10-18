@@ -12,7 +12,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(ROOT / 'tools/macos'))
-from game_app import create_game_app, GAME_BUNDLE_ID
+from game_app import create_game_app, GAME_BUNDLE_ID, GAME_ICON
 
 
 class MacOSRestartTests(unittest.TestCase):
@@ -109,4 +109,9 @@ time.sleep(30)
             result = subprocess.check_output([str(helper)], text=True).strip()
             self.assertEqual(result, GAME_BUNDLE_ID)
             self.assertEqual(binary.read_bytes(), original)
+            game_icon=helper.parents[1]/'Resources/AppIcon.icns'
+            self.assertEqual(game_icon.read_bytes(),GAME_ICON.read_bytes())
+            self.assertNotEqual(game_icon.read_bytes(),(resources/'AppIcon.icns').read_bytes())
+            self.assertEqual((resources/'AppIcon.icns').read_bytes(),
+                             (ROOT/'launcher-macos/Sources/BBLauncher/Resources/AppIcon.icns').read_bytes())
             subprocess.run(['codesign','--verify','--strict',str(helper.parents[2])],check=True)
