@@ -19,13 +19,15 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
-The `0.2.19-metal-perf10` preview enables a combined Metal transfer/resource/query profile
+The `0.2.20-metal-perf10` preview enables a combined Metal transfer/resource/query profile
 validated on a base M4 Mac mini (10 GPU cores, 16 GB), with 1920x1080 output and 960x540
 internal scene resolution. A same-binary four-run Central Yharnam ABBA measured 46.88 ->
 48.59 FPS and 30.31 -> 36.75 FPS 1% low, with about 105 MiB higher process footprint accepted
 by the owner. This is a fixed-scene result with run-to-run variation, not a 60 FPS or
 whole-game guarantee. Resolution, effects, filtering and cache budgets are retained.
 See [guard rules, complete results and limits](docs/release/METAL-BENCHMARK-GUARD-V3.md).
+The launcher now bundles an original moon-and-blade icon for Finder and Dock, instead of
+replacing its running icon with the game dump’s unformatted `icon0.png`.
 
 The renderer and game runtime remain x86-64 under Rosetta; the launcher is native Apple
 Silicon. The profile includes [scoped compute declarations and exact RGBA16F exports](docs/release/METAL-RESOURCE-ACCESS-AND-HALF-COPY.md).

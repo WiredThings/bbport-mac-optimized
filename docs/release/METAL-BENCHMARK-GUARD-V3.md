@@ -113,3 +113,12 @@ the accepted report, eager-load linkage, signatures and all dependency paths.
 Local raw results: `outputs/benchmark-m4-attachment-audit/combined-v3.json` and its four referenced
 run directories. All-nine-flags native evidence: `outputs/metal-all-candidates-combination`.
 No game assets, saves, shader caches or captures are included in published source.
+
+## Icon-only follow-up (0.2.20)
+
+The launcher now includes original vector moon-and-blade artwork, with a complete 16..1024
+pixel ICNS resource declared by CFBundleIconFile. Finder and the running Dock instance share
+that resource. Game-folder validation no longer replaces the application icon with the raw
+sce_sys/icon0.png. The icon generator is retained as source; no game artwork is packaged.
+The GPU/probe instructions and nine enabled defaults remain those measured above. This is a
+launcher/resource update and does not imply another gameplay speedup.

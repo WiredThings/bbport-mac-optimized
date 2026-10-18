@@ -79,7 +79,6 @@ final class LauncherModel: ObservableObject {
     private var ini = IniFile()
     /// The repository bbport.ini, mods and patches were last read from.
     private var loadedRepo: URL?
-    private var iconFolder = ""
     private var gameCheckToken: UUID?
     private var checkingGameFolder: String?
     private var checkedGameFolder: String?
@@ -238,23 +237,16 @@ final class LauncherModel: ObservableObject {
         if checkedGameFolder != path {
             gameCheck = Check(level: .error, message: L10n.key("Checking game folder…"))
         }
-        let loadIcon = path != iconFolder
         // A sleeping external/network drive can block even a tiny metadata read. Never
         // hold the interface thread, and discard results if the user chooses another folder.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let check = checkGameFolder(path)
-            let icon = URL(fileURLWithPath: path).appendingPathComponent("sce_sys/icon0.png")
-            let iconData = loadIcon && check.allowsPlay ? try? Data(contentsOf: icon) : nil
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.gameCheckToken == token, self.prefs.gameFolder == path else { return }
                 self.checkingGameFolder = nil
                 self.checkedGameFolder = path
                 self.gameCheck = check
                 self.refreshUIMod()
-                if let iconData, let image = NSImage(data: iconData) {
-                    self.iconFolder = path
-                    NSApplication.shared.applicationIconImage = image
-                }
             }
         }
     }

@@ -5,9 +5,9 @@
 #   bash tools/macos/build_launcher.sh
 #   open "out/Bloodborne Optimized.app"
 # The repository path is embedded in the app (Info.plist BBRepoPath; Settings can override it).
-# The icon comes from the game's sce_sys/icon0.png: BB_GAME_DIR, else the folder chosen in the app.
+# The original vector AppIcon.icns is bundled for Finder, Dock and running instances.
 # Release builds (tools/macos/package.sh): BB_RELEASE=<version> embeds no repository path and no
-# game icon (the game's artwork is not ours to distribute); BB_APP sets where the app goes.
+# game artwork; BB_APP sets where the app goes.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
@@ -88,31 +88,10 @@ EOF
 # plutil escapes the path for XML.
 [[ -n $release ]] || plutil -insert BBRepoPath -string "$repo" "$app/Contents/Info.plist"
 
-make_icon() {
-    local source=$1 iconset=$work/AppIcon.iconset size
-    mkdir -p "$iconset"
-    for size in 16 32 128 256 512; do
-        sips -z "$size" "$size" "$source" --out "$iconset/icon_${size}x${size}.png" >/dev/null || return 1
-        if (( size * 2 <= 512 )); then
-            sips -z $((size * 2)) $((size * 2)) "$source" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null || return 1
-        fi
-    done
-    iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
-}
-game=${BB_GAME_DIR:-$(defaults read io.github.bbport.mac gameFolder 2>/dev/null || true)}
-icon=${game:+$game/sce_sys/icon0.png}
-if [[ -n $release ]]; then
-    echo "release build: no icon from the game (the app shows the game's icon in the Dock anyway)"
-elif [[ -n $icon && -f $icon ]]; then
-    if make_icon "$icon"; then
-        plutil -insert CFBundleIconFile -string AppIcon "$app/Contents/Info.plist"
-        echo "icon: $icon"
-    else
-        echo "note: no icon made from $icon (the app shows the game's icon in the Dock anyway)"
-    fi
-else
-    echo "note: no icon yet: choose the game folder in the app, then run this script again"
-fi
+icon="$pkg/Sources/BBLauncher/Resources/AppIcon.icns"
+[[ -f $icon ]] || { echo "STOP: bundled AppIcon.icns missing" >&2; exit 1; }
+cp "$icon" "$app/Contents/Resources/AppIcon.icns"
+plutil -insert CFBundleIconFile -string AppIcon "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 
 # Ad-hoc signature: Apple Silicon refuses unsigned arm64 code. Release builds are signed again

@@ -132,10 +132,12 @@ def main():
             else:
                 copy(p, dest)
     copy(args.launcher / 'Contents/MacOS/bbport', app / 'Contents/MacOS/bbport')
+    copy(args.launcher / 'Contents/Resources/AppIcon.icns', app / 'Contents/Resources/AppIcon.icns')
     resource = 'BBLauncher_BBLauncher.bundle'
     subprocess.run(['ditto', str(args.launcher / 'Contents/Resources' / resource),
                     str(app / 'Contents/Resources' / resource)], check=True)
     info = plistlib.loads((args.launcher / 'Contents/Info.plist').read_bytes())
+    assert info.get('CFBundleIconFile')=='AppIcon', 'Launcher must declare its bundled app icon'
     info['CFBundleShortVersionString'] = args.version.split('-')[0]
     info['CFBundleVersion'] = ''.join(args.version.split('-')[0].split('.'))
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
