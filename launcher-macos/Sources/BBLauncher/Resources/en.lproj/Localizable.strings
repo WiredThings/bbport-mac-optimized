@@ -362,3 +362,5 @@
 "Requires: %@" = "Requires: %@";
 "Experimental · adopted" = "Experimental · adopted";
 "Experimental · adopted bundle" = "Experimental · adopted bundle";
+"Reuse cross-chunk reads within one draw" = "Reuse cross-chunk reads within one draw";
+"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established.";

@@ -3,10 +3,10 @@ import XCTest
 
 final class MetalOptimizationTests: XCTestCase {
     func testDefaultsMatchAcceptedProfileAndExperimentsStayOff() {
-        XCTAssertEqual(MetalOptimizations.all.count, 23)
-        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 23)
+        XCTAssertEqual(MetalOptimizations.all.count, 24)
+        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 24)
         XCTAssertEqual(MetalOptimizations.adopted.count, 19)
-        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 4)
+        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 5)
         let prefs = LauncherPrefs()
         let env = OptimizedProfile(prefs: prefs, game: GameSettings()).environment
         for option in MetalOptimizations.all {

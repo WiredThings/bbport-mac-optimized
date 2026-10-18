@@ -1,0 +1,404 @@
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer.cpp b/gpu/shadps4/video_core/buffer_cache/buffer.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer.cpp
+@@ -121,6 +121,7 @@
+         invalidation_mark = current_watch_cursor;
+         current_watch_cursor = 0;
+         offset = 0;
++        ++wrap_generation;
+ 
+         // Swap watches and reset waiting cursors.
+         std::swap(previous_watches, current_watches);
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer.h b/gpu/shadps4/video_core/buffer_cache/buffer.h
+--- a/gpu/shadps4/video_core/buffer_cache/buffer.h
++++ b/gpu/shadps4/video_core/buffer_cache/buffer.h
+@@ -191,6 +191,9 @@
+         return last_tick;
+     }
+ 
++    /// Changes on every wrap, including a nonblocking reservation that cannot yet proceed.
++    [[nodiscard]] u64 WrapGeneration() const noexcept { return wrap_generation; }
++
+     /// Maps and commits a memory region with user provided data
+     u64 Copy(auto src, size_t size, size_t alignment = 0) {
+         const auto [data, offset] = Map(size, alignment);
+@@ -201,6 +204,7 @@
+     }
+ 
+ private:
++    u64 wrap_generation = 1;
+     struct Watch {
+         u64 tick{};
+         u64 upper_bound{};
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+@@ -43,6 +43,7 @@
+ 
+ extern "C" int runtime_memory_vma_info(uintptr_t address, int* prot, int* type, uintptr_t* end);
+ extern "C" int runtime_memory_direct_phys(uintptr_t address, uint64_t* phys, uintptr_t* end);
++extern "C" const uint64_t* runtime_memory_generation();
+ 
+ /// The layer's memory module asks the runtime where direct memory is mapped.
+ static bool LayerTranslate(uint64_t va, uint64_t* phys, uint64_t* end) {
+@@ -462,6 +463,7 @@
+ BufferCache::~BufferCache() = default;
+ 
+ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     if (LayerMode()) {
+         LayerNoteCpuWrite(device_addr, size);
+     }
+@@ -916,6 +918,39 @@
+             // LayerBind has already copied current mirror data back in GPU order. A read
+             // crossing physical chunks still cannot be one imported buffer; never route it
+             // through GetArena, whose 4 GiB sparse allocation is unsupported on Metal.
++            static const bool reuse = [] { const char* e = std::getenv("BB_MTL_GATHER_REUSE");
++                return e && e[0] == '1'; }();
++            static const auto* mapping_generation = runtime_memory_generation();
++            const auto stamp = [&] {
++                return GuestReadEpoch{packet_epoch, backend.CurrentTick(),
++                    stream_buffer.WrapGeneration(), read_source_epoch.load(std::memory_order_acquire),
++                    __atomic_load_n(mapping_generation, __ATOMIC_ACQUIRE), layer_generation,
++                    backend.BufferWriteEpoch()};
++            };
++            const auto report = [&] {
++                const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
++                if (now - gather_report_second < 5) return;
++                gather_report_second = now;
++                std::printf("Metal cross-chunk snapshots: requests=%llu copies=%llu reuse=%llu avoided-bytes=%llu render-open-gathers=%llu render-open-reuse=%llu; same packet only, fixed stream capacity\n",
++                    (unsigned long long)gather_requests, (unsigned long long)gather_copies,
++                    (unsigned long long)gather_hits, (unsigned long long)gather_avoided_bytes,
++                    (unsigned long long)gather_open_passes, (unsigned long long)gather_open_pass_hits);
++            };
++            ++gather_requests;
++            const auto before = stamp();
++            if (reuse && !is_texel_buffer) {
++                const auto cached = read_snapshots.Find(stream_buffer, device_addr, size,
++                    backend.Limits().storage_min_alignment, before);
++                if (cached && stamp() == before) {
++                    ++gather_hits;
++                    if (backend.IsRendering()) ++gather_open_pass_hits;
++                    gather_avoided_bytes += size;
++                    report();
++                    return *cached;
++                }
++            } else read_snapshots.Clear();
++            ++gather_copies;
++            if (backend.IsRendering()) ++gather_open_passes;
+             const auto gathered = GatherGuestRead(backend, stream_buffer, device_addr, size,
+                 [this](VAddr at, u64 remaining) -> std::optional<GuestReadPiece> {
+                     const auto span = BbLayer::GpuMemory::Get().ResolvePrefix(at, remaining);
+@@ -931,6 +966,9 @@
+                 });
+             ASSERT_MSG(gathered, "No complete guest chunk coverage for read {:#x}+{:#x}",
+                        device_addr, size);
++            if (reuse && !is_texel_buffer)
++                read_snapshots.Remember(device_addr, size, gathered->second, before, stamp());
++            report();
+             static std::atomic<u32> reports{0};
+             if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
+                 std::printf("Metal cross-chunk read: %#llx+%#x gathered in existing stream ring\n",
+@@ -1849,6 +1887,7 @@
+ }
+ 
+ void BufferCache::NoteCpuWrite(VAddr address, u64 guest_rip) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     constexpr u32 Frames = 3, Window = 60;
+     // Guest code the game's profile knows to write per-frame data: what it writes is an upload
+     // heap at its first write (others after Frames writes in Window frames).
+@@ -2071,6 +2110,7 @@
+ }
+ 
+ void BufferCache::NoteAssetWrite(VAddr addr, u64 size) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     if (!GuestInPlace() || WriteTracking() || size == 0) {
+         return;
+     }
+@@ -2080,6 +2120,7 @@
+ }
+ 
+ void BufferCache::NoteFreshRange(VAddr addr, u64 size) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     BbStats::gpu_range_allocs.fetch_add(1, std::memory_order_relaxed);
+     BbStats::gpu_range_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
+     if (!GuestInPlace() || WriteTracking()) {
+@@ -2177,6 +2218,7 @@
+ }
+ 
+ void BufferCache::NoteLateCommandWrite(VAddr addr, const void* data, u64 size) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     if (!GuestInPlace() || WriteTracking() || size == 0) {
+         return;
+     }
+@@ -2810,6 +2852,7 @@
+ }
+ 
+ void BufferCache::UnmapInPlace(VAddr addr, u64 size) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     if (!GuestInPlace() || size == 0) {
+         return;
+     }
+@@ -3368,6 +3411,7 @@
+ 
+ namespace VideoCore {
+ void BufferCache::NoteWriteTick(VAddr address, u64 size) {
++    read_source_epoch.fetch_add(1, std::memory_order_release);
+     WriteTicks().Note(address, size, backend.CurrentTick());
+ }
+ } // namespace VideoCore
+diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+@@ -19,6 +19,7 @@
+ #include "common/interval_set.h"
+ #include "common/types.h"
+ #include "video_core/buffer_cache/buffer.h"
++#include "video_core/buffer_cache/guest_read_gather.h"
+ #include "video_core/buffer_cache/bda_page_table.h"
+ #include "video_core/buffer_cache/fault_manager.h"
+ #include "video_core/buffer_cache/range_set.h"
+@@ -272,6 +273,11 @@
+     /// bbport: the housekeeping EnsureResident did before every binding (Process*), once a packet.
+     void Maintain();
+     u64 packet_epoch = 1, maintained_epoch = 0;
++    GuestReadSnapshots read_snapshots;
++    std::atomic<u64> read_source_epoch{1}; // announced CPU writes, unmaps and guest writes
++    u64 gather_requests = 0, gather_copies = 0, gather_hits = 0, gather_avoided_bytes = 0;
++    u64 gather_open_passes = 0, gather_open_pass_hits = 0;
++    u32 gather_report_second = 0;
+     /// bbport: answers of EnsureResident ("all resident") and IsInPlace for block ranges, valid
+     /// while resident_ranges and in_place_blocks keep their generation.
+     struct ResidencyMemo {
+diff --git a/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h b/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h
+--- a/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h
++++ b/gpu/shadps4/video_core/buffer_cache/guest_read_gather.h
+@@ -2,6 +2,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <array>
+ #include <limits>
+ #include <optional>
+ #include <vector>
+@@ -14,6 +15,57 @@
+     u64 offset{};
+     u64 size{};
+ };
++
++// One draw/dispatch resource-preparation scope only, never a cross-draw or cross-frame cache.
++struct GuestReadEpoch {
++    u64 packet{}, tick{}, wrap{}, cpu{}, mapping{}, layer{}, gpu{};
++    bool operator==(const GuestReadEpoch&) const = default;
++};
++
++class GuestReadSnapshots {
++public:
++    static constexpr size_t Capacity = 16;
++    void Clear() { count = next = 0; }
++
++    std::optional<std::pair<const Buffer*, u64>> Find(
++        const StreamBuffer& ring, VAddr address, u64 size, u64 alignment,
++        const GuestReadEpoch& now) {
++        if (!(now == epoch)) { Clear(); epoch = now; }
++        if (!now.gpu || (now.mapping & 1) || !size) return std::nullopt;
++        for (size_t i = 0; i < count; ++i) {
++            const auto& entry = entries[i];
++            if (address < entry.address) continue;
++            const u64 delta = address - entry.address;
++            if (delta <= entry.size && size <= entry.size - delta &&
++                (!alignment || (entry.offset + delta) % alignment == 0))
++                return std::pair<const Buffer*, u64>{&ring, entry.offset + delta};
++        }
++        return std::nullopt;
++    }
++
++    // Called only after an unformatted gather whose ONLY recorded writes target the stream
++    // ring itself. Those copies advance the backend's global write epoch; earlier snapshots
++    // remain valid. Any other write between gathers invalidates them on the next Find.
++    void Remember(VAddr address, u64 size, u64 offset,
++                  const GuestReadEpoch& before, const GuestReadEpoch& after) {
++        if (!before.gpu || before.packet != after.packet || before.cpu != after.cpu ||
++            before.mapping != after.mapping || (after.mapping & 1) || before.layer != after.layer) {
++            Clear(); return;
++        }
++        if (!(epoch == before) || before.tick != after.tick || before.wrap != after.wrap) Clear();
++        epoch = after;
++        entries[next] = {address, size, offset};
++        next = (next + 1) % Capacity;
++        count = std::min(count + 1, Capacity);
++    }
++
++private:
++    struct Entry { VAddr address; u64 size, offset; };
++    std::array<Entry, Capacity> entries{};
++    size_t count = 0, next = 0;
++    GuestReadEpoch epoch{};
++};
++static_assert(sizeof(GuestReadSnapshots) < 512); // CPU metadata only; no resource ownership.
+ 
+ // A rare read spanning guest chunks cannot use a sparse VA arena on Metal. Gather an exact
+ // snapshot in the existing stream ring instead. No persistent allocation or address-table
+diff --git a/gpu/shadps4/video_core/cache_backend.h b/gpu/shadps4/video_core/cache_backend.h
+--- a/gpu/shadps4/video_core/cache_backend.h
++++ b/gpu/shadps4/video_core/cache_backend.h
+@@ -506,6 +506,10 @@
+     /// Frees the sampler.
+     virtual void DestroySampler(Sampler& sampler) = 0;
+ 
++    /// Changes for any recorded buffer/global write, even across barriers. Zero: unsupported.
++    /// Used only to invalidate bounded same-packet read snapshots, never to infer write ranges.
++    virtual u64 BufferWriteEpoch() const noexcept { return 0; }
++
+     // Optional memory paths (docs/metal/cache_backend_design.md, group D).
+ 
+     /// bbport: whether the game's direct memory can be given to the GPU in chunks this backend
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -252,6 +252,8 @@
+     void SetImageName(const VideoCore::UniqueImage& image, std::string_view name) override;
+     void SetImageViewName(const VideoCore::ImageView& view, std::string_view name) override;
+ 
++    u64 BufferWriteEpoch() const noexcept override { return buffer_write_epoch; }
++
+     // Optional memory paths
+     bool GuestMemoryUsable() override;
+ 
+@@ -270,6 +272,7 @@
+     BufferAccessTracker tracker;
+     VideoCore::Image::Barriers scratch_barriers; ///< Transit's bookkeeping, never recorded
+     bool memory_pending = false; ///< an access since the last FlushBarriers needs a barrier
++    u64 buffer_write_epoch = 1; ///< recording thread, monotonic across FlushBarriers
+     bool global_write = false;   ///< bbport: AccessGlobal wrote since the last FlushBarriers
+     void (*image_access_hook)(void*) = nullptr;
+     void* image_access_context = nullptr;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -915,6 +915,7 @@
+     u64 end = offset + std::max<u64>(size, 1) - 1;
+     u8 access = 0;
+     if (src_access & WriteMask) {
++        ++buffer_write_epoch;
+         access |= BufferAccessTracker::Write;
+     } else {
+         // Reads at 4 KiB granularity (Vulkan::Runtime does the same): constants come from ring
+@@ -952,6 +953,7 @@
+         memory_pending = true;
+     }
+     if (src_access & vk::AccessFlagBits2::eShaderWrite) {
++        ++buffer_write_epoch;
+         global_write = true;
+     }
+ }
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -537,6 +537,98 @@
+     CHECK(ring.SizeBytes() == 2_MB);
+     CHECK(!f.scheduler.HasFailed());
+     std::puts("cross-chunk read: exact bytes, holes, GPU ordering and bounded ring reuse passed");
++}
++
++static void TestCrossChunkSnapshotReuse(Fixture& f) {
++    std::puts("same-packet cross-chunk snapshot reuse and invalidation");
++    constexpr VAddr Start = 0x7100000000;
++    constexpr u64 Size = 24_KB;
++    auto a = MakeBuffer(f.runtime, 16_KB, MemoryType::HostCached, "reuse source A");
++    auto b = MakeBuffer(f.runtime, 16_KB, MemoryType::HostCached, "reuse source B");
++    auto output = MakeBuffer(f.runtime, 2*Size, MemoryType::HostCached, "reuse output");
++    StreamBuffer ring{f.runtime, MemoryType::Stream, 64_KB};
++    GuestReadSnapshots memo;
++    u64 packet = 7, cpu = 0, mapping = 0, layer = 0;
++    const auto stamp = [&] { return GuestReadEpoch{packet, f.runtime.CurrentTick(),
++        ring.WrapGeneration(), cpu, mapping, layer, f.runtime.BufferWriteEpoch()}; };
++    const auto resolve = [&](VAddr at, u64 remaining) -> std::optional<GuestReadPiece> {
++        const auto done = at-Start;
++        if (done < 8_KB) return GuestReadPiece{a.get(), 8_KB+done, std::min(remaining,8_KB-done)};
++        return GuestReadPiece{b.get(),done-8_KB,remaining};
++    };
++    const auto no_sync = [](const GuestReadPiece&, VAddr) {};
++    const auto original_a=Pattern(16_KB,81), original_b=Pattern(16_KB,82);
++    f.runtime.UpdateBuffer(a.get(),0,original_a);
++    f.runtime.UpdateBuffer(b.get(),0,original_b);
++    auto before=stamp();
++    CHECK(!memo.Find(ring,Start,Size,16,before));
++    auto first=GatherGuestRead(f.runtime,ring,Start,Size,resolve,no_sync);
++    CHECK(first);
++    if(!first) return;
++    memo.Remember(Start,Size,first->second,before,stamp());
++    const auto exact=memo.Find(ring,Start,Size,16,stamp());
++    const auto sub=memo.Find(ring,Start+4096,8192,16,stamp());
++    CHECK(exact && exact->second==first->second);
++    CHECK(sub && sub->second==first->second+4096);
++    CHECK(!memo.Find(ring,Start+1,8192,16,stamp())); // preserve binding alignment
++    CHECK(!memo.Find(ring,Start-16,Size,16,stamp()));
++    CHECK(!memo.Find(ring,Start+16,Size,16,stamp())); // must fit completely
++    const auto allocated=f.mtl.currentAllocatedSize;
++    for(int i=0;i<1000;++i) CHECK(memo.Find(ring,Start,Size,16,stamp()));
++    CHECK(f.mtl.currentAllocatedSize==allocated); // reuse allocates no Metal backing
++    const vk::BufferCopy save_first{first->second,0,Size};
++    f.runtime.CopyBuffer(&ring,output.get(),{&save_first,1});
++    CHECK(!memo.Find(ring,Start,Size,16,stamp())); // even an unrelated GPU write is conservative
++    const auto changed=Pattern(16_KB,83);
++    f.runtime.UpdateBuffer(b.get(),0,changed);
++    before=stamp();CHECK(!memo.Find(ring,Start,Size,16,before));
++    auto second=GatherGuestRead(f.runtime,ring,Start,Size,resolve,no_sync);
++    CHECK(second);
++    if(!second) return;
++    memo.Remember(Start,Size,second->second,before,stamp());
++    CHECK(memo.Find(ring,Start,Size,16,stamp()));
++    const vk::BufferCopy save_second{second->second,Size,Size};
++    f.runtime.CopyBuffer(&ring,output.get(),{&save_second,1});
++    Settle(f);
++    CHECK(std::memcmp(output->mapped_data.data(),original_a.data()+8_KB,8_KB)==0);
++    CHECK(std::memcmp(output->mapped_data.data()+8_KB,original_b.data(),16_KB)==0);
++    CHECK(std::memcmp(output->mapped_data.data()+Size,original_a.data()+8_KB,8_KB)==0);
++    CHECK(std::memcmp(output->mapped_data.data()+Size+8_KB,changed.data(),16_KB)==0);
++
++    // Every independent validity boundary must reject an otherwise identical cached range.
++    const GuestReadEpoch base{1,2,3,4,6,7,8};
++    for(unsigned field=0;field<7;++field) {
++        GuestReadSnapshots c;c.Remember(Start,Size,0,base,base);
++        CHECK(c.Find(ring,Start,Size,16,base));
++        auto e=base;
++        switch(field) {case 0:++e.packet;break;case 1:++e.tick;break;case 2:++e.wrap;break;
++            case 3:++e.cpu;break;case 4:e.mapping+=2;break;case 5:++e.layer;break;case 6:++e.gpu;break;}
++        CHECK(!c.Find(ring,Start,Size,16,e));
++    }
++    GuestReadSnapshots capped;
++    for(u64 i=0;i<100;++i)capped.Remember(Start+i*Size,Size,0,base,base);
++    CHECK(!capped.Find(ring,Start,Size,16,base));
++    CHECK(capped.Find(ring,Start+99*Size,Size,16,base));
++    auto odd=base;odd.mapping|=1;
++    capped.Remember(Start,Size,0,odd,odd);
++    CHECK(!capped.Find(ring,Start,Size,16,odd));
++    // Own gather writes may promote existing snapshots to the new GPU epoch.
++    GuestReadSnapshots own;own.Remember(Start,Size,0,base,base);
++    auto after=base;after.gpu+=2;
++    own.Remember(Start+Size,Size,Size,base,after);
++    CHECK(own.Find(ring,Start,Size,16,after));
++    auto cpu_changed=after;++cpu_changed.cpu;
++    own.Remember(Start+2*Size,Size,2*Size,after,cpu_changed);
++    CHECK(!own.Find(ring,Start,Size,16,cpu_changed));
++    const auto old_wrap=ring.WrapGeneration();
++    CHECK(ring.Reserve(ring.SizeBytes(),16));
++    CHECK(ring.WrapGeneration()>old_wrap);
++    const auto epoch=f.runtime.BufferWriteEpoch();
++    f.runtime.AccessGlobal(vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderWrite);
++    CHECK(f.runtime.BufferWriteEpoch()>epoch);
++    f.runtime.FlushBarriers();CHECK(f.runtime.BufferWriteEpoch()>epoch);
++    Settle(f);
++    std::puts("snapshot reuse: exact/subrange bytes, zero GPU allocation, writes, scopes and ring wrap passed");
+ }
+ 
+ static void TestImages(Fixture& f) {
+@@ -1767,6 +1859,7 @@
+         TestInlineUpdates(f);
+         TestGuestChunk(f);
+         TestCrossChunkRead(f);
++        TestCrossChunkSnapshotReuse(f);
+         TestImages(f);
+         TestViewsAndSamplers(f);
+         TestPromotion(f);

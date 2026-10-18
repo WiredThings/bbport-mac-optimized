@@ -48,6 +48,11 @@ class BenchmarkTests(unittest.TestCase):
     def test_memory_critical_or_swap_growth_stops_immediately(self):
         for sample in [dict(level=4,swap_mib=100),dict(level=1,swap_mib=357)]:
             with self.assertRaisesRegex(RuntimeError,'Memory guard'):b.MemoryGuard(100,256).check(sample,10)
+    def test_gather_reuse_and_current_math_are_score_overrides(self):
+        for key in ('BB_MTL_GATHER_REUSE','BB_MTL_RELAXED_MATH'):
+            self.assertIn(key,b.OVERRIDES)
+            self.assertNotIn(key,b.DIAGNOSTIC_OVERRIDES)
+
     def test_capture_refuses_unowned_target(self):
         with patch.object(b,'game_pids',return_value=[]), tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError): b.capture_frame(Mock(pid=1234),Path(d),Mock())

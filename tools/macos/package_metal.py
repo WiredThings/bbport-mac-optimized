@@ -24,6 +24,16 @@ def text_hash(path):
     return hashlib.sha256(bytes.fromhex(code)).hexdigest()
 
 
+def select_metal_probe(baseline, explicit=None):
+    """Keep enhanced Metal runtime services when updating an existing complete app."""
+    source = Path(explicit) if explicit else Path(baseline) / 'Contents/Resources/bbport/bin/bb-probe-metal'
+    if not explicit and not source.is_file():
+        source = Path(baseline) / 'Contents/Resources/bbport/bin/bb-probe'
+    if not source.is_file():
+        raise FileNotFoundError(f'Missing game runtime: {source}')
+    return source
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline', type=Path, required=True)
@@ -43,7 +53,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -95,7 +105,8 @@ def main():
             subprocess.run(['install_name_tool', '-delete_rpath', value, str(lib)], check=True)
     probe = engine / 'bin/bb-probe-metal'
     original = engine / 'bin/bb-probe'
-    copy(args.metal_probe or original, probe)
+    probe_source = select_metal_probe(baseline, args.metal_probe)
+    copy(probe_source, probe)
     old_gpu = next(x for x in loads(probe) if x.endswith('/libbbgpu.dylib'))
     subprocess.run(['install_name_tool', '-change', old_gpu,
                     '@loader_path/gpu-metal/libbbgpu.dylib', str(probe)], check=True)
@@ -110,7 +121,7 @@ def main():
         for cmd, value in commands(probe):
             if cmd == 'LC_RPATH': subprocess.run(['install_name_tool', '-delete_rpath', value, str(probe)], check=True)
     else:
-        assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
+        assert text_hash(probe) == text_hash(probe_source), 'Selected Metal runtime instructions changed'
     for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py', 'tools/macos/benchmark.py', 'tools/macos/benchmark_candidates.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-FRAME-CAPTURE.md', engine / 'METAL-FRAME-CAPTURE.md')
@@ -134,6 +145,7 @@ def main():
     copy(ROOT / 'docs/release/METAL-VERTEX-MATH.md', engine / 'METAL-VERTEX-MATH.md')
     copy(ROOT / 'tools/macos/analyze_metal_attachments.py', engine / 'tools/macos/analyze_metal_attachments.py')
     copy(ROOT / 'tools/macos/analyze_metal_transfers.py', engine / 'tools/macos/analyze_metal_transfers.py')
+    copy(ROOT / 'docs/release/METAL-GATHER-REUSE.md', engine / 'METAL-GATHER-REUSE.md')
     copy(ROOT / 'docs/release/METAL-CROSS-CHUNK-READS.md', engine / 'METAL-CROSS-CHUNK-READS.md')
     copy(ROOT / 'docs/release/METAL-OPTIMIZATION-CONTROLS.md', engine / 'METAL-OPTIMIZATION-CONTROLS.md')
     copy(ROOT / 'docs/release/METAL-SMALL-TRANSFERS.md', engine / 'METAL-SMALL-TRANSFERS.md')
@@ -168,7 +180,10 @@ def main():
                     upstream_commit=UPSTREAM, adapter_patches=patches,
                     renderer_architecture='x86_64 under Rosetta, direct Metal API',
                     renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original), metal_probe_text_sha256=text_hash(probe),
-                    metal_probe_snapshot_abi=bool(args.metal_probe),
+                    metal_probe_snapshot_abi='_runtime_memory_snapshot_v1' in run('nm', '-g', probe),
+                    metal_probe_source='explicit replacement' if args.metal_probe else ('preserved baseline Metal probe' if probe_source.name=='bb-probe-metal' else 'legacy baseline base probe'),
+                    metal_probe_capabilities={key: marker in probe.read_bytes() for key, marker in (
+                        ('isolated_input',b'BB_PAD_FILE_ONLY'), ('per_stream_mute',b'BB_BENCHMARK_MUTE'))},
                     baseline=(baseline / 'Contents/Resources/bbport/.version').read_text().strip(), default_renderer='metal', fallback_renderer='vulkan',
                     bda_table_default='two-level', bda_flat_fallback='BB_MTL_TWO_LEVEL_BDA=0',
                     gpu_stage_timing_default=False, gpu_stage_timing_enable='BB_MTL_GPU_TIMING=1',
@@ -199,9 +214,13 @@ def main():
                     pipeline_archive_disk_reads_and_automatic_writes_opt_in=True,
                     cross_chunk_read_gather=True,
                     cross_chunk_read_storage='existing fixed-capacity stream ring; GPU-ordered readonly snapshot',
-                    launcher_optimization_controls=23,
+                    cross_chunk_snapshot_reuse_default=False,
+                    cross_chunk_snapshot_reuse_decision='Experimental OFF: target path was not exercised in four gameplay comparisons; no FPS gain established',
+                    cross_chunk_snapshot_reuse_enable='BB_MTL_GATHER_REUSE=1',
+                    cross_chunk_snapshot_reuse_scope='same draw/dispatch packet; <=512 bytes CPU metadata; no GPU allocation',
+                    launcher_optimization_controls=24,
                     launcher_optimization_default_on=19,
-                    launcher_optimization_default_off=4,
+                    launcher_optimization_default_off=5,
                     offline_library_experiment_removed=True,
                     compile_audit_default=False,compile_audit_enable='BB_MTL_COMPILE_AUDIT=1 (private diagnostic benchmark only)',
                     combined_metal_profile_default={key:'1' for key in (

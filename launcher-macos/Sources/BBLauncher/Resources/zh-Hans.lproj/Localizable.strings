@@ -362,3 +362,5 @@
 "Requires: %@" = "需要先启用：%@";
 "Experimental · adopted" = "实验性·已采用";
 "Experimental · adopted bundle" = "实验性·组合采用";
+"Reuse cross-chunk reads within one draw" = "在单次绘制内复用跨块读取";
+"Reuses complete or contained read snapshots within one draw or dispatch. Writes, mapping changes and ring wrap invalidate them. No extra GPU buffers; FPS benefit is not established." = "仅在同一条绘制或计算指令内复用完整快照或子区间；写入、映射变化和环形缓冲区绕回后失效。不新增 GPU 缓冲区，帧率收益尚未确认。";

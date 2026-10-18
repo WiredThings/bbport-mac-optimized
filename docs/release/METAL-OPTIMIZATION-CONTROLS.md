@@ -1,6 +1,6 @@
-# Metal optimization controls — 0.2.24
+# Metal optimization controls — 0.2.26
 
-The launcher exposes 23 runtime controls under **Advanced → Metal optimizations**, in English,
+The launcher exposes 24 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. Existing object-motion and occlusion controls stay
 in their current sections. No resolution, effects, save state or cache capacity is changed.
 
@@ -17,7 +17,8 @@ the current runtime default; existing explicit preferences remain authoritative.
 - The ten accepted clear/copy/staging/residency/tiling/barrier/query controls are marked
   **Experimental · adopted bundle**. Their ON defaults preserve the owner's previous choice
   and accepted bundle memory tradeoff; the badge does not claim an isolated gain per flag.
-- Four optional experiments remain OFF: fragment-parameter specialization, inline small writes,
+- Five optional experiments remain OFF: same-packet cross-chunk snapshot reuse,
+  fragment-parameter specialization, inline small writes,
   relaxed fragment/compute math and binary pipeline persistence. Notes describe uncertain
   benefit, possible numeric changes and the observed memory costs. Binary persistence has a
   separate higher-memory label (about 0.6 GiB in the earlier archive-load experiment).
@@ -44,7 +45,7 @@ remains available to native tests; ordinary startup already calls it only when o
 
 Native tests verify ON save/next-start hits, OFF with an existing file (zero archive hits and
 byte-identical file preservation), OFF without release (no destructor-created file), retained
-pipeline identity, late pipeline creation and GPU output. The 33-patch series reconstructs
+pipeline identity, late pipeline creation and GPU output. The original 33-patch series reconstructs
 idempotently. Swift tests exercise every toggle, defaults, parent gates, persistence, migration,
 reset, environment precedence, backend isolation and all three localized descriptions.
 
