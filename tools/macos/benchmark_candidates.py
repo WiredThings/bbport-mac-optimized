@@ -17,6 +17,16 @@ CANDIDATES=('BB_MTL_BATCH_CLEARS','BB_MTL_DIRECT_COPY','BB_MTL_ADAPTIVE_STAGING'
             'BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY','BB_MTL_COALESCE_BARRIERS',
             'BB_MTL_QUERY_COMPUTE_CHAIN','BB_MTL_PRECISE_COMPUTE','BB_MTL_TEXTURE_TILING_HALF')
 
+def fixed_overrides(items,candidates):
+    fixed={}
+    for item in items:
+        key,sep,value=item.partition('=')
+        if not sep or key not in b.OVERRIDES-b.DIAGNOSTIC_OVERRIDES or value not in ('0','1'):
+            raise ValueError('Invalid fixed score override: '+item)
+        if key in candidates or key in fixed:raise ValueError('Conflicting fixed override: '+key)
+        fixed[key]=value
+    return fixed
+
 def summarize(path):
     r=json.loads(path.read_text());cleanup=json.loads((path.parent/'cleanup.json').read_text())
     assert r['valid'] and cleanup['own_process_stopped'] and cleanup['original_saves_unchanged']
@@ -44,14 +54,17 @@ def main():
     p.add_argument('--name',required=True)
     p.add_argument('--order',choices=('ABBA','BAAB'),default='ABBA')
     p.add_argument('--candidate',action='append',choices=sorted(b.OVERRIDES-b.DIAGNOSTIC_OVERRIDES),help='Toggle only these flags; default is the accepted nine-flag bundle')
+    p.add_argument('--fixed-env',action='append',default=[],help='Keep an allowed non-diagnostic KEY=0/1 constant in both groups')
     args=p.parse_args()
     candidates=tuple(args.candidate) if args.candidate else CANDIDATES
     if len(set(candidates))!=len(candidates):p.error('Duplicate candidate')
+    try:fixed=fixed_overrides(args.fixed_env,candidates)
+    except ValueError as error:p.error(str(error))
     if not re.fullmatch('[A-Za-z0-9_-]{1,36}',args.name):p.error('Use a short name')
     out=args.workspace/(args.name+'.json')
     if out.exists():raise ValueError('Refusing to overwrite an existing suite')
     baseline_swap=b.pressure()['swap_mib']
-    report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),runs=[],
+    report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),fixed_variants=fixed,runs=[],
                 installed_app_changed=False,notes=[f'Same-binary {args.order}; A is selected-OFF, B is selected-ON; all other launch defaults retained.',
                 'Warning pressure is recorded, not excluded. No frames trimmed.',
                 'When several flags are selected, the combined result cannot attribute gains to each flag.'])
@@ -66,7 +79,8 @@ def main():
             cmd=[sys.executable,str(Path(__file__).with_name('benchmark.py')),'run','--workspace',str(args.workspace),
                  '--app',str(args.app),'--name',name,'--mute','--minimal-stats']
             for key in candidates:cmd+=['--env',key+'='+value]
-            if 'BB_MTL_FRAGMENT_UNIFORMS' not in candidates:cmd+=['--env','BB_MTL_FRAGMENT_UNIFORMS=0']
+            for key,value_ in fixed.items():cmd+=['--env',key+'='+value_]
+            if 'BB_MTL_FRAGMENT_UNIFORMS' not in candidates and 'BB_MTL_FRAGMENT_UNIFORMS' not in fixed:cmd+=['--env','BB_MTL_FRAGMENT_UNIFORMS=0']
             print('Starting '+name+' selected candidates='+value,flush=True)
             with (args.workspace/(name+'.console.log')).open('w') as log:
                 done=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=os.environ)

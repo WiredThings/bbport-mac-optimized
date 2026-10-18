@@ -1,0 +1,140 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1627,6 +1627,29 @@
+ void Runtime::UpdateBuffer(const Buffer* dst, u64 offset, std::span<const u8> data) {
+     if (data.empty()) {
+         return;
++    }
++    static const bool inline_updates = [] {
++        const char* value = std::getenv("BB_MTL_INLINE_UPDATES");
++        return value && value[0] == '1';
++    }();
++    // Keep every write in GPU stream order. setBytes snapshots the call's CPU payload;
++    // neither the guest backing nor any existing copy/cache lifetime is bypassed.
++    if (inline_updates && data.size() <= 256 && !(offset % 16) && !(data.size() % 4) &&
++        offset <= dst->SizeBytes() && data.size() <= dst->SizeBytes() - offset) {
++        if (auto pipeline = impl->kernels.InlineUpdate()) {
++            if (IsBufferAccessed(dst, offset, data.size(), true)) FlushBarriers();
++            scheduler.ComputeEncoder("Inline buffer update", true);
++            auto compute = impl->sched.compute;
++            [compute setComputePipelineState:pipeline];
++            [compute setBuffer:NativeBuffer(*dst) offset:offset atIndex:0];
++            [compute setBytes:data.data() length:data.size() atIndex:1];
++            const auto words = data.size() / 4;
++            [compute dispatchThreads:MTLSizeMake(words, 1, 1)
++                threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(words, pipeline.maxTotalThreadsPerThreadgroup), 1, 1)];
++            AccessBuffer(dst, offset, data.size(), vk::PipelineStageFlagBits2::eComputeShader,
++                         vk::AccessFlagBits2::eShaderWrite);
++            return;
++        }
+     }
+     // Stream order matters (earlier commands may still read the range): the data goes through
+     // staging memory and a blit, not a write into the buffer's own memory.
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
+@@ -55,6 +55,8 @@
+     /// `kernel fill_u32(device uint* dst [[buffer(0)]], constant uint& value [[buffer(1)]],
+     /// constant uint& count [[buffer(2)]])`, one thread per word.
+     id<MTLComputePipelineState> FillU32();
++    /// Optional <=256-byte ordered update, direct bound destination, no guest BDA lookup.
++    id<MTLComputePipelineState> InlineUpdate();
+ 
+     /// The slot of the (set 0) `binding` among the buffers of `shader`.
+     static u32 BufferSlot(const HostShaders::Shader& shader, u32 binding);
+@@ -88,6 +90,8 @@
+     std::map<std::pair<bool,TilingKey>, id<MTLComputePipelineState>> texture_tiling;
+     id<MTLComputePipelineState> fault_parser = nil;
+     id<MTLComputePipelineState> fill_u32 = nil;
++    id<MTLComputePipelineState> inline_update = nil;
++    bool inline_update_tried{};
+     std::map<std::tuple<u32, u32, bool>, id<MTLRenderPipelineState>> ms_copy;
+     std::map<std::pair<u32, u32>, id<MTLRenderPipelineState>> ms_depth;
+     id<MTLDepthStencilState> depth_always_write = nil;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+@@ -215,6 +215,24 @@
+     const std::array<u32, 2> constants{page_bits, max_faults};
+     fault_parser = ComputePipeline(H::FAULT_BUFFER_PROCESS_COMP, constants.data(),
+                                    static_cast<u32>(constants.size()), @"Fault Buffer Parser");
++}
++
++id<MTLComputePipelineState> HostKernels::InlineUpdate() {
++    if (!inline_update_tried) {
++        inline_update_tried = true;
++        @autoreleasepool {
++            NSError* error = nil;
++            NSString* source = @"#include <metal_stdlib>\nusing namespace metal;\n"
++                "kernel void inline_update(device uint* dst [[buffer(0)]], "
++                "constant uint* src [[buffer(1)]], uint i [[thread_position_in_grid]]) "
++                "{ dst[i] = src[i]; }\n";
++            auto library = [dev.device newLibraryWithSource:source options:CompileOptions() error:&error];
++            auto function = library ? [library newFunctionWithName:@"inline_update"] : nil;
++            inline_update = function ? [dev.device newComputePipelineStateWithFunction:function error:&error] : nil;
++            if (!inline_update) LOG_WARNING(Render, "Inline update unavailable; retaining staging copy: {}", ErrorText(error));
++        }
++    }
++    return inline_update;
+ }
+ 
+ id<MTLComputePipelineState> HostKernels::FillU32() {
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -400,6 +400,38 @@
+     Settle(f);
+     CHECK(*reinterpret_cast<const u32*>(dst->mapped_data.data() + 2000) == value);
+     Settle(f);
++}
++
++// Exact snapshots prove each command observes its own payload, not a later CPU mutation.
++static void TestInlineUpdates(Fixture& f) {
++    auto dst=MakeBuffer(f.runtime,4096,MemoryType::DeviceLocal,"inline destination");
++    auto snapshots=MakeBuffer(f.runtime,4096,MemoryType::DeviceLocal,"inline snapshots");
++    const std::array<size_t,7> lengths{4,16,192,256,260,191,0};
++    std::vector<std::vector<u8>> expected;
++    for(size_t i=0;i<lengths.size();++i) {
++        f.runtime.FillBuffer(dst.get(),0,512,0xa5a5a5a5);
++        auto data=Pattern(lengths[i],unsigned(20+i));
++        std::vector<u8> bytes(512,0xa5);
++        const u64 offset=i==5?17:16; // non-word data/unaligned offsets must fall back.
++        std::copy(data.begin(),data.end(),bytes.begin()+offset);
++        f.runtime.UpdateBuffer(dst.get(),offset,data);
++        std::fill(data.begin(),data.end(),0xee); // setBytes / staging must have captured it.
++        const vk::BufferCopy copy{0,i*512,512};
++        f.runtime.CopyBuffer(dst.get(),snapshots.get(),{&copy,1});
++        expected.push_back(std::move(bytes));
++    }
++    Settle(f);
++    for(size_t i=0;i<expected.size();++i)CHECK(Equal(*snapshots,i*512,expected[i]));
++    // Repeated overlapping writes must preserve GPU read/write dependencies.
++    auto first=Pattern(192,33),second=Pattern(192,34);
++    f.runtime.UpdateBuffer(dst.get(),32,first);
++    const vk::BufferCopy read_first{32,0,192};
++    f.runtime.CopyBuffer(dst.get(),snapshots.get(),{&read_first,1});
++    f.runtime.UpdateBuffer(dst.get(),32,second);
++    const vk::BufferCopy read_second{32,256,192};
++    f.runtime.CopyBuffer(dst.get(),snapshots.get(),{&read_second,1});
++    Settle(f);CHECK(Equal(*snapshots,0,first));CHECK(Equal(*snapshots,256,second));
++    std::puts("inline updates: payload snapshots, canaries, overlap and fallback passed");
+ }
+ 
+ static void TestGuestChunk(Fixture& f) {
+@@ -1662,6 +1694,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_INLINE_UPDATES_ONLY")) {TestInlineUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_QUERY_CHAIN_ONLY")) {TestSmallComputeFills(f);TestOcclusion(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BUFFER_RANGE_AUDIT_ONLY")) {TestBufferRangeAudit();Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_TEXTURE_TILING_ONLY")) {TestTextureTiling(f);Settle(f);return failures?1:0;}
+@@ -1669,6 +1702,7 @@
+         TestOcclusion(f);
+         TestLimitsAndFormats(f);
+         TestBuffers(f);
++        TestInlineUpdates(f);
+         TestGuestChunk(f);
+         TestImages(f);
+         TestViewsAndSamplers(f);

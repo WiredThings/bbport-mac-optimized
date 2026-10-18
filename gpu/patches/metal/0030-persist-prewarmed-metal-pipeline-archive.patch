@@ -1,0 +1,14 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+@@ -194,6 +194,10 @@
+       pass_through{device_} {
+     std::printf("GPU: Metal float rules %s\n", FloatRulesName(ReadFloatRules()));
+     WarmUp();
++    // Test/benchmark shutdown can bypass destructors. Persist already known prewarmed PSOs
++    // before gameplay, so the next start can actually use its binary archive.
++    // No cache capacity/resource change and no periodic serialization in the render loop.
++    pso_cache.Flush();
+ }
+ 
+ PipelineCache::~PipelineCache() {

@@ -1,0 +1,151 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -22,6 +22,7 @@
+ #include "common/assert.h"
+ #include "bbport_toggles.h"
+ #include "common/logging/log.h"
++#include "video_core/frame_capture.h"
+ #include "video_core/renderer_metal/mtl_format_convert_impl.h"
+ #include "video_core/renderer_metal/mtl_guest_memory.h"
+ #include "video_core/renderer_metal/mtl_image_usage_log.h"
+@@ -1517,6 +1518,19 @@
+     id<MTLBlitCommandEncoder> blit = impl->sched.blit;
+     id<MTLBuffer> src_buffer = NativeBuffer(*src);
+     id<MTLBuffer> dst_buffer = NativeBuffer(*dst);
++    // Recording uses FrameCapture's existing byte/event limits. No payload readback.
++    if (FrameCapture::NativeRecording()) {
++        const auto queue = reinterpret_cast<uintptr_t>(&scheduler);
++        FrameCapture::NativeLabel((std::string{"Buffer copy source: "} +
++            (src_buffer.label.UTF8String ?: "unlabelled")).c_str(), queue);
++        FrameCapture::NativeLabel((std::string{"Buffer copy destination: "} +
++            (dst_buffer.label.UTF8String ?: "unlabelled")).c_str(), queue);
++        for (const auto& copy : copies)
++            FrameCapture::Native(std::format("{{\"op\":\"buffer_copy\",\"queue\":{},\"src\":{},\"dst\":{},\"src_offset\":{},\"dst_offset\":{},\"bytes\":{},\"src_length\":{},\"dst_length\":{},\"flush\":{}}}",
++                queue, (uintptr_t)(__bridge void*)src_buffer,
++                (uintptr_t)(__bridge void*)dst_buffer, copy.srcOffset, copy.dstOffset,
++                copy.size, src_buffer.length, dst_buffer.length, needs_flush));
++    }
+     for (const auto& copy : copies) {
+         [blit copyFromBuffer:src_buffer
+                 sourceOffset:copy.srcOffset
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+@@ -1,3 +1,4 @@
++#include "video_core/renderer_metal/mtl_compile_audit.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ // SPIR-V (the recompiler's output) -> MSL (SPIRV-Cross) -> MTLLibrary/MTLFunction. Resource
+@@ -819,6 +820,7 @@
+ /// always built without fast math). mathFloatingPointFunctions stays at its default (Fast).
+ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const std::string& entry,
+                           std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr) {
++    CompileAudit audit{"library"};
+     MetalObjects objects{};
+     std::string source=msl;
+     const auto helpers=inline_vertex?InlineStrictVertexMath(source):0;
+@@ -864,6 +866,7 @@
+         }
+         objects.library = library;
+         objects.function = function;
++        audit.ok = true;
+     }
+     return objects;
+ }
+@@ -975,6 +978,7 @@
+ 
+ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std::string_view name,
+                                       const CompileVariant& variant) {
++    CompileAudit audit{"shader", hash};
+     CompileResult result;
+     unsigned fragment_uniform_buffers=0;
+     const SpirvScan scan = ScanSpirv(spirv);
+@@ -1199,6 +1203,7 @@
+             (unsigned long long)hash,shader->strict_vertex_helpers_inlined,int(shader->strict_vertex_reference!=nullptr));
+     }
+     ++counters.compiled;
++    audit.ok = true; audit.cached = cached;
+     result.status = CompileStatus::Ok;
+     result.shader = std::move(shader);
+     return result;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -1,3 +1,4 @@
++#include "video_core/renderer_metal/mtl_compile_audit.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #import <Metal/Metal.h>
+@@ -280,6 +281,8 @@
+ template <typename Descriptor, typename Create, typename Add>
+ id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* descriptor,
+                      Create create, Add add, bool& from_archive, std::string& error) {
++    CompileAudit audit{"pso"};
++    audit.cached = 0;
+     id<MTLBinaryArchive> archive = impl.archive;
+     from_archive = false;
+     NSError* ns_error = nil;
+@@ -289,6 +292,7 @@
+             id state = create(MTLPipelineOptionFailOnBinaryArchiveMiss, &ns_error);
+             if (state) {
+                 from_archive = true;
++                audit.ok = true; audit.cached = true;
+                 return state;
+             }
+             ns_error = nil;
+@@ -299,6 +303,7 @@
+         error = FirstLine(ns_error);
+         return nil;
+     }
++    audit.ok = true;
+     if (archive) {
+         std::scoped_lock lock{impl.archive_mutex};
+         NSError* add_error = nil;
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_compile_audit.h b/gpu/shadps4/video_core/renderer_metal/mtl_compile_audit.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_compile_audit.h
+@@ -0,0 +1,42 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Opt-in timing only; no source, resource payload or persistent history.
++#pragma once
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstdint>
++
++namespace Metal {
++struct CompileAudit {
++    static bool Enabled() {
++        static const bool enabled = [] {
++            const char* value = std::getenv("BB_MTL_COMPILE_AUDIT");
++            return value && value[0] == '1';
++        }();
++        return enabled;
++    }
++    static uint64_t Now() {
++        return std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now().time_since_epoch()).count();
++    }
++    const char* kind;
++    uint64_t id, start;
++    bool ok{};
++    int cached{-1};
++    CompileAudit(const char* kind_, uint64_t id_ = 0)
++        : kind{kind_}, id{id_}, start{Enabled() ? Now() : 0} {}
++    ~CompileAudit() {
++        if (!Enabled()) return;
++        const auto end = Now();
++        static std::atomic<unsigned> lines{};
++        const auto line = lines.fetch_add(1, std::memory_order_relaxed);
++        if (line < 8192)
++            std::printf("Metal compile audit: kind=%s id=%016llx start-ns=%llu elapsed-us=%llu ok=%d cached=%d\n",
++                kind, (unsigned long long)id, (unsigned long long)start,
++                (unsigned long long)((end-start)/1000), int(ok), int(cached));
++        else if (line == 8192)
++            std::puts("Metal compile audit: truncated=1");
++    }
++};
++} // namespace Metal

@@ -3,6 +3,15 @@ from pathlib import Path
 import unittest
 s=importlib.util.spec_from_file_location('a',Path(__file__).parents[1]/'tools/macos/analyze_metal_attachments.py');a=importlib.util.module_from_spec(s);s.loader.exec_module(a)
 class AttachmentReportTests(unittest.TestCase):
+ def test_buffer_copy_bounds_and_encoder(self):
+  row=dict(op='buffer_copy',queue=1,src=10,dst=20,src_offset=4,dst_offset=8,bytes=16,src_length=20,dst_length=24,flush=True)
+  def capture(copy,kind=3):
+   return self.text([dict(op='frame',frame=1,truncated=False),dict(op='open',queue=1,kind=kind,guest=False),copy,dict(op='close',queue=1,kind=kind)])
+  result=a.analyze(capture(row))['buffer_copies']
+  self.assertEqual(result['bytes'],16);self.assertEqual(result['regions_after_flush'],1)
+  for update in (dict(bytes=17),dict(src=True),dict(dst_offset=-1),dict(flush=1)):
+   with self.assertRaises(ValueError):a.analyze(capture(row|update))
+  with self.assertRaises(ValueError):a.analyze(capture(row,2))
  def text(self,rows):return '\n'.join('NATIVE '+json.dumps(r) for r in rows)
  def rows(self):
   r=[dict(op='frame',frame=7,truncated=False,bytes=100)]

@@ -10,7 +10,7 @@ def analyze(text):
     rows=[json.loads(line[7:]) for line in text.splitlines() if line.startswith('NATIVE ')]
     if not rows or rows[0].get('op')!='frame' or rows[0].get('truncated',True):
         raise ValueError('Missing or truncated single-frame metadata')
-    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[];compute_access=[];texture_tiling=[];clear_lifetime=[]
+    nodes=[];current={};render_barriers=[];barrier_paths=Counter();query_snapshots=[];compute_access=[];texture_tiling=[];clear_lifetime=[];buffer_copies=[]
     for row in rows[1:]:
         op=row['op'];queue=row.get('queue')
         if op=='open':
@@ -42,6 +42,15 @@ def analyze(text):
                 if row.get('bits') not in (32,64) or not isinstance(row.get('proxy'),bool):raise ValueError('Invalid texture tiling kind')
                 if any(not isinstance(row.get(k),int) or row[k]<=0 for k in ('width','height','linear_bytes')):raise ValueError('Invalid texture tiling extent')
                 texture_tiling.append(row)
+        elif op=='buffer_copy':
+            if queue not in current or current[queue]['kind']!=3:
+                raise ValueError('Buffer copy without a blit encoder')
+            fields=('src','dst','src_offset','dst_offset','bytes','src_length','dst_length')
+            if any(type(row.get(k)) is not int or row[k]<0 for k in fields) or not isinstance(row.get('flush'),bool):
+                raise ValueError('Invalid buffer copy metadata')
+            if not row['src'] or not row['dst'] or any(row[side+'_offset']+row['bytes']>row[side+'_length'] for side in ('src','dst')):
+                raise ValueError('Buffer copy outside native allocation')
+            buffer_copies.append(row)
         elif op=='render_barriers':
             if queue not in current or current[queue]['kind']!=1:
                 raise ValueError('Render barrier summary without a render encoder')
@@ -87,6 +96,7 @@ def analyze(text):
                 attachment_lifetime_audit=dict(attachment_aspect_keys=len(lifetimes),loads=sum(v['loads'] for v in lifetimes.values()),clears=sum(v['clears'] for v in lifetimes.values()),stores=sum(v['stores'] for v in lifetimes.values()),complete_reader_graph=False),
                 proven_clear_folding=dict(batches=sum(r['action']=='folded' for r in clear_lifetime),targets=sum(r['targets'] for r in clear_lifetime if r['action']=='folded'),hoist_fallbacks=sum(r['action']=='hoist_fallback' for r in clear_lifetime)) if clear_lifetime else None,
                 full_color_clear_passes=clears,consecutive_clear_runs=runs,
+                buffer_copies=dict(regions=len(buffer_copies),bytes=sum(r['bytes'] for r in buffer_copies),regions_after_flush=sum(r['flush'] for r in buffer_copies),same_buffer_regions=sum(r['src']==r['dst'] for r in buffer_copies),largest_region=max(r['bytes'] for r in buffer_copies)) if buffer_copies else None,
                 render_barriers=dict(lists=len(render_barriers),requested=sum(r['requested'] for r in render_barriers) if render_barriers else None,dropped=sum(r['dropped'] for r in render_barriers) if render_barriers else None),
                 occlusion_snapshots=dict(events=len(query_snapshots),chained_events=sum(q['chained'] for q in query_snapshots),counter_slots=sum(q['count'] for q in query_snapshots)) if query_snapshots else None,
                 compute_resource_access=dict(dispatches=len(compute_access),direct_resources=sum(r['direct_resources'] for r in compute_access),bound_only_requested=sum(r['requested_bound_only'] for r in compute_access),broad_residency_at_dispatch=sum(r['guest_declared'] for r in compute_access)) if compute_access else None,

@@ -1,0 +1,36 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+@@ -197,7 +197,10 @@
+     // Test/benchmark shutdown can bypass destructors. Persist already known prewarmed PSOs
+     // before gameplay, so the next start can actually use its binary archive.
+     // No cache capacity/resource change and no periodic serialization in the render loop.
+-    pso_cache.Flush();
++    // Loading serialized PSOs has a material CPU-memory cost on this 16 GiB machine.
++    // Keep disk persistence opt-in; ordinary SPIR-V/MSL/keys and live PSOs stay cached.
++    const char* persist_archive = std::getenv("BB_MTL_PERSIST_WARM_ARCHIVE");
++    if (persist_archive && persist_archive[0] == '1') pso_cache.Flush();
+     const char* release_archive = std::getenv("BB_MTL_RELEASE_WARM_ARCHIVE");
+     if (!release_archive || release_archive[0] != '0') pso_cache.ReleaseWarmArchive();
+ }
+diff --git a/tests/test_mtl_pipeline_core.mm b/tests/test_mtl_pipeline_core.mm
+--- a/tests/test_mtl_pipeline_core.mm
++++ b/tests/test_mtl_pipeline_core.mm
+@@ -280,8 +280,16 @@
+         cache.ReleaseWarmArchive();CHECK(cache.GetComputePipeline(key,&shader)==pipeline);
+         CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xaabbccdd);
+     }
++    {
++        const auto no_flush=folder/"without-persistence";
++        Metal::PsoCache cache{device,no_flush};
++        auto pipeline=cache.GetComputePipeline(key,&shader);CHECK(pipeline);
++        cache.ReleaseWarmArchive();CHECK(cache.GetComputePipeline(key,&shader)==pipeline);
++        CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xfeed1234);
++        CHECK(!std::filesystem::exists(cache.ArchivePath()));
++    }
+     std::filesystem::remove_all(folder);
+-    std::puts("warm archive: retained PSO identity/GPU output, late creation and next-start hit passed");
++    std::puts("warm archive: retained PSO identity/GPU output, late creation, no-persistence release and next-start hit passed");
+ }
+ 
+ int main(int argc, char** argv) {

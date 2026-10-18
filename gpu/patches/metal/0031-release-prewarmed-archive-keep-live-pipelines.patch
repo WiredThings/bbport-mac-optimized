@@ -1,0 +1,122 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h
+@@ -270,6 +270,10 @@
+     /// temp file + rename). Cheap to call when nothing changed; call it every few new pipelines
+     /// and at shutdown (the destructor does).
+     bool Flush();
++    /// After serial startup prewarming and Flush, before any compilation workers start.
++    /// Drops only the compilation archive object, never live pipeline/function cache entries.
++    /// Runtime-discovered pipeline keys/MSL still persist; next prewarm adds their PSOs to disk.
++    void ReleaseWarmArchive();
+ 
+     struct Counters {
+         std::atomic<u64> render_pipelines{};   ///< distinct render pipelines built (incl. failed)
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -241,6 +241,14 @@
+ 
+ PsoCache::~PsoCache() {
+     Flush();
++}
++
++void PsoCache::ReleaseWarmArchive() {
++    // Startup only: CreateWithArchive may read the object without this lock during creation.
++    // All four pipeline maps, functions, libraries and depth/stencil states remain owned.
++    std::scoped_lock lock{impl->archive_mutex};
++    impl->archive = nil;
++    impl->archive_dirty = false;
+ }
+ 
+ bool PsoCache::Flush() {
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pipeline_cache.mm
+@@ -198,6 +198,8 @@
+     // before gameplay, so the next start can actually use its binary archive.
+     // No cache capacity/resource change and no periodic serialization in the render loop.
+     pso_cache.Flush();
++    const char* release_archive = std::getenv("BB_MTL_RELEASE_WARM_ARCHIVE");
++    if (!release_archive || release_archive[0] != '0') pso_cache.ReleaseWarmArchive();
+ }
+ 
+ PipelineCache::~PipelineCache() {
+diff --git a/tests/test_mtl_pipeline_core.mm b/tests/test_mtl_pipeline_core.mm
+--- a/tests/test_mtl_pipeline_core.mm
++++ b/tests/test_mtl_pipeline_core.mm
+@@ -13,6 +13,10 @@
+ // game's copy shader). Exit 0 when every check passed.
+ #import <Metal/Metal.h>
+ #include "video_core/renderer_metal/mtl_shader.h"
++#include "video_core/renderer_metal/mtl_pso_cache.h"
++#include "video_core/renderer_metal/mtl_device_impl.h"
++#include <filesystem>
++#include <unistd.h>
+ 
+ 
+ #include <setjmp.h>
+@@ -231,6 +235,55 @@
+     std::puts("direct compute residency: plain and cached metadata accepted; unknown, graphics, synthesized, physical-pointer cases rejected; unused page-table name does not imply pointer access");
+ }
+ 
++static void TestWarmArchiveLifetime(Metal::Device& device) {
++    const auto folder=std::filesystem::temp_directory_path()/
++        ("bb-warm-archive-lifetime-"+std::to_string(getpid()));
++    CHECK(!std::filesystem::exists(folder));
++    if(std::filesystem::exists(folder))return;
++    auto native=device.GetImpl().device;
++    NSError* error=nil;
++    auto library=[native newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
++        "kernel void write_value(device uint* dst [[buffer(0)]], constant uint& x [[buffer(1)]]) {dst[0]=x;}"
++        options:nil error:&error];
++    CHECK(library!=nil);if(!library)return;
++    Metal::CompiledShader shader;
++    shader.stage=Metal::ShaderStage::Compute;shader.local_size={1,1,1};
++    shader.library=(__bridge_retained void*)library;
++    shader.function=(__bridge_retained void*)[library newFunctionWithName:@"write_value"];
++    Vulkan::ComputePipelineKey key{};key.value=0x12345;
++    auto queue=[native newCommandQueue];
++    auto output=[native newBufferWithLength:16 options:MTLResourceStorageModeShared];
++    const auto run=[&](const Metal::ComputePipeline* pipeline,u32 value) {
++        CHECK(pipeline&&pipeline->state);if(!pipeline)return;
++        auto command=[queue commandBuffer];auto encoder=[command computeCommandEncoder];
++        [encoder setComputePipelineState:(__bridge id<MTLComputePipelineState>)pipeline->state];
++        [encoder setBuffer:output offset:0 atIndex:0];[encoder setBytes:&value length:4 atIndex:1];
++        [encoder dispatchThreads:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];
++        [encoder endEncoding];[command commit];[command waitUntilCompleted];
++        CHECK(command.status==MTLCommandBufferStatusCompleted);
++        CHECK(*(const u32*)output.contents==value);
++    };
++    {
++        Metal::PsoCache cache{device,folder};
++        auto pipeline=cache.GetComputePipeline(key,&shader);CHECK(pipeline);
++        CHECK(cache.Flush());CHECK(std::filesystem::file_size(cache.ArchivePath())>0);
++        cache.ReleaseWarmArchive();
++        CHECK(cache.GetComputePipeline(key,&shader)==pipeline);
++        CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0x12345678);
++        auto late=key;late.value+=1;run(cache.GetComputePipeline(late,&shader),0x87654321);
++        CHECK(cache.GetCounters().compute_pipelines==2);
++    }
++    {
++        Metal::PsoCache cache{device,folder};CHECK(cache.ArchiveLoaded());
++        auto pipeline=cache.GetComputePipeline(key,&shader);CHECK(pipeline);
++        CHECK(cache.GetCounters().archive_hits==1);
++        cache.ReleaseWarmArchive();CHECK(cache.GetComputePipeline(key,&shader)==pipeline);
++        CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xaabbccdd);
++    }
++    std::filesystem::remove_all(folder);
++    std::puts("warm archive: retained PSO identity/GPU output, late creation and next-start hit passed");
++}
++
+ int main(int argc, char** argv) {
+     @autoreleasepool {
+         std::string reference = argc > 1 ? argv[1] : "";
+@@ -242,6 +295,7 @@
+         }
+         Metal::Device device;
+         TestProfile(device, reference.c_str());
++        TestWarmArchiveLifetime(device);
+         TestSerialization();
+         TestDirectComputeMetadata();
+         TestClipPlanes();

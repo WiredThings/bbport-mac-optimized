@@ -43,7 +43,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -76,7 +76,8 @@ def main():
             assert sha(tested)==r['renderer'] and text_hash(tested)==text_hash(source), 'Measured renderer differs'
         gameplay_validation=dict(report=args.benchmark_report.name,guard_policy=measured['guard_policy'],
                                  means=measured['means'],fps_delta_percent=measured.get('fps_delta_percent',measured.get('deltas',{}).get('fps')),
-                                 selected_flags=measured.get('candidates',[measured['candidate']] if 'candidate' in measured else []), order=measured.get('order','ABBA+BAAB'),
+                                 selected_flags=measured.get('candidates',[measured['candidate']] if 'candidate' in measured else []),
+                                 fixed_flags=measured.get('fixed_variants',{}),order=measured.get('order','ABBA+BAAB'),
                                  runs=len(measured['runs']),isolated_fps_gain_established=False,
                                  scope='Fixed-scene selected-flag comparison; completion is not proof of benefit; >=60 FPS not achieved')
     assert run('lipo', '-archs', source) == 'x86_64'
@@ -132,6 +133,8 @@ def main():
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-4.md', engine / 'METAL-PERFORMANCE-4.md')
     copy(ROOT / 'docs/release/METAL-VERTEX-MATH.md', engine / 'METAL-VERTEX-MATH.md')
     copy(ROOT / 'tools/macos/analyze_metal_attachments.py', engine / 'tools/macos/analyze_metal_attachments.py')
+    copy(ROOT / 'tools/macos/analyze_metal_transfers.py', engine / 'tools/macos/analyze_metal_transfers.py')
+    copy(ROOT / 'docs/release/METAL-SMALL-TRANSFERS.md', engine / 'METAL-SMALL-TRANSFERS.md')
     copy(ROOT / 'tools/macos/analyze_metal_gpu.py', engine / 'tools/macos/analyze_metal_gpu.py')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
         copy(p, engine / 'licenses/metal' / p.name)
@@ -184,6 +187,14 @@ def main():
                     color_clear_batching_default=True,color_clear_batching_enable='BB_MTL_BATCH_CLEARS=1',
                     pending_color_clear_folding_default=True,pending_color_clear_folding_fallback='BB_MTL_FOLD_CLEARS=0',
                     pending_color_clear_folding_decision='Owner authorized default ON after inconclusive isolated ABBA/BAAB; no isolated FPS gain claimed',
+                    ordered_inline_buffer_updates_default=False,
+                    ordered_inline_buffer_updates_enable='BB_MTL_INLINE_UPDATES=1',
+                    ordered_inline_buffer_updates_max_bytes=256,
+                    prewarmed_pipeline_archive_saved_before_gameplay=False,
+                    prewarmed_pipeline_archive_persist_enable='BB_MTL_PERSIST_WARM_ARCHIVE=1',
+                    prewarmed_pipeline_archive_object_released=True,
+                    prewarmed_pipeline_archive_keep_fallback='BB_MTL_RELEASE_WARM_ARCHIVE=0',
+                    compile_audit_default=False,compile_audit_enable='BB_MTL_COMPILE_AUDIT=1 (private diagnostic benchmark only)',
                     combined_metal_profile_default={key:'1' for key in (
                         'BB_MTL_BATCH_CLEARS','BB_MTL_DIRECT_COPY','BB_MTL_ADAPTIVE_STAGING',
                         'BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY','BB_MTL_COALESCE_BARRIERS',
@@ -201,7 +212,7 @@ def main():
                     prior_profile_gameplay_validation=prior_gameplay_validation,
                     app_icon='Hunter\'s Mark game UI artwork, rounded/padded, fixed across launcher startup',
                     game_dock_icon='Original user game sce_sys/icon0.png, rounded/padded once by Cocoa WindowSDL in game process',
-                    update_scope='Hoist-safe queued color clear folding enabled at owner request; original launcher/game icons retained; audio runtime unchanged')
+                    update_scope='Release startup compilation archive metadata while retaining live PSOs; binary persistence and inline writes stay opt-in after budget/performance checks; quality and audio unchanged')
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
     notices.write_text(notices.read_text().replace('No Sony/FromSoftware game files, game artwork, or user saves are included.', 'No game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.') + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +
