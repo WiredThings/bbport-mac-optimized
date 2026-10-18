@@ -1,4 +1,7 @@
-# Metal backend, 0.2.1-metal-mem1
+# Metal backend, 0.2.1-metal-mem1 (historical)
+
+For the current complete source build, use [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md).
+The baseline-overlay example below records the original integration, not the current bootstrap.
 
 The memory-accounting follow-up is described in METAL-MEMORY-1.md.
 

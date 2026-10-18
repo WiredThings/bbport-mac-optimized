@@ -19,4 +19,6 @@ cmake -S "$native/gpu" -B "$native/out/gpu-arm64" -G Ninja \
     -DCMAKE_C_FLAGS_RELEASE='-O3 -DNDEBUG -mcpu=apple-m2' \
     -DCMAKE_CXX_FLAGS_RELEASE='-O3 -DNDEBUG -mcpu=apple-m2' \
     -DCMAKE_OBJCXX_FLAGS_RELEASE='-O3 -DNDEBUG -mcpu=apple-m2'
-ninja -C "$native/out/gpu-arm64" -j "$(sysctl -n hw.ncpu)" bbgpu bb-gpu
+jobs=${BB_BUILD_JOBS:-2}
+[[ $jobs =~ ^[1-9][0-9]*$ ]] || { echo 'BB_BUILD_JOBS must be positive' >&2; exit 1; }
+ninja -C "$native/out/gpu-arm64" -j "$jobs" bbgpu bb-gpu

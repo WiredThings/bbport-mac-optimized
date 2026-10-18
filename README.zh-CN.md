@@ -133,6 +133,49 @@ Metal 引擎、原始游戏补丁、移植算法均保留原作者归属。
 设置和存档在应用外，替换完整 App 会保留它们。默认存档根目录是
 `~/Library/Application Support/bbport/user`，与已有 bbport 安装共享；隔离试用时可先复制存档目录，再选择副本。
 
+## 从源码构建
+
+需要 **Apple Silicon Mac、macOS 26+**、Xcode 27+（或包含 Swift 和 macOS 27+ SDK 的配套
+Command Line Tools）、Apple Silicon [Homebrew](https://brew.sh)、Rosetta 2、Git 和网络。
+脚本会下载固定版本的公开依赖源码，原生构建工具、头文件包和 Python 3.11 由 Homebrew 提供。
+**不依赖游戏文件、模组、旧版 Release 或本机已安装的 Bloodborne App。**
+依赖没有全部内置在主仓库中；这里提供的是联网源码构建流程，不承诺离线构建或产物逐字节一致。
+
+```sh
+xcode-select --install   # 已安装 Xcode / Command Line Tools 可跳过
+softwareupdate --install-rosetta --agree-to-license
+
+git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
+cd bbport-mac-optimized
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source1
+```
+
+脚本依次初始化子模块、编译 x86-64 依赖和 arm64 Vulkan 驱动、安装固定版本的
+SPIRV-Cross／xbyak，构建两种架构的 Vulkan 运行组件、Metal 渲染器和增强运行时，
+测试启动器，再打包**包含两个后端、Python 和运行库的完整 App**。
+36 个 Metal 适配补丁会按顺序应用。各组件串行构建，组件内部默认两并发；
+内存紧张可改成 `BB_BUILD_JOBS=1`，编译前先退出游戏。
+首次会下载并编译较多依赖，请预留数十 GiB 磁盘空间。脚本不会安装到“应用程序”、
+启动游戏或修改存档／设置。
+
+产物位置：
+
+- `out/source-release-0.2.29-source1/Bloodborne Optimized.app`
+- `dist/Bloodborne-Optimized-0.2.29-source1.zip`：Metal + Vulkan 完整应用
+- `dist/bbport-mac-optimized-0.2.29-source1-source.tar.gz`：对应源码及依赖
+- `dist/source-build-verification.json`：最终打包、签名与动态链接检查结果
+- `dist/source-build-SHA256SUMS.txt`：最终 App ZIP 与源码包的校验和
+
+请使用干净克隆；打包器会拒绝未提交的项目文件。再次生成完整 App 时换一个版本后缀，
+避免覆盖已有暂存结果。依赖已由此流程准备好后，可运行
+`BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source2`。
+保留 `.git`：GitHub 自动生成的源码 ZIP 不含子模块；Release 的源码检查包没有构建守卫所需的
+Git 元数据。`v0.2.29` 保留原发布快照，新构建入口请使用 `optimized` 分支。
+
+如果 SDK 与链接器不匹配，将 `SDKROOT` 改为当前编译器支持的已安装 SDK，避免旧链接器搭配新 SDK。
+分步指令、验证边界和排错见[详细构建指南](docs/release/BUILD-OPTIMIZED.md)。
+
 ## 源码与致谢
 
 - [源码、固定依赖与构建方法](docs/release/SOURCE.md)

@@ -160,6 +160,8 @@ def main():
     for name_ in ('run.sh', 'LICENSE', 'tools/macos/run.sh', 'tools/macos/run_optimized.sh', 'tools/macos/quicksave.py', 'patches/Bloodborne.xml'):
         copy(ROOT / name_, engine / name_)
     for name_ in SCRIPTS: copy(ROOT / 'scripts' / name_, engine / 'scripts' / name_)
+    copy(ROOT / 'launcher-macos/Sources/BBLauncher/Resources/Artwork/ATTRIBUTION.txt',
+         engine / 'licenses/icons/HuntersMark-ATTRIBUTION.txt')
     (engine / '.packaged').touch()
     (engine / '.version').write_text(args.version + '\n')
     inputs, machos, included = [], [], {}
@@ -256,12 +258,13 @@ def main():
     copy(pyformula / 'LICENSE', licenses / 'Python-3.11-LICENSE.txt')
     if (pyformula / '.brew/python@3.11.rb').exists(): copy(pyformula / '.brew/python@3.11.rb', source_top / 'dependencies/Python-homebrew-formula.rb')
     python_version = run(py / 'bin/python3.11', '--version')
+    source_revision = run('git', '-C', ROOT, 'rev-parse', 'HEAD')
     notices = f'''Open-source components for Bloodborne Optimized {args.version}\n\nThe port is GPL-2.0-or-later; see LICENSE. Application source, build scripts,
 pinned dependency sources and local patches are available at:
-https://github.com/DiAvisoo/bbport-mac-optimized/tree/v{args.version}
+https://github.com/WiredThings/bbport-mac-optimized/tree/{source_revision}
 Source retrieval and rebuild instructions:
-https://github.com/DiAvisoo/bbport-mac-optimized/blob/v{args.version}/docs/release/SOURCE.md
-Component license texts are in licenses/.\n\nComponents: bbport, shadPS4, KosmicKrisp/Mesa, Vulkan Loader/Headers, SDL3, FFmpeg\n(LGPL build, no GPL/nonfree codecs), fmt, xxHash, miniz, Zydis/Zycore, LibAtrac9,\nImGui, FSR-Vulkan/FidelityFX, sirit/SPIRV-Headers, VMA, xbyak, Boost, magic_enum,\nrobin-map and DejaVu fonts. See SOURCE-MANIFEST.json for revisions.\n\nPrivate preparation runtime: {python_version}, PSF license, built by Homebrew.\nIts standard library is included; optional extensions using external libraries\nare omitted. CPython source: https://www.python.org/downloads/source/\nNo Python third-party packages are included.\n\nNo Sony/FromSoftware game files, game artwork, or user saves are included.\n'''
+https://github.com/WiredThings/bbport-mac-optimized/blob/{source_revision}/docs/release/SOURCE.md
+Component license texts are in licenses/.\n\nComponents: bbport, shadPS4, KosmicKrisp/Mesa, Vulkan Loader/Headers, SDL3, FFmpeg\n(LGPL build, no GPL/nonfree codecs), fmt, xxHash, miniz, Zydis/Zycore, LibAtrac9,\nImGui, FSR-Vulkan/FidelityFX, sirit/SPIRV-Headers, VMA, xbyak, Boost, magic_enum,\nrobin-map and DejaVu fonts. See SOURCE-MANIFEST.json for revisions.\n\nPrivate preparation runtime: {python_version}, PSF license, built by Homebrew.\nIts standard library is included; optional extensions using external libraries\nare omitted. CPython source: https://www.python.org/downloads/source/\nNo Python third-party packages are included.\n\nNo game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.\n'''
     (engine / 'THIRD-PARTY-NOTICES.txt').write_text(notices)
     (source_top / 'THIRD-PARTY-NOTICES.txt').write_text(notices)
     copy(source_top / 'SOURCE-MANIFEST.json', engine / 'SOURCE-MANIFEST.json')
@@ -276,11 +279,16 @@ Component license texts are in licenses/.\n\nComponents: bbport, shadPS4, Kosmic
         assert all(not value.startswith('/') for cmd, value in commands(file) if cmd == 'LC_RPATH')
         subprocess.run(['codesign', '--force', '--sign', '-', str(file)], check=True, stderr=subprocess.DEVNULL)
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-    assert 'BBRepoPath' not in info and 'CFBundleIconFile' not in info
+    assert 'BBRepoPath' not in info and info.get('CFBundleIconFile') == 'AppIcon'
     subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, stderr=subprocess.DEVNULL)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     with tempfile.TemporaryDirectory(prefix='bbport-package-smoke-') as t:
-        env = {'HOME': t, 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'PYTHONHOME': str(pyout), 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'TMPDIR': t, 'USER': os.environ.get('USER', 'tester'), 'LOGNAME': os.environ.get('USER', 'tester'), 'BB_GPU_USER_DIR': t}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('BB_', 'MTLCAPTURE_'))
+               and k not in ('MTL_CAPTURE_ENABLED', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH')}
+        env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', PYTHONHOME=str(pyout),
+                   PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1', TMPDIR=t,
+                   BB_GAME_DIR=t+'/no-game', BB_USER_DIR=t+'/user', BB_DATA_DIR=t+'/data',
+                   BB_GPU_USER_DIR=t+'/cache', BB_CONFIG=t+'/missing.ini')
         subprocess.run([str(pyout / 'bin/python3'), '-c', 'import json,hashlib,fcntl,shutil,tempfile,subprocess,uuid,xml.etree.ElementTree; assert hashlib.sha256(b"abc").hexdigest().startswith("ba7816"); print("Bundled Python imports OK")'], env=env, check=True)
         for script in ('scripts/patches.py', 'scripts/prepare.py', 'scripts/ultrawide_ui.py', 'tools/macos/quicksave.py'):
             subprocess.run([str(pyout / 'bin/python3'), str(engine / script), '--help'], env=env, check=True, stdout=subprocess.DEVNULL)

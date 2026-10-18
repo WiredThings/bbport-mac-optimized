@@ -39,6 +39,8 @@ BREW=$(command -v brew || true)
 [[ -n $BREW ]] || die "Apple Silicon Homebrew missing: see https://brew.sh"
 [[ $("$BREW" --prefix) == /opt/homebrew ]] || echo "note: brew prefix is $("$BREW" --prefix), expected /opt/homebrew"
 
+# Reuse already installed build tools; avoid upgrading unrelated Homebrew dependency trees.
+export HOMEBREW_NO_INSTALL_UPGRADE=1
 step "Native build tools (Homebrew)"
 "$BREW" install cmake ninja pkgconf glslang spirv-tools python@3.13 nasm \
     boost magic_enum robin-map   # header-only: architecture does not matter
@@ -215,6 +217,8 @@ if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
         -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF -DZYDIS_BUILD_TESTS=OFF
 fi
 
+# Metal's x86 host needs the Vulkan loader for linking, not an x86 Vulkan driver.
+if [[ ${BB_SKIP_KOSMICKRISP:-0} != 1 ]]; then
 step "KosmicKrisp (Mesa Vulkan-on-Metal driver, $ARCH)"
 # The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
 # bmy/bbport-mac PR #8: command-buffer memory rework, before geometry-shader emulation.
@@ -225,6 +229,15 @@ kk_stamp=$PREFIX/lib/kosmickrisp/.bbport-patches
 KK_STAMP="$KK_REV $KK_PATCHES"
 if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_STAMP" ]]; then
     "$BREW" install meson llvm spirv-llvm-translator
+    # Mesa requires LLVMSPIRVLib from the same LLVM major/minor series. Existing
+    # Homebrew installations can have a newer LLVM alongside an older translator.
+    llvm_series() { "$("$BREW" --prefix llvm)/bin/llvm-config" --version | cut -d. -f1,2; }
+    spirv_series() { awk '/^Version:/{print $2}' "$("$BREW" --prefix spirv-llvm-translator)/lib/pkgconfig/LLVMSPIRVLib.pc" | cut -d. -f1,2; }
+    if [[ $(llvm_series) != $(spirv_series) ]]; then
+        echo 'Aligning the LLVM / SPIRV-LLVM-Translator build-tool versions'
+        HOMEBREW_NO_INSTALL_UPGRADE= "$BREW" upgrade llvm spirv-llvm-translator
+        [[ $(llvm_series) == $(spirv_series) ]] || die 'LLVM and SPIRV-LLVM-Translator versions do not match'
+    fi
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
     fi
@@ -277,6 +290,8 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
         "$PREFIX/lib/kosmickrisp/"
     echo "$KK_STAMP" > "$kk_stamp"
 fi
+
+fi # BB_SKIP_KOSMICKRISP
 
 step "Verify: every library must contain $ARCH"
 bad=0

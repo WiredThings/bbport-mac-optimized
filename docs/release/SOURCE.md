@@ -11,7 +11,10 @@ The launcher, runtime integration, ordered Metal adapter patches and validation 
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
 ```
 
-Follow [METAL-BACKEND.md](METAL-BACKEND.md) for the pinned Metal engine and build settings.
+For a complete source-to-App build, use [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md) or the
+[README commands](../../README.md#build-from-source). `build_from_source.sh` builds its own
+base package and needs no old App. [METAL-BACKEND.md](METAL-BACKEND.md) is a historical
+integration note; its original baseline-overlay example is not the complete bootstrap.
 The applied submodule worktrees are represented by the versioned ordered patch series;
 `gpu/patches/metal` is part of this repository. The v0.2.29 tag and Release correspond to the current production launcher. See
 [0.2.29.md](0.2.29.md) for the current changes and validation boundaries. The downloadable

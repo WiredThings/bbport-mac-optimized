@@ -11,7 +11,8 @@ DEPS=${BB_DEPS:-$PWD/deps-x86_64}
 source "$DEPS/env.sh"
 BREW_PREFIX=$( (command -v brew >/dev/null && brew --prefix) || echo /opt/homebrew)
 export PATH="$BREW_PREFIX/bin:$PATH"
-JOBS=$(sysctl -n hw.ncpu)
+JOBS=${BB_BUILD_JOBS:-2}
+[[ $JOBS =~ ^[1-9][0-9]*$ ]] || { echo 'BB_BUILD_JOBS must be positive' >&2; exit 1; }
 mkdir -p out
 ARCH=(-arch x86_64 -mmacosx-version-min="$MACOSX_DEPLOYMENT_TARGET")
 
@@ -75,7 +76,7 @@ echo "Built: $(lipo -archs out/bb-probe) out/bb-probe, $(lipo -archs "$gpu_lib")
 # The native GPU process (docs/macos-native-gpu.md, run with BB_NATIVE_GPU=1), once its arm64
 # libraries exist (BB_ARCH=arm64 bash tools/macos/setup_deps.sh). A failure there does not stop
 # this build: the game still runs as before.
-if [[ -z ${BB_SKIP_GPU:-} && -f deps-arm64/env.sh ]]; then
+if [[ -z ${BB_SKIP_GPU:-} && ${BB_SKIP_NATIVE_GPU:-0} != 1 && -f deps-arm64/env.sh ]]; then
     echo "=== Native GPU process (arm64)"
     bash tools/macos/build_gpu_native.sh ||
         echo "warning: native GPU process not built (out/gpu-arm64-errors.txt)" >&2

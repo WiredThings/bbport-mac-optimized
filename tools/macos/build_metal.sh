@@ -32,7 +32,7 @@ export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
 unset PKG_CONFIG_PATH
 cmake -S "$source/gpu" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_PREFIX_PATH="$prefix;$headers;/opt/homebrew" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_OSX_SYSROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}" -DCMAKE_PREFIX_PATH="$prefix;$headers;/opt/homebrew" \
     -Dfmt_DIR="$prefix/lib/cmake/fmt" -DZydis_DIR="$prefix/lib/cmake/zydis" \
     -DZycore_DIR="$prefix/lib/cmake/zycore" -Dminiz_DIR="$prefix/lib/cmake/miniz" \
     -DVulkan_LIBRARY="$prefix/lib/libvulkan.dylib" \

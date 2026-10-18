@@ -149,6 +149,53 @@ Saves and settings live outside the app, so replacing the complete app preserves
 The default save root is `~/Library/Application Support/bbport/user`; existing bbport installations
 share it. Choose a copied save folder for isolated trials.
 
+## Build from source
+
+Use an **Apple Silicon Mac running macOS 26+**, Xcode 27+ (or matching Command Line Tools
+with Swift and a macOS 27+ SDK), Apple Silicon [Homebrew](https://brew.sh), Rosetta 2, Git
+and internet access. The build fetches pinned public dependency sources and uses Homebrew
+for native build tools, header packages and Python 3.11. It needs no game files, game mods,
+previous release or installed Bloodborne app. Dependencies are not all vendored in the root
+repository; this is an online source build, not an offline or byte-identical build guarantee.
+
+```sh
+xcode-select --install   # if Xcode / Command Line Tools are not already installed
+softwareupdate --install-rosetta --agree-to-license
+
+git clone --recurse-submodules --branch optimized https://github.com/WiredThings/bbport-mac-optimized.git
+cd bbport-mac-optimized
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source1
+```
+
+The script initializes submodules, builds the x86-64 libraries and arm64 Vulkan driver,
+installs pinned SPIRV-Cross/xbyak headers, builds the two Vulkan host architectures,
+Metal renderer and enhanced runtime, tests the launcher, and packages a **complete app**
+with both backends, Python and relocated libraries. It applies all 36 Metal adapter patches
+in order. Compilation is sequential across components, with two jobs inside each build;
+use `BB_BUILD_JOBS=1` on memory-constrained systems. Quit the game before building.
+A first build downloads and compiles substantial dependencies; reserve tens of GiB of disk
+space. It never installs into `/Applications`, launches the game or edits saves/settings.
+
+Outputs:
+
+- `out/source-release-0.2.29-source1/Bloodborne Optimized.app`
+- `dist/Bloodborne-Optimized-0.2.29-source1.zip` (complete Metal + Vulkan app)
+- `dist/bbport-mac-optimized-0.2.29-source1-source.tar.gz` (corresponding source/dependencies)
+- `dist/source-build-verification.json` (final packaging/signature/link checks)
+- `dist/source-build-SHA256SUMS.txt` (final app ZIP and source archive hashes)
+
+Build from a clean clone: the packager refuses uncommitted project files. Use a new version
+suffix for another final staging directory. With dependencies already prepared by this
+workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.29-source2`.
+Keep the `.git` directories: GitHub's automatic source ZIP omits submodules, and the Release
+inspection source archive has no Git metadata required by the revision/patch guards.
+`v0.2.29` preserves the original release snapshot; use `optimized` for this new build entry point.
+
+For an SDK/linker mismatch, set `SDKROOT` to an installed SDK supported by your active compiler;
+do not mix an old linker with a newer SDK. See [the detailed build guide](docs/release/BUILD-OPTIMIZED.md)
+for individual commands, verification limits and troubleshooting.
+
 ## Source, credits and distribution
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
