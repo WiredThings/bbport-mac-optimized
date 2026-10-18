@@ -2,7 +2,7 @@
 
 Bloodborne on Apple Silicon, with an optimized renderer, ultrawide support and a simple Mac launcher.
 
-**Tested on a Mac Studio M2 Max (38-core GPU), 64 GB RAM: 30–40 FPS at full 3840×1080 (32:9), 50-60 FPS at 1920x1080 (16:9), without upscaling.** Performance varies by area and shader-cache warm-up. Other Macs, including M1, have not been tested.
+**Tested on a Mac Studio M2 Max (38-core GPU), 64 GB RAM: 30–40 FPS at full 3840×1080 (32:9), 50-60 FPS at 1920x1080 (16:9), without upscaling.** These are upstream-reported M2 Max figures. This fork's separate M4 measurements are below; M1 remains untested.
 
 Demo (1920x1080): https://www.youtube.com/watch?v=hoHo8kN9e6E
 
@@ -19,14 +19,18 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
-The `0.2.18-metal-perf9` preview adds bounded, single-frame attachment diagnostics and
-an optional independent color-clear batching experiment. Batching remains disabled after
-matched gameplay runs showed no FPS benefit. The preview retains
-resolution, sampling, effects and cache budgets. The direct Metal GPU backend and game
-runtime are x86-64 under Rosetta; the launcher is native Apple Silicon. See the
-[capture scope, compatibility checks and benchmark results](docs/release/METAL-FRAME-CAPTURE.md).
+The `0.2.19-metal-perf10` preview enables a combined Metal transfer/resource/query profile
+validated on a base M4 Mac mini (10 GPU cores, 16 GB), with 1920x1080 output and 960x540
+internal scene resolution. A same-binary four-run Central Yharnam ABBA measured 46.88 ->
+48.59 FPS and 30.31 -> 36.75 FPS 1% low, with about 105 MiB higher process footprint accepted
+by the owner. This is a fixed-scene result with run-to-run variation, not a 60 FPS or
+whole-game guarantee. Resolution, effects, filtering and cache budgets are retained.
+See [guard rules, complete results and limits](docs/release/METAL-BENCHMARK-GUARD-V3.md).
 
-Unreleased source experiments add [scoped compute resource declarations and exact RGBA16F exports](docs/release/METAL-RESOURCE-ACCESS-AND-HALF-COPY.md). They remain opt-in pending qualifying gameplay FPS, slow-frame and memory comparisons.
+The renderer and game runtime remain x86-64 under Rosetta; the launcher is native Apple
+Silicon. The profile includes [scoped compute declarations and exact RGBA16F exports](docs/release/METAL-RESOURCE-ACCESS-AND-HALF-COPY.md).
+Single-frame [attachment metadata diagnostics](docs/release/METAL-FRAME-CAPTURE.md) remain
+opt-in. Normal play uses no capture, automatic input or detailed stage-timing diagnostics.
 
 The `0.1.4-mem1` preview adds upstream idle command-buffer trimming, corrected macOS
 graphics-memory budgeting and a pinned KosmicKrisp command-memory fix. It preserves the

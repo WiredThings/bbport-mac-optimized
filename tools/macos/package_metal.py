@@ -35,6 +35,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--version', default=VERSION)
     parser.add_argument('--verification-name', default='metal-backend')
+    parser.add_argument('--benchmark-report', type=Path, help='Completed same-binary combined ABBA report')
     args = parser.parse_args()
     assert re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', args.version)
     assert re.fullmatch(r'[A-Za-z0-9-]+', args.verification_name)
@@ -42,7 +43,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -55,6 +56,20 @@ def main():
     native = engine / 'bin/gpu-metal'
     lib = native / 'libbbgpu.dylib'
     source = args.gpu_build / 'libbbgpu.dylib'
+    gameplay_validation={}
+    if args.benchmark_report:
+        measured=json.loads(args.benchmark_report.read_text())
+        assert measured['status']=='complete' and len(measured['runs'])==4
+        assert [r['label'] for r in measured['runs']]==['a1','b1','b2','a2']
+        for r in measured['runs']:
+            result_path=Path(r['result']);result=json.loads(result_path.read_text())
+            assert result['valid'] and result['renderer_sha256']==r['renderer']
+            owner=json.loads((result_path.parent/'owner.json').read_text())
+            tested=Path(owner['app'])/'Contents/Resources/bbport/bin/gpu-metal/libbbgpu.dylib'
+            assert sha(tested)==r['renderer'] and text_hash(tested)==text_hash(source), 'Measured renderer differs'
+        gameplay_validation=dict(report=args.benchmark_report.name,guard_policy=measured['guard_policy'],
+                                 means=measured['means'],fps_delta_percent=measured['fps_delta_percent'],
+                                 scope='Combined fixed-scene ABBA, not individual flags or whole-game performance; >=60 FPS not achieved')
     assert run('lipo', '-archs', source) == 'x86_64'
     assert minimum(source) <= (26, 0)
     copy(source, lib)
@@ -86,9 +101,10 @@ def main():
             if cmd == 'LC_RPATH': subprocess.run(['install_name_tool', '-delete_rpath', value, str(probe)], check=True)
     else:
         assert text_hash(probe) == text_hash(original), 'CPU runtime instructions changed'
-    for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py', 'tools/macos/benchmark.py']:
+    for relative in ['run.sh', 'tools/macos/run_optimized.sh', 'scripts/patches.py', 'tools/macos/benchmark.py', 'tools/macos/benchmark_candidates.py']:
         copy(ROOT / relative, engine / relative)
     copy(ROOT / 'docs/release/METAL-FRAME-CAPTURE.md', engine / 'METAL-FRAME-CAPTURE.md')
+    copy(ROOT / 'docs/release/METAL-BENCHMARK-GUARD-V3.md', engine / 'METAL-BENCHMARK-GUARD-V3.md')
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
     copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-1.md', engine / 'METAL-PERFORMANCE-1.md')
@@ -151,12 +167,20 @@ def main():
                     upscale_alpha_diagnostic_control='BB_MTL_UPSCALE_ALPHA_FILE',
                     metal_quality_presets=[1.0, 1.5, 1.7, 2.0, 3.0, 1.25],
                     fragment_uniform_specialization_default=False, fragment_uniform_specialization_enable='BB_MTL_FRAGMENT_UNIFORMS=1',
-                    color_clear_batching_default=False,color_clear_batching_enable='BB_MTL_BATCH_CLEARS=1',
+                    color_clear_batching_default=True,color_clear_batching_enable='BB_MTL_BATCH_CLEARS=1',
+                    combined_metal_profile_default={key:'1' for key in (
+                        'BB_MTL_BATCH_CLEARS','BB_MTL_DIRECT_COPY','BB_MTL_ADAPTIVE_STAGING',
+                        'BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY','BB_MTL_COALESCE_BARRIERS',
+                        'BB_MTL_QUERY_COMPUTE_CHAIN','BB_MTL_PRECISE_COMPUTE','BB_MTL_TEXTURE_TILING_HALF')},
+                    combined_profile_source='Metal launch entry defaults; explicit zero overrides retained',
+                    combined_profile_memory_tradeoff='Owner accepted observed ~105 MiB increase; no zero-memory-regression claim',
+                    benchmark_guard_policy='critical-sustained-swap-session-v3',
                     attachment_metadata_capture='--capture-native',attachment_metadata_max_bytes=2097152,
                     benchmark_entry='tools/macos/benchmark.py', benchmark_input_isolated=True,
                     scene_proxy_lean_usage_default=True, scene_proxy_lean_usage_fallback='BB_MTL_PROXY_LEAN=0',
                     scene_proxy_format_promotion='on first compatible non-sRGB reinterpretation; old backing/views retired after GPU tick',
-                    game_started_for_validation=False, gameplay_performance_verified=False)
+                    game_started_for_validation=bool(gameplay_validation), gameplay_performance_verified=bool(gameplay_validation),
+                    gameplay_validation=gameplay_validation)
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
     notices.write_text(notices.read_text() + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +

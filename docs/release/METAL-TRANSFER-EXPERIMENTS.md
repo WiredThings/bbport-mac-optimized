@@ -1,5 +1,10 @@
 # Lossless transfer experiments and unattended measurement
 
+**Later update (0.2.19):** the owner authorized a warning-tolerant guard and combined A/B,
+then accepted the observed ~105 MiB footprint increase. The combined launch profile is now
+enabled; individual-stage reports below retain their historical status and evidence limits.
+See [current guard, results and activation decision](METAL-BENCHMARK-GUARD-V3.md).
+
 Status: development candidates, **all three renderer optimizations default OFF**. The installed
 0.2.18 app remains unchanged. No accepted gameplay FPS improvement or 60 FPS result is claimed.
 Resolution, effects, sampler quality, texture/cache capacities and game saves are unchanged.

@@ -8,6 +8,7 @@ assets or saves are distributed, and normal launcher preferences are never writt
 import argparse
 import importlib.util
 import csv
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -39,6 +40,7 @@ DEFAULT_USER = Path.home() / 'Library/Application Support/bbport/user'
 DIAGNOSTIC_OVERRIDES = {'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_COPY_AUDIT', 'BB_MTL_STAGING_AUDIT'}
 OVERRIDES = {'BB_MTL_PRECISE_COMPUTE', 'BB_MTL_TEXTURE_TILING_HALF', 'BB_MTL_QUERY_COMPUTE_CHAIN', 'BB_MTL_COALESCE_BARRIERS', 'BB_MTL_BUFFER_RANGE_AUDIT', 'BB_MTL_ADAPTIVE_STAGING','BB_MTL_TEXTURE_TILING','BB_MTL_PRECISE_RESIDENCY', 'BB_MTL_STAGING_AUDIT', 'BB_MTL_DIRECT_COPY', 'BB_MTL_COPY_AUDIT', 'BB_MTL_BATCH_CLEARS', 'BB_MTL_FRAGMENT_UNIFORMS', 'BB_MTL_UPSCALE_ALPHA', 'BB_MTL_VERTEX_MATH', 'BB_MTL_PROXY_LEAN'}
 NEUTRAL = 'lx=128 ly=128 rx=128 ry=128'
+GUARD_POLICY = 'critical-sustained-swap-session-v3'
 
 
 def digest(path):
@@ -89,17 +91,71 @@ def pressure():
 
 
 class MemoryGuard:
-    """Stop sustained warning pressure; scored windows require normal pressure throughout."""
+    """Warning is telemetry, not an abort. Bound rapid and total swap growth."""
     def __init__(self, initial_swap, max_growth):
-        self.initial_swap=initial_swap;self.max_growth=max_growth;self.warning_since=None
+        self.initial_swap=initial_swap;self.max_growth=max_growth;self.history=[];self.fast_intervals=0
     def check(self, sample, now, measuring=False):
-        if sample['level']>=4 or sample['swap_mib']-self.initial_swap>self.max_growth:
-            raise RuntimeError('Memory guard stopped this benchmark; no result accepted')
-        if sample['level']>=2:
-            if self.warning_since is None:self.warning_since=now
-            if measuring or now-self.warning_since>=30:
-                raise RuntimeError('Memory warning guard stopped this benchmark; no result accepted')
-        else:self.warning_since=None
+        if sample['level']>=4:
+            raise RuntimeError('Memory guard: critical system pressure; no result accepted')
+        if sample['swap_mib']-self.initial_swap>self.max_growth:
+            raise RuntimeError('Memory guard: total swap growth limit; no result accepted')
+        if self.history:
+            elapsed=now-self.history[-1][0];growth=sample['swap_mib']-self.history[-1][1]
+            self.fast_intervals=self.fast_intervals+1 if elapsed>0 and growth/elapsed>=32 else 0
+        self.history=[(t,s) for t,s in self.history if now-t<=15]
+        self.history.append((now,sample['swap_mib']))
+        # Require both a meaningful byte increase and a sustained observation interval.
+        for t,swap in self.history:
+            elapsed=now-t;growth=sample['swap_mib']-swap
+            if self.fast_intervals>=2 and elapsed>=6 and growth>=512 and growth/elapsed>=32:
+                raise RuntimeError('Memory guard: rapid swap growth (>=512 MiB at >=32 MiB/s across consecutive intervals); no result accepted')
+
+
+class SessionMonitor:
+    """Read lock state and online-display sleep without screen capture or UI control."""
+    def __init__(self):
+        self.cf=ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+        self.io=ctypes.CDLL('/System/Library/Frameworks/IOKit.framework/IOKit')
+        self.cg=ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        self.cf.CFStringCreateWithCString.argtypes=[ctypes.c_void_p,ctypes.c_char_p,ctypes.c_uint32];self.cf.CFStringCreateWithCString.restype=ctypes.c_void_p
+        self.cf.CFGetTypeID.argtypes=[ctypes.c_void_p];self.cf.CFGetTypeID.restype=ctypes.c_ulong
+        self.cf.CFBooleanGetTypeID.restype=ctypes.c_ulong
+        self.cf.CFBooleanGetValue.argtypes=[ctypes.c_void_p];self.cf.CFBooleanGetValue.restype=ctypes.c_bool
+        self.cf.CFRelease.argtypes=[ctypes.c_void_p]
+        self.io.IORegistryGetRootEntry.argtypes=[ctypes.c_uint32];self.io.IORegistryGetRootEntry.restype=ctypes.c_uint32
+        self.io.IORegistryEntryCreateCFProperty.argtypes=[ctypes.c_uint32,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint32];self.io.IORegistryEntryCreateCFProperty.restype=ctypes.c_void_p
+        self.io.IOObjectRelease.argtypes=[ctypes.c_uint32]
+        self.cg.CGGetOnlineDisplayList.argtypes=[ctypes.c_uint32,ctypes.POINTER(ctypes.c_uint32),ctypes.POINTER(ctypes.c_uint32)];self.cg.CGGetOnlineDisplayList.restype=ctypes.c_int32
+        self.cg.CGDisplayIsAsleep.argtypes=[ctypes.c_uint32];self.cg.CGDisplayIsAsleep.restype=ctypes.c_bool
+    def sample(self):
+        root=self.io.IORegistryGetRootEntry(0)
+        if not root:raise RuntimeError('Cannot inspect console lock state; refusing unmonitored benchmark')
+        key=self.cf.CFStringCreateWithCString(None,b'IOConsoleLocked',0x08000100)
+        value=None
+        try:
+            value=self.io.IORegistryEntryCreateCFProperty(root,key,None,0)
+            if not value or self.cf.CFGetTypeID(value)!=self.cf.CFBooleanGetTypeID():
+                raise RuntimeError('Console lock state unavailable; result invalid')
+            locked=bool(self.cf.CFBooleanGetValue(value))
+        finally:
+            if value:self.cf.CFRelease(value)
+            self.cf.CFRelease(key);self.io.IOObjectRelease(root)
+        displays=(ctypes.c_uint32*32)();count=ctypes.c_uint32()
+        if self.cg.CGGetOnlineDisplayList(32,displays,ctypes.byref(count))!=0 or not 0<count.value<=32:
+            raise RuntimeError('Online display state unavailable; result invalid')
+        return dict(locked=locked,all_displays_asleep=all(self.cg.CGDisplayIsAsleep(displays[i]) for i in range(count.value)),online_displays=count.value)
+
+
+class SessionGuard:
+    def __init__(self):self.last=None
+    def check(self,sample,now,wall):
+        if sample['locked'] or sample['all_displays_asleep']:
+            raise RuntimeError('Session guard: console locked or all displays asleep; result invalid')
+        if self.last:
+            mono_gap=now-self.last[0];wall_gap=wall-self.last[1]
+            if mono_gap>12 or abs(wall_gap-mono_gap)>2:
+                raise RuntimeError('Session guard: sleep or monitoring interruption; result invalid')
+        self.last=(now,wall)
 
 
 def check_gpu_faults(log):
@@ -349,8 +405,11 @@ def run(args):
     if game_pids():
         raise ValueError('Another game is running; refusing concurrent memory use')
     initial_pressure = pressure()
-    if initial_pressure['level'] != 1:
-        raise ValueError('System is under memory pressure before boot; retry after it recovers')
+    if initial_pressure['level'] >= 4:
+        raise ValueError('System is under critical memory pressure before boot')
+    session_monitor=SessionMonitor()
+    initial_session=session_monitor.sample()
+    SessionGuard().check(initial_session,time.monotonic(),time.time())
     app = args.app.resolve(); engine = app/'Contents/Resources/bbport'
     if '--benchmark' not in (engine/'tools/macos/run_optimized.sh').read_text() or b'BB_PAD_FILE_ONLY' not in (engine/'bin/bb-probe-metal').read_bytes():
         raise ValueError('App lacks isolated benchmark entry / input support; update first')
@@ -398,9 +457,11 @@ def run(args):
             env.update(BB_PRESENT_DUMP_TRIGGER=str(folder/'display.trigger'),BB_DUMP_DIR=str(folder))
     log_file = (folder/'run.log').open('w')
     source_before = inventory(manifest['source_save'])
-    process = None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
+    process = None; awake_process=None; samples=[]; started=time.monotonic();last_guard=0;next_press=None;held=False;presses=0;world=False;input_pause_until=0;left_title=False
     log_path=folder/'run.log';frames=folder/'data/out/frames.csv'
     memory_guard=MemoryGuard(initial_pressure['swap_mib'],args.max_swap_growth_mib);measuring=False
+    memory_guard.check(initial_pressure,started)
+    session_guard=SessionGuard()
     def guard():
         nonlocal last_guard
         if process.poll() is not None:
@@ -408,20 +469,23 @@ def run(args):
         now=time.monotonic()
         if now-last_guard<3:
             return
-        last_guard=now;p=pressure()
-        memory_guard.check(p,now,measuring)
+        last_guard=now;p=pressure();session=session_monitor.sample()
         lines=log_path.read_text(errors='replace').splitlines()
         totals=[s for s in lines if s.startswith('Metal memory totals:')][-1:]
+        samples.append(dict(elapsed=now-started,pressure=p,memory=totals,session=session,phase='score' if measuring else 'startup-warmup'))
+        write_json(folder/'system-samples.json',samples)
+        session_guard.check(session,now,time.time())
+        memory_guard.check(p,now,measuring)
         if totals and int(re.search(r'footprint=(\d+)',totals[0])[1]) > 9*1024**3:
             raise RuntimeError('Game footprint exceeded 9 GiB guard')
-        samples.append(dict(elapsed=now-started,pressure=p,memory=totals))
-        write_json(folder/'system-samples.json',samples)
     def interrupt(signum, frame):
         raise KeyboardInterrupt(f'Benchmark interrupted by signal {signum}')
     old_signals={sig:signal.signal(sig,interrupt) for sig in (signal.SIGTERM,signal.SIGINT)}
     try:
         process=subprocess.Popen(['bash',str(engine/'tools/macos/run_optimized.sh'),'--benchmark'],env=env,stdout=log_file,stderr=subprocess.STDOUT,start_new_session=True)
-        write_json(folder/'owner.json',dict(pid=process.pid,created=time.time(),app=str(app)))
+        # Owned, temporary idle-sleep assertion; manual lock still invalidates the run.
+        awake_process=subprocess.Popen(['/usr/bin/caffeinate','-di','-w',str(process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+        write_json(folder/'owner.json',dict(pid=process.pid,created=time.time(),app=str(app),idle_assertion_pid=awake_process.pid,guard_policy=GUARD_POLICY,initial_pressure=initial_pressure,initial_session=initial_session))
         print(f'Booting private save: {folder}',flush=True)
         deadline=started+args.startup_timeout
         while time.monotonic()<deadline:
@@ -499,7 +563,7 @@ def run(args):
             return
         measuring=True;last_guard=0;guard()
         first_t=float(frame_rows(frames)[-1]['t_s']);measure_start=time.monotonic()
-        write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds,elapsed_start=measure_start-started,normal_pressure_required=True))
+        write_json(folder/'measurement-window.json',dict(first_t=first_t,seconds=args.seconds,elapsed_start=measure_start-started,normal_pressure_required=False,guard_policy=GUARD_POLICY))
         print(f'Measuring {args.seconds}s; GPU stage timing={args.profile_gpu}',flush=True)
         while time.monotonic()-measure_start<args.seconds:
             guard();time.sleep(.5)
@@ -518,7 +582,7 @@ def run(args):
         result=dict(schema=1,valid=False,name=args.name,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
                     profile_gpu=args.profile_gpu,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_driver=env.get('SDL_AUDIO_DRIVER','default'),audio_muted=args.mute,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
                     renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),
-                    variants=variants,settings_sha256=manifest['ini_sha256'],camera=camera,samples=samples,
+                    variants=variants,settings_sha256=manifest['ini_sha256'],camera=camera,samples=samples,guard_policy=GUARD_POLICY,max_swap_growth_mib=args.max_swap_growth_mib,
                     system=dict(model=command(['sysctl','-n','hw.model']).strip(),os=command(['sw_vers','-productVersion']).strip()),
                     duration=time.monotonic()-started,notes=['Static gameplay benchmark, not whole-game average.','1% low = reciprocal of mean of slowest ceil(1% of frames).','GPU timing is opt-in; compare only matching instrumentation modes.'])
         write_json(folder/'result.json',result)
@@ -534,6 +598,10 @@ def run(args):
         except Exception as error:
             stop_error=str(error)
         finally:
+            try:
+                if awake_process is not None:stop_owned(awake_process)
+            except Exception as error:
+                stop_error=f'{stop_error or ""} Idle assertion cleanup: {error}'
             log_file.close()
             for sig, handler in old_signals.items(): signal.signal(sig,handler)
         unchanged=inventory(manifest['source_save'])==source_before
@@ -560,6 +628,8 @@ def compare(args):
         raise ValueError('Unmatched workloads, instrumentation or host; refusing comparison')
     if a.get('telemetry_mode','full')!=b.get('telemetry_mode','full'):
         raise ValueError('Different frame telemetry overhead; refusing comparison')
+    if (a.get('guard_policy','legacy'),a.get('max_swap_growth_mib'))!=(b.get('guard_policy','legacy'),b.get('max_swap_growth_mib')):
+        raise ValueError('Different memory/session guard policies; refusing comparison')
     if a.get('audio_driver','default')!=b.get('audio_driver','default') or a.get('audio_muted',False)!=b.get('audio_muted',False):
         raise ValueError('Different audio backends; refusing unlike process workloads')
     if math.dist(a['camera'],b['camera'])>.05:

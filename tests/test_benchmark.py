@@ -13,13 +13,38 @@ spec=importlib.util.spec_from_file_location('benchmark',Path(__file__).parents[1
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 
 class BenchmarkTests(unittest.TestCase):
-    def test_memory_warning_grace_and_recovery(self):
+    def test_memory_warning_is_recorded_without_abort(self):
         g=b.MemoryGuard(100,256);warning=dict(level=2,swap_mib=100)
-        g.check(warning,10);g.check(warning,39)
-        g.check(dict(level=1,swap_mib=100),40);g.check(warning,50)
-        with self.assertRaisesRegex(RuntimeError,'warning guard'):g.check(warning,80)
-    def test_memory_scoring_refuses_warning_immediately(self):
-        with self.assertRaisesRegex(RuntimeError,'warning guard'):b.MemoryGuard(100,256).check(dict(level=2,swap_mib=100),10,True)
+        for t in range(0,300,3):g.check(warning,t,True)
+        g.check(dict(level=1,swap_mib=100),301)
+    def test_memory_rapid_swap_growth_stops_before_total_cap(self):
+        g=b.MemoryGuard(100,2048)
+        g.check(dict(level=1,swap_mib=100),0)
+        g.check(dict(level=2,swap_mib=400),3)
+        with self.assertRaisesRegex(RuntimeError,'rapid swap'):g.check(dict(level=2,swap_mib=650),6,True)
+    def test_memory_slow_growth_and_swap_recovery_do_not_trigger_rate_guard(self):
+        g=b.MemoryGuard(100,2048)
+        for t in range(0,100,3):g.check(dict(level=2,swap_mib=100+t*5),t,True)
+        g.check(dict(level=2,swap_mib=200),102)
+    def test_single_loading_swap_burst_is_not_sustained_growth(self):
+        g=b.MemoryGuard(8639.06,2048)
+        for t in range(0,27,3):g.check(dict(level=2,swap_mib=8639.06),t)
+        g.check(dict(level=2,swap_mib=9181.38),27)
+        for t in range(30,120,3):g.check(dict(level=2,swap_mib=9181.38),t,True)
+    def test_growth_rate_resets_after_a_flat_interval(self):
+        g=b.MemoryGuard(100,2048)
+        for t,swap in [(0,100),(3,400),(6,400),(9,700),(12,700)]:g.check(dict(level=2,swap_mib=swap),t)
+    def test_session_lock_display_sleep_and_monitoring_gap_invalidate(self):
+        ready=dict(locked=False,all_displays_asleep=False)
+        for bad in [dict(locked=True,all_displays_asleep=False),dict(locked=False,all_displays_asleep=True)]:
+            with self.assertRaisesRegex(RuntimeError,'Session guard'):b.SessionGuard().check(bad,0,100)
+        for now,wall in [(20,120),(3,120)]:
+            g=b.SessionGuard();g.check(ready,0,100)
+            with self.assertRaisesRegex(RuntimeError,'interruption'):g.check(ready,now,wall)
+        g=b.SessionGuard();g.check(ready,0,100);g.check(ready,3,103)
+    def test_compare_rejects_different_guard_policies(self):
+        a=self.result();c=self.result();c['guard_policy']=b.GUARD_POLICY
+        with self.assertRaisesRegex(ValueError,'guard policies'):self.compare(a,c)
     def test_memory_critical_or_swap_growth_stops_immediately(self):
         for sample in [dict(level=4,swap_mib=100),dict(level=1,swap_mib=357)]:
             with self.assertRaisesRegex(RuntimeError,'Memory guard'):b.MemoryGuard(100,256).check(sample,10)

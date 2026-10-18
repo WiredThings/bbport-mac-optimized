@@ -1,5 +1,10 @@
 # Ordered query compute chain
 
+**Later update (0.2.19):** the owner authorized a warning-tolerant guard and combined A/B,
+then accepted the observed ~105 MiB footprint increase. The combined launch profile is now
+enabled; individual-stage reports below retain their historical status and evidence limits.
+See [current guard, results and activation decision](METAL-BENCHMARK-GUARD-V3.md).
+
 Status: `BB_MTL_QUERY_COMPUTE_CHAIN=1` is experimental and **OFF by default**. The normal
 installed 0.2.18 app is unchanged. There is no accepted new gameplay FPS, slow-frame or memory
 non-regression result, and no 60 FPS claim. A strict scored baseline was stopped during warmup

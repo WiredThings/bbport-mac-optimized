@@ -1,5 +1,10 @@
 # Precise indirect-resource residency experiment
 
+**Later update (0.2.19):** the owner authorized a warning-tolerant guard and combined A/B,
+then accepted the observed ~105 MiB footprint increase. The combined launch profile is now
+enabled; individual-stage reports below retain their historical status and evidence limits.
+See [current guard, results and activation decision](METAL-BENCHMARK-GUARD-V3.md).
+
 Status: `BB_MTL_PRECISE_RESIDENCY=1` is **experimental and OFF by default**. The installed
 0.2.18 app and original launcher settings remain unchanged. No accepted gameplay FPS result
 or 60 FPS claim is available. The default may change only after matching performance and

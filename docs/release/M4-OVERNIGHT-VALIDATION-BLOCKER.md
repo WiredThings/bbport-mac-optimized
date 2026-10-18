@@ -1,5 +1,10 @@
 # M4 fixed-scene validation status
 
+**Later update (0.2.19):** the owner authorized a warning-tolerant guard and combined A/B,
+then accepted the observed ~105 MiB footprint increase. The combined launch profile is now
+enabled; individual-stage reports below retain their historical status and evidence limits.
+See [current guard, results and activation decision](METAL-BENCHMARK-GUARD-V3.md).
+
 The >=60 FPS objective has **not** been achieved or verified. The normal installed app remains
 0.2.18; new transfer, residency, staging and query-chain experiments are OFF by default.
 No quality/effect/resolution/cache-budget or memory-protection change was accepted to obtain

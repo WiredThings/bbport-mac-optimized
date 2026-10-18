@@ -25,6 +25,17 @@ if [[ $renderer == metal ]]; then
     export BB_GPU_WRITE_TWINS=1 BB_GPU_WRITE_TWINS_MAX=65536
     export BB_AUTO_NOHIZ=0 BB_GPU_LABELS=0 ROSETTA_ADVERTISE_AVX=1
     export BB_HDR=0
+    # Same combined profile accepted after the fixed-scene all-OFF/all-ON ABBA.
+    # Keep explicit 0 overrides available for future same-binary comparisons.
+    export BB_MTL_BATCH_CLEARS=${BB_MTL_BATCH_CLEARS:-1}
+    export BB_MTL_DIRECT_COPY=${BB_MTL_DIRECT_COPY:-1}
+    export BB_MTL_ADAPTIVE_STAGING=${BB_MTL_ADAPTIVE_STAGING:-1}
+    export BB_MTL_TEXTURE_TILING=${BB_MTL_TEXTURE_TILING:-1}
+    export BB_MTL_PRECISE_RESIDENCY=${BB_MTL_PRECISE_RESIDENCY:-1}
+    export BB_MTL_COALESCE_BARRIERS=${BB_MTL_COALESCE_BARRIERS:-1}
+    export BB_MTL_QUERY_COMPUTE_CHAIN=${BB_MTL_QUERY_COMPUTE_CHAIN:-1}
+    export BB_MTL_PRECISE_COMPUTE=${BB_MTL_PRECISE_COMPUTE:-1}
+    export BB_MTL_TEXTURE_TILING_HALF=${BB_MTL_TEXTURE_TILING_HALF:-1}
     unset BB_GPU_PROCESS BB_GPU_DEPS VK_DRIVER_FILES VK_ICD_FILENAMES
     unset BB_VULKAN_LIBRARY SDL_VULKAN_LIBRARY DYLD_LIBRARY_PATH BB_MAC_UNIFIED_MEMORY
 else
@@ -85,6 +96,7 @@ if [[ $benchmark == 0 ]]; then
     unset BB_CAPTURE_NATIVE BB_CAPTURE_DIR BB_BENCHMARK_MUTE BB_FRAME_LOG_ONLY
     unset BB_MTL_BUFFER_RANGE_AUDIT BB_MTL_STAGING_AUDIT BB_MTL_COPY_AUDIT
     unset BB_CAPTURE_TRIGGER BB_PRESENT_DUMP_TRIGGER BB_TIMEOUT BB_QUICKLOAD_PENDING
+    unset MTL_CAPTURE_ENABLED MTLCAPTURE_DESTINATION MTLCAPTURE_SCOPE
 else
     [[ $renderer == metal && ${BB_PAD_FILE_ONLY:-} == 1 && -f ${BB_PAD_FILE:-} ]] || die "Benchmark requires Metal and isolated scripted input"
     [[ ${BB_QUICKSAVE:-0} == 0 ]] || die "Benchmark does not restore live quicksaves"
@@ -101,6 +113,7 @@ echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
 echo "Game language: ${BB_LANGUAGE:-1} (Chinese also enables Unlock Game Region)"
 if [[ $renderer == metal ]]; then
     echo "Metal: direct Metal API, Rosetta host, no-copy guest buffers; cache=metal1"
+    echo "Metal combined profile: clear=$BB_MTL_BATCH_CLEARS direct-copy=$BB_MTL_DIRECT_COPY staging=$BB_MTL_ADAPTIVE_STAGING tiling=$BB_MTL_TEXTURE_TILING residency=$BB_MTL_PRECISE_RESIDENCY barriers=$BB_MTL_COALESCE_BARRIERS query=$BB_MTL_QUERY_COMPUTE_CHAIN compute=$BB_MTL_PRECISE_COMPUTE half=$BB_MTL_TEXTURE_TILING_HALF"
 else
     echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"
     echo "Renderer memory fixes: command-trim=$BB_CMDBUF_TRIM, driver-pool-fix=$BB_KK_POOL_FIX"
