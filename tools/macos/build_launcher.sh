@@ -5,7 +5,7 @@
 #   bash tools/macos/build_launcher.sh
 #   open "out/Bloodborne Optimized.app"
 # The repository path is embedded in the app (Info.plist BBRepoPath; Settings can override it).
-# The original vector AppIcon.icns is bundled for Finder, Dock and running instances.
+# The Hunter's Mark AppIcon.icns is bundled for Finder, Dock and running instances.
 # Release builds (tools/macos/package.sh): BB_RELEASE=<version> embeds no repository path and no
 # game artwork; BB_APP sets where the app goes.
 set -euo pipefail

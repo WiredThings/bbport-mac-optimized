@@ -43,7 +43,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -57,6 +57,9 @@ def main():
     lib = native / 'libbbgpu.dylib'
     source = args.gpu_build / 'libbbgpu.dylib'
     gameplay_validation={}
+    baseline_manifest_path=baseline/'Contents/Resources/bbport/METAL-BACKEND.json'
+    baseline_manifest=json.loads(baseline_manifest_path.read_text()) if baseline_manifest_path.exists() else {}
+    prior_gameplay_validation=baseline_manifest.get('gameplay_validation') or baseline_manifest.get('prior_profile_gameplay_validation',{})
     if args.benchmark_report:
         measured=json.loads(args.benchmark_report.read_text())
         assert measured['status']=='complete' and len(measured['runs'])==4
@@ -106,6 +109,8 @@ def main():
     copy(ROOT / 'docs/release/METAL-FRAME-CAPTURE.md', engine / 'METAL-FRAME-CAPTURE.md')
     copy(ROOT / 'docs/release/METAL-BENCHMARK-GUARD-V3.md', engine / 'METAL-BENCHMARK-GUARD-V3.md')
     copy(ROOT / 'docs/release/METAL-BACKEND.md', engine / 'METAL-BACKEND.md')
+    copy(ROOT / 'docs/release/MACOS-APP-ICONS.md', engine / 'MACOS-APP-ICONS.md')
+    copy(ROOT / 'launcher-macos/Sources/BBLauncher/Resources/Artwork/ATTRIBUTION.txt', engine / 'licenses/icons/HuntersMark-ATTRIBUTION.txt')
     copy(ROOT / 'docs/release/METAL-MEMORY-1.md', engine / 'METAL-MEMORY-1.md')
     copy(ROOT / 'docs/release/METAL-PERFORMANCE-1.md', engine / 'METAL-PERFORMANCE-1.md')
     copy(ROOT / 'docs/release/METAL-OCCLUSION-1.md', engine / 'METAL-OCCLUSION-1.md')
@@ -182,13 +187,18 @@ def main():
                     scene_proxy_lean_usage_default=True, scene_proxy_lean_usage_fallback='BB_MTL_PROXY_LEAN=0',
                     scene_proxy_format_promotion='on first compatible non-sRGB reinterpretation; old backing/views retired after GPU tick',
                     game_started_for_validation=bool(gameplay_validation), gameplay_performance_verified=bool(gameplay_validation),
-                    gameplay_validation=gameplay_validation)
+                    gameplay_validation=gameplay_validation,
+                    prior_profile_gameplay_validation=prior_gameplay_validation,
+                    app_icon='Hunter\'s Mark game UI artwork, rounded/padded, fixed across launcher startup',
+                    game_dock_icon='Original user game sce_sys/icon0.png, rounded/padded once by Cocoa WindowSDL in game process',
+                    ui_only_update_scope='One-shot game Dock icon; no new frame-performance claim from prior profile measurements')
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
-    notices.write_text(notices.read_text() + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +
+    notices.write_text(notices.read_text().replace('No Sony/FromSoftware game files, game artwork, or user saves are included.', 'No game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.') + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +
                        '\nSPIRV-Cross f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7 (Apache-2.0).\n' +
                        'Sampler memo adapted from Awakenchan/BloodBorneButPc 4f93643eb573ae445a24db1d64eabf663a5d5147 (GPL-3.0-or-later).\n' +
                        'Game velocity mirror adapted from IFreemz/shadPS4-Bloodborne-DLSS-FSR 149f63645bbb40fa587daa68fbf003b1f6dbcd7d (GPL-2.0-or-later).\n' +
+                       'Launcher icon: Bloodborne Hunter\'s Mark in-game artwork, hosted by Bloodborne Wiki; see licenses/icons/HuntersMark-ATTRIBUTION.txt.\n' +
                        'Integration source and adapter patches: https://github.com/WiredThings/bbport-mac-optimized/tree/optimized\n')
     inspect_payload(engine)
     for p in (lib, probe):

@@ -19,15 +19,17 @@ without modifying game files. See [language setup](docs/USER_GUIDE.md#launcher-a
 
 ## What's included
 
-The `0.2.20-metal-perf10` preview enables a combined Metal transfer/resource/query profile
+The `0.2.21-metal-perf10` preview enables a combined Metal transfer/resource/query profile
 validated on a base M4 Mac mini (10 GPU cores, 16 GB), with 1920x1080 output and 960x540
-internal scene resolution. A same-binary four-run Central Yharnam ABBA measured 46.88 ->
+internal scene resolution. The profile’s earlier same-binary four-run Central Yharnam ABBA measured 46.88 ->
 48.59 FPS and 30.31 -> 36.75 FPS 1% low, with about 105 MiB higher process footprint accepted
 by the owner. This is a fixed-scene result with run-to-run variation, not a 60 FPS or
 whole-game guarantee. Resolution, effects, filtering and cache budgets are retained.
 See [guard rules, complete results and limits](docs/release/METAL-BENCHMARK-GUARD-V3.md).
-The launcher now bundles an original moon-and-blade icon for Finder and Dock, instead of
-replacing its running icon with the game dump’s unformatted `icon0.png`.
+The launcher uses the in-game Hunter’s Mark icon with macOS padding and rounded corners,
+consistently before and after launch. The separate game process reads your own `sce_sys/icon0.png`
+and applies the same formatting to its own Dock icon; it does not replace the launcher icon.
+See [icon provenance and process ownership](docs/release/MACOS-APP-ICONS.md).
 
 The renderer and game runtime remain x86-64 under Rosetta; the launcher is native Apple
 Silicon. The profile includes [scoped compute declarations and exact RGBA16F exports](docs/release/METAL-RESOURCE-ACCESS-AND-HALF-COPY.md).
@@ -60,7 +62,7 @@ Extract the app ZIP and open **Bloodborne Optimized.app**.
 
 For ultrawide, enable **Ultrawide** and choose your resolution before playing. **3840×1080 (32:9)** is the tested setting above; the UI mod is optional.
 
-**Requirements:** Apple Silicon, macOS 26 or later, Rosetta 2, and your own decrypted Bloodborne files with update 1.09 merged in. **No game files, game artwork, UI mods or saves are distributed.**
+**Requirements:** Apple Silicon, macOS 26 or later, Rosetta 2, and your own decrypted Bloodborne files with update 1.09 merged in. **No game executables/data, downloaded UI packs or saves are distributed. The launcher icon uses credited Hunter’s Mark artwork.**
 
 Graphical glitches after loading? Restarting the game often clears them. The first run can take longer while shaders compile. See the [user guide](docs/USER_GUIDE.md) for setup and troubleshooting.
 
@@ -75,7 +77,7 @@ Graphical glitches after loading? Restarting the game often clears them. The fir
 
 Download and extract the app archive, move **Bloodborne Optimized.app** to Applications, choose your game folder, and press **Play**. Requires macOS 26+, Apple Silicon and Rosetta 2. The app bundles its runtime and libraries; no compiling, Homebrew or separate Python installation is needed.
 
-**Supply your own decrypted Bloodborne game files with update 1.09 merged in. No game files, artwork, saves, or shader caches are distributed.** This project is not affiliated with Sony, FromSoftware, Apple, AMD, or shadPS4.
+**Supply your own decrypted Bloodborne game files with update 1.09 merged in. No game executables/data, saves, or shader caches are distributed. Launcher icon artwork is credited separately.** This project is not affiliated with Sony, FromSoftware, Apple, AMD, or shadPS4.
 
 Choose resolution and ultrawide directly in the launcher. Quicksave/quickload is optional, with click-to-remap shortcuts: **F1** configuration, **F2** quicksave, **F3** quickload. Extra settings are in **Advanced**. Existing bbport saves are shared by default; choose a copied save folder for isolated testing.
 

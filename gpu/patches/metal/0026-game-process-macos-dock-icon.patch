@@ -1,0 +1,185 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -183,6 +183,15 @@
+ add_dependencies(bbgpu host_shaders)
+ if (APPLE)
+     add_dependencies(bbgpu host_shaders_msl)
++    target_sources(bbgpu PRIVATE shim/macos_app_icon.mm)
++    set_source_files_properties(shim/macos_app_icon.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
++    target_link_libraries(bbgpu PRIVATE "-framework AppKit")
++    add_executable(macos-app-icon-test EXCLUDE_FROM_ALL ../tests/test_macos_app_icon.mm ../tests/test_gpu_runtime_stubs.cpp)
++    target_compile_options(macos-app-icon-test PRIVATE -UNDEBUG)
++    target_link_options(macos-app-icon-test PRIVATE -Wl,-export_dynamic)
++    set_source_files_properties(../tests/test_macos_app_icon.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
++    target_include_directories(macos-app-icon-test PRIVATE shim shadps4)
++    target_link_libraries(macos-app-icon-test PRIVATE bbgpu "-framework AppKit")
+ endif()
+ if (APPLE)
+     # bbport: the Metal backend, Objective-C++ with ARC (docs/METAL_BACKEND_PLAN.md D4). It uses
+diff --git a/gpu/shim/window.cpp b/gpu/shim/window.cpp
+--- a/gpu/shim/window.cpp
++++ b/gpu/shim/window.cpp
+@@ -5,6 +5,7 @@
+ #include <SDL3/SDL.h>
+ #ifdef __APPLE__
+ #include <SDL3/SDL_metal.h>
++#include "macos_app_icon.h"
+ #endif
+ #include "common/assert.h"
+ #include "common/logging/log.h"
+@@ -97,6 +98,9 @@
+         window_info.render_surface = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+ #ifdef __APPLE__
+     } else if (driver && !std::strcmp(driver, "cocoa")) {
++        // Dock icons belong to a process. Apply this in bb-probe-metal itself,
++        // keeping the launcher's fixed Hunter's Mark icon untouched.
++        BbPort::SetGameDockIcon();
+         window_info.type = WindowSystemType::Metal;
+         window_info.render_surface = SDL_Metal_GetLayer(SDL_Metal_CreateView(window));
+ #endif
+diff --git a/gpu/shim/macos_app_icon.h b/gpu/shim/macos_app_icon.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shim/macos_app_icon.h
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++namespace BbPort {
++// Called once on SDL's Cocoa window thread, inside the game process, not the launcher.
++// Reads the owner's original sce_sys/icon0.png and changes only its Dock representation.
++bool SetGameDockIcon();
++}
+diff --git a/gpu/shim/macos_app_icon.mm b/gpu/shim/macos_app_icon.mm
+new file mode 100644
+--- /dev/null
++++ b/gpu/shim/macos_app_icon.mm
+@@ -0,0 +1,70 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#import <AppKit/AppKit.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <unistd.h>
++#include "macos_app_icon.h"
++
++namespace BbPort {
++bool SetGameDockIcon() {
++    static bool applied = false; // SDL calls this on its main thread, outside the render loop.
++    @autoreleasepool {
++        if (![NSThread isMainThread] || !NSApp) {
++            std::fprintf(stderr, "Game Dock icon: Cocoa main-thread application unavailable\n");
++            return false;
++        }
++        if (applied) return true;
++        const char* game = std::getenv("BB_GAME_DIR");
++        if (!game || !*game) return false;
++        NSString* directory = [NSString stringWithUTF8String:game];
++        if (!directory) return false;
++        NSString* path = [directory stringByAppendingPathComponent:@"sce_sys/icon0.png"];
++        NSDictionary* attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
++        if (!attributes || [attributes fileSize] > 16 * 1024 * 1024) {
++            std::fprintf(stderr, "Game Dock icon: original game image missing or over 16 MiB\n");
++            return false;
++        }
++        NSImage* artwork = [[NSImage alloc] initWithContentsOfFile:path];
++        if (!artwork || artwork.size.width <= 0 || artwork.size.height <= 0 ||
++            artwork.size.width > 4096 || artwork.size.height > 4096) {
++            std::fprintf(stderr, "Game Dock icon: invalid image dimensions\n");
++            return false;
++        }
++        NSBitmapImageRep* bitmap = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
++            pixelsWide:1024 pixelsHigh:1024 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
++            isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
++        if (!bitmap) return false;
++        std::memset(bitmap.bitmapData, 0, bitmap.bytesPerRow * bitmap.pixelsHigh);
++        [NSGraphicsContext saveGraphicsState];
++        NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
++        NSRect bounds = NSMakeRect(96, 96, 832, 832);
++        NSBezierPath* face = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:184 yRadius:184];
++        [NSGraphicsContext saveGraphicsState];
++        NSShadow* shadow = [NSShadow new];
++        shadow.shadowColor = [NSColor.blackColor colorWithAlphaComponent:0.3];
++        shadow.shadowBlurRadius = 24; shadow.shadowOffset = NSMakeSize(0, -12); [shadow set];
++        [NSColor.blackColor setFill]; [face fill];
++        [NSGraphicsContext restoreGraphicsState];
++        [NSGraphicsContext saveGraphicsState]; [face addClip];
++        [NSColor.blackColor setFill]; NSRectFill(bounds);
++        CGFloat scale = MIN(bounds.size.width / artwork.size.width, bounds.size.height / artwork.size.height);
++        NSSize size = NSMakeSize(artwork.size.width * scale, artwork.size.height * scale);
++        NSRect target = NSMakeRect(NSMidX(bounds) - size.width / 2, NSMidY(bounds) - size.height / 2,
++                                  size.width, size.height);
++        NSGraphicsContext.currentContext.imageInterpolation = NSImageInterpolationHigh;
++        [artwork drawInRect:target fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
++        [NSGraphicsContext restoreGraphicsState]; [NSGraphicsContext restoreGraphicsState];
++        // Keep full source pixels but avoid asking AppKit to snapshot a 1024-point,
++        // 2048-pixel HDR Dock image on a Retina display.
++        bitmap.size = NSMakeSize(256, 256);
++        NSImage* icon = [[NSImage alloc] initWithSize:NSMakeSize(256, 256)];
++        [icon addRepresentation:bitmap];
++        NSApp.applicationIconImage = icon;
++        applied = true;
++        std::printf("Game Dock icon: pid=%d original=%s normalized=1024 inset=96 logical=256\n",
++                    getpid(), path.UTF8String);
++        return true;
++    }
++}
++}
+diff --git a/tests/test_macos_app_icon.mm b/tests/test_macos_app_icon.mm
+new file mode 100644
+--- /dev/null
++++ b/tests/test_macos_app_icon.mm
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Exercise the same WindowSDL/Cocoa constructor used by bb-probe-metal, without guest RAM.
++#import <AppKit/AppKit.h>
++#include <SDL3/SDL.h>
++#include <cassert>
++#include <cstdlib>
++#include <cstdio>
++#include <thread>
++#include "sdl_window.h"
++#include "macos_app_icon.h"
++
++int main(int argc, char** argv) {
++    assert(argc == 4);
++    setenv("BB_GAME_DIR", argv[1], 1); setenv("BB_FULLSCREEN", "0", 1);
++    const bool missing = std::string(argv[3]) == "missing";
++    @autoreleasepool {
++        assert(SDL_Init(SDL_INIT_VIDEO));
++        NSImage* initial = NSApp.applicationIconImage;
++        NSData* initialData = [initial.TIFFRepresentation copy];
++        {
++            Frontend::WindowSDL window(64, 64, "bb-probe-metal icon smoke (no game)");
++            int count = 0; SDL_Window** windows = SDL_GetWindows(&count);
++            for (int i=0;i<count;++i) SDL_HideWindow(windows[i]);
++            SDL_free(windows);
++            if (missing) {
++                assert(!BbPort::SetGameDockIcon());
++                assert([NSApp.applicationIconImage.TIFFRepresentation isEqualToData:initialData]);
++            } else {
++                NSImage* icon = NSApp.applicationIconImage;
++                assert(icon);
++                NSData* changedData = [icon.TIFFRepresentation copy];
++                std::printf("Icon data initial=%lu current=%lu\n", (unsigned long)initialData.length, (unsigned long)changedData.length); std::fflush(stdout);
++                assert(![changedData isEqualToData:initialData]);
++                std::printf("Cocoa Dock logical size: %.0fx%.0f points\n", icon.size.width, icon.size.height);
++                NSBitmapImageRep* rep = [NSBitmapImageRep imageRepWithData:icon.TIFFRepresentation];
++                // AppKit mutates its cached icon object and snapshots at display scale.
++                assert(rep.pixelsWide >= 128 && rep.pixelsWide <= 1024 && rep.pixelsHigh == rep.pixelsWide);
++                assert([rep colorAtX:0 y:0].alphaComponent < 0.01);
++                assert([rep colorAtX:rep.pixelsWide*96/1024 y:rep.pixelsHigh*96/1024].alphaComponent < 0.1);
++                assert([rep colorAtX:rep.pixelsWide/2 y:rep.pixelsHigh/2].alphaComponent > 0.99);
++                assert(BbPort::SetGameDockIcon() && [NSApp.applicationIconImage.TIFFRepresentation isEqualToData:changedData]);
++                bool wrong_thread = true;
++                std::thread worker([&] { wrong_thread = BbPort::SetGameDockIcon(); }); worker.join();
++                assert(!wrong_thread && [NSApp.applicationIconImage.TIFFRepresentation isEqualToData:changedData]);
++                NSData* data = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
++                assert([data writeToFile:[NSString stringWithUTF8String:argv[2]] atomically:YES]);
++            }
++        }
++        SDL_Quit();
++    }
++    std::puts(missing ? "Missing-art fallback passed" : "Game-process Cocoa icon, alpha/padding, one-shot and thread checks passed");
++}
