@@ -22,7 +22,7 @@ if target.exists():
 elif source.exists():
     text = source.read_text()
 else:
-    text = ('model_lod=1\neffect_dof=0\neffect_motion_blur=0\neffect_dynamic_shadows=0\n'
+    text = ('model_lod=0\neffect_dof=0\neffect_motion_blur=0\neffect_dynamic_shadows=0\n'
             'effect_game_aa=0\neffect_chromatic_aberration=0\neffect_ssao=0\nskip_intro=1\n')
 fixed = dict(output_res='1920x1080', upscaler='off', live_resolution='0', preset='0', show_fps='1')
 lines = [line for line in text.splitlines() if line.partition('=')[0].strip() not in fixed]

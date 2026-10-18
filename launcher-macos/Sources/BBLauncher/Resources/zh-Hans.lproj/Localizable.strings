@@ -136,6 +136,7 @@
 "Main display" = "主显示器";
 "Mode" = "模式";
 "Model detail" = "模型细节";
+"Forced lower detail can hide walls or floors. Use As in the game if geometry is missing." = "强制降低模型细节可能导致墙体或地板缺失；遇到时请选择“游戏默认”。";
 "Mods" = "模组";
 "Mods folder" = "模组文件夹";
 "Motion blur" = "动态模糊";

@@ -3,6 +3,17 @@ import XCTest
 
 final class OptimizedProfileTests: XCTestCase {
 
+    func testOriginalModelDetailForNewProfilesWithoutOverwritingExistingChoices() {
+        XCTAssertEqual(GameSettings().modelLOD, "0")
+        XCTAssertEqual(GameSettings(ini: [:]).modelLOD, "0")
+        for value in ["-2", "0", "1", "2"] {
+            let game = GameSettings(ini: ["model_lod": value])
+            let profile = OptimizedProfile(prefs: LauncherPrefs(), game: game)
+            XCTAssertEqual(profile.settings.modelLOD, value)
+            XCTAssertEqual(profile.settings.iniValues.first { $0.key == "model_lod" }?.value, value)
+        }
+    }
+
     func testBackendCapabilitiesMatchPinnedMetalEngine() {
         XCTAssertFalse(Catalog.presentModes(renderer: "metal").contains { $0.value == "FifoRelaxed" })
         XCTAssertTrue(Catalog.presentModes(renderer: "vulkan").contains { $0.value == "FifoRelaxed" })

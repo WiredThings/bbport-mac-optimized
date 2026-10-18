@@ -136,6 +136,7 @@
 "Main display" = "Main display";
 "Mode" = "Mode";
 "Model detail" = "Model detail";
+"Forced lower detail can hide walls or floors. Use As in the game if geometry is missing." = "Forced lower detail can hide walls or floors. Use As in the game if geometry is missing.";
 "Mods" = "Mods";
 "Mods folder" = "Mods folder";
 "Motion blur" = "Motion blur";

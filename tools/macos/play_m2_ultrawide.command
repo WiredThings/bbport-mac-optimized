@@ -6,7 +6,7 @@ export BB_NATIVE_CHECKOUT=${BB_NATIVE_CHECKOUT:-$PWD/out/native-05-checkout}
 export BB_DATA_DIR=${BB_DATA_DIR:-$PWD/out/m2-ultrawide}
 mkdir -p "$BB_DATA_DIR/out"
 if [[ ! -f $BB_DATA_DIR/bbport.ini ]]; then
-    printf '%s\n' show_fps=1 model_lod=1 effect_dof=0 effect_motion_blur=0 \
+    printf '%s\n' show_fps=1 model_lod=0 effect_dof=0 effect_motion_blur=0 \
         effect_dynamic_shadows=0 effect_game_aa=0 effect_chromatic_aberration=0 \
         effect_ssao=0 skip_intro=1 > "$BB_DATA_DIR/bbport.ini"
 fi

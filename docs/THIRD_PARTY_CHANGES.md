@@ -2,13 +2,13 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings Blood Echoes 0.2.35 (0235)** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.36 (0236)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.35 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.36 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
 0.2.30 added Chinese-only text-source selection and a private local importer for the community
@@ -153,3 +153,32 @@ unreadable archives are preserved. Descriptor metadata is released with the warm
 is not collected during later gameplay. No shader math, textures, resolution or effects change.
 Serialized Metal pipeline-map keys now preserve their complete byte representation across
 copies, avoiding duplicate states caused by indeterminate structure padding.
+
+
+## Forced model LOD and missing surfaces (2026-10-19)
+
+The existing Kyo/auser1337 `Model LOD 1 (Lower)` patch replaces the model-detail
+selection at guest address `0x0216fc09` with a forced value. In the owner's Old
+Yharnam corridor save, forcing 1 omits both walls and parts of the floor; keeping
+the unpatched game selection (0) restores them. A reverse 0 → 1 check reproduced
+the holes at the same camera with native 1080p, MetalFX off and occlusion off.
+The launcher and new M2 shortcut configurations now default to 0 and warn when a
+forced lower detail level is selected. Existing user settings are not silently
+migrated; the owner's confirmed repair was applied separately. No renderer,
+cache-budget, velocity, occlusion or two-level-page-table code is changed.
+
+Nexus [mod #163 V8 fixed](https://www.nexusmods.com/bloodborne/mods/163?tab=files)
+was downloaded for inspection only. Its `PATCH FOR HIGH RESOLUTIONS` is byte-for-byte
+identical to the bundled `Increased Graphics Heap Sizes` patch (auser1337): two
+writes at `0x04b36dda` and `0x04b36de2`. It does not overlap the active FPS preset.
+The same package's `60 FPS (With Deltatime v2)` overlaps 236 bytes of the active
+Uncap FPS++/Sprint Fix set, with 70 different byte values; it also differs at 43
+bytes from the bundled 60 FPS++ preset. These old FPS patches must not be stacked
+with the existing presets. The downloaded XML/ZIP is not redistributed.
+
+Related upstream reports cover different causes: [bbport #99](https://github.com/deadinside28/bloodborne_pc/issues/99)
+is a Polaris/Vega HiZ driver problem; [BloodBorneButPc's release notes](https://github.com/Awakenchan/BloodBorneButPc/releases)
+report model omissions from PS4-sized graphics heaps. Neither establishes the
+cause on Metal. The matching local LOD comparison is the basis of this repair.
+The large-heap trial reached critical memory pressure and was stopped before
+visual validation; the larger heap is not enabled.

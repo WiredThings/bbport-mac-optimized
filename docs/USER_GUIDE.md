@@ -1,9 +1,9 @@
-# Blood Echoes 0.2.35: user guide
+# Blood Echoes 0.2.36: user guide
 
 [简体中文](USER_GUIDE.zh-CN.md) · [Project overview](../README.md) · [Changes and credits](THIRD_PARTY_CHANGES.md)
 
-This guide covers the WiredThings **0.2.35 (0235) preview**. Older upstream guides describe
-different backends and defaults. Download the [complete public app](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.35).
+This guide covers the WiredThings **0.2.36 (0236) preview**. Older upstream guides describe
+different backends and defaults. Download the [complete public app](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.36).
 
 ## Requirements and installation
 
@@ -13,7 +13,7 @@ different backends and defaults. Download the [complete public app](https://gith
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
 
-Extract `Blood-Echoes-0.2.35-macOS.zip`, move **Blood Echoes.app** to Applications,
+Extract `Blood-Echoes-0.2.36-macOS.zip`, move **Blood Echoes.app** to Applications,
 and open it. The app is ad-hoc signed, not notarized; if macOS blocks it, use **System Settings →
 Privacy & Security → Open Anyway** for this app. Rosetta can be installed through macOS or with:
 
@@ -120,6 +120,28 @@ MetalFX uses temporal upscaling. At 1920×1080 output:
 
 The preset scales each dimension. Effects and model detail remain separate choices; enabling an
 optimization does not turn off effects or lower the selected resolution.
+
+Keep **Model detail → As in the game (0)** for complete scene geometry. Forcing Lower (1)
+or Lowest (2) can omit walls or floors in some areas. A same-save Metal comparison in the
+Old Yharnam corridor reproduced missing surfaces with 1, restored them with 0, then
+reproduced the missing surfaces when returning to 1. This also occurred at native 1080p
+with MetalFX and occlusion culling off; a resolution or upscaler change alone does not fix it.
+MetalFX has its own reconstruction, motion-vector and scene-copy costs. A lower
+input resolution does not guarantee higher FPS; compare at the same location,
+model detail and effects. If native rendering is faster, leaving MetalFX off is
+a supported configuration.
+
+The launcher and new M2 shortcut profiles now use 0 by default. Existing selections are
+retained; change the setting and restart if you encounter this symptom.
+
+The [Nexus #163 V8 package](https://www.nexusmods.com/bloodborne/mods/163?tab=files)
+contains a high-resolution fix identical to the bundled **Increased Graphics Heap Sizes**
+patch. It is separate from the FPS patch and requires a larger direct-memory pool. The
+package also contains older FPS patches that overlap the current **Uncap FPS++** patch;
+do not install or enable the entire XML as a replacement. On this 16 GB M4, the isolated
+large-heap trial reached critical memory pressure before visual validation and was stopped.
+It is not enabled for the missing-wall fix.
+
 
 **Game object motion vectors (experimental)** adds eligible game velocity to camera motion for
 MetalFX. It is enabled by default when applicable and costs GPU work/auxiliary textures. Turning
@@ -242,7 +264,7 @@ save folder and select the copy. Do not use app deletion or shader-cache deletio
 | Slowdown after GPU profiling | Turn GPU timing/frame statistics off for normal play; detailed timing can lower FPS |
 | High memory / crackling / crash | Exit before launching a second copy; retain the log and report scene/session details. Crackling and long-session behavior are not claimed fixed |
 | Source-folder warning in a complete app | In launcher Settings choose the built-in engine; if files are missing, re-extract the complete public ZIP |
-| Help opens an older upstream page | Update to 0.2.35; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
+| Help opens an older upstream page | Update to 0.2.36; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
 
 Report to [this fork's Issues](https://github.com/WiredThings/blood-echoes/issues), including
 app version, Mac/RAM, macOS, backend, output and scene resolution/preset, effects, scene/location,
@@ -250,7 +272,7 @@ and a short relevant log excerpt. Remove private paths where appropriate. Do not
 files or saves. Public packages omit local benchmark/analyzer tools; runtime diagnostics are optional.
 
 For source work, use [SOURCE.md](release/SOURCE.md), [build instructions](release/BUILD-OPTIMIZED.md)
-and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.35 release tag/source archive is an
+and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.36 release tag/source archive is an
 immutable build snapshot; current branch documentation can include later corrections.
 
 Blood Echoes was previously named Bloodborne Optimized. The app and repository names

@@ -304,12 +304,12 @@
             <Line Type="bytes32" Address="0x11f3eab" Value="0x00000118"/>
         </PatchList>
     </Metadata>
-    <Metadata Title="Bloodborne" Name="Model LOD 2 (Lowest)" Note="Lowest model detail, performance increase. Affects visuals, lower Model LOD." Author="Kyo, auser1337" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="Bloodborne" Name="Model LOD 2 (Lowest)" Note="Forces lowest model detail. May omit walls or floors in some areas; use the original model detail if geometry is missing." Author="Kyo, auser1337" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="bytes" Address="0x0216fc09" Value="b90200000090"/>
         </PatchList>
     </Metadata>
-    <Metadata Title="Bloodborne" Name="Model LOD 1 (Lower)" Note="Slightly lower model detail, performance increase. Affects visuals, lower Model LOD." Author="Kyo, auser1337" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="Bloodborne" Name="Model LOD 1 (Lower)" Note="Forces lower model detail. May omit walls or floors in some areas; use the original model detail if geometry is missing." Author="Kyo, auser1337" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="bytes" Address="0x0216fc09" Value="b90100000090"/>
         </PatchList>

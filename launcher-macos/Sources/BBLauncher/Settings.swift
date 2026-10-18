@@ -410,7 +410,8 @@ struct GameSettings: Equatable {
     var objectMotion = true
     var showFPS = true
     var outputRes = "1920x1080"
-    var modelLOD = "1"
+    // Global forced low LOD omits some corridor walls/floors; keep the game's selection.
+    var modelLOD = "0"
     var liveResolution = "0"
     var effects: [EffectSetting] = Catalog.effects.map {
         EffectSetting(key: $0.key, title: $0.title, note: $0.note, isOn: $0.defaultOn)

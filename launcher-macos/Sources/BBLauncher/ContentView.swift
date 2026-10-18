@@ -544,6 +544,11 @@ struct EffectsSection: View {
             Picker(L10n.key("Model detail"), selection: $model.game.modelLOD) {
                 ForEach(Catalog.modelDetail) { Text(L10n.key($0.label)).tag($0.value) }
             }
+            if ["1", "2"].contains(model.game.modelLOD) {
+                Text(L10n.key("Forced lower detail can hide walls or floors. Use As in the game if geometry is missing."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Toggle(isOn: $model.prefs.gameMenu) {
                 Text(L10n.key("Settings in the game's System menu"))
                 Text(L10n.key("The port's display, effects and patch settings as pages after Screen/Sound"))
