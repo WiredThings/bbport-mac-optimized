@@ -1,0 +1,419 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -11,6 +11,8 @@
+ #include <shared_mutex>
+ #include <string>
+ #include <unordered_map>
++#include <vector>
++#include <unistd.h>
+ #include <xxhash.h>
+ 
+ #include "common/assert.h"
+@@ -41,8 +43,17 @@
+ }
+ 
+ 
++// GraphicsPipelineKey deliberately serializes its object representation. Store that
++// representation as bytes: ordinary memberwise copies can leave padding indeterminate.
++using SerializedGraphicsKey = std::array<u8, sizeof(Vulkan::GraphicsPipelineKey)>;
++SerializedGraphicsKey PipelineKeyBytes(const Vulkan::GraphicsPipelineKey& key) {
++    SerializedGraphicsKey bytes;
++    std::memcpy(bytes.data(), &key, sizeof(key));
++    return bytes;
++}
++
+ struct RenderMapKey {
+-    Vulkan::GraphicsPipelineKey key;
++    SerializedGraphicsKey key;
+     const void* vs{}; ///< the MTLFunction objects (the entry retains them: no address reuse)
+     const void* fs{};
+     u64 attributes_hash{};
+@@ -70,7 +81,7 @@
+ 
+ /// A tessellation pipeline: the stages' functions name the compiled variants.
+ struct TessMapKey {
+-    Vulkan::GraphicsPipelineKey key;
++    SerializedGraphicsKey key;
+     const void* vertex{}; ///< the vertex kernel's function without an index buffer
+     const void* control{};
+     const void* eval{};
+@@ -95,7 +106,7 @@
+ 
+ /// A geometry pipeline: the stages' functions name the compiled variants.
+ struct GeometryMapKey {
+-    Vulkan::GraphicsPipelineKey key;
++    SerializedGraphicsKey key;
+     const void* es{}; ///< the export kernel's function without an index buffer
+     const void* gs{};
+     const void* pass_through{};
+@@ -170,6 +181,10 @@
+     bool archive_dirty{};
+     bool persist_enabled{};
+     bool archive_error_logged{};
++    std::filesystem::path archive_snapshot;
++    // Descriptors retain only existing functions and CPU metadata, never texture/buffer data.
++    // Their binaryArchives arrays are cleared, so they cannot keep the read archive alive.
++    std::vector<id> archive_descriptors;
+ };
+ 
+ RenderPipeline::~RenderPipeline() {
+@@ -208,29 +223,41 @@
+     if (cache_dir.empty()) {
+         cache_dir = ShaderCompiler::DefaultCacheDir();
+     }
+-    archive_path = cache_dir / (relaxed_math ? "pipelines-relaxed-math.binaryarchive"
+-                                             : "pipelines.binaryarchive");
++    archive_path = cache_dir / (relaxed_math ? "pipelines-relaxed-math-v2.binaryarchive"
++                                             : "pipelines-v2.binaryarchive");
++    const auto legacy_path=cache_dir/(relaxed_math ? "pipelines-relaxed-math.binaryarchive"
++                                                  : "pipelines.binaryarchive");
+ 
+     @autoreleasepool {
+         std::error_code ec;
+         std::filesystem::create_directories(cache_dir, ec);
+         // OFF ignores existing disk archives as well as disabling automatic writes.
+         // Retain the fresh compilation object and active-PSO lifetime of the accepted baseline.
+-        const bool exists = impl->persist_enabled && std::filesystem::exists(archive_path, ec);
++        const auto input_path=std::filesystem::exists(archive_path,ec) ? archive_path : legacy_path;
++        const bool exists = impl->persist_enabled && std::filesystem::exists(input_path, ec);
+         MTLBinaryArchiveDescriptor* descriptor = [MTLBinaryArchiveDescriptor new];
+         if (exists) {
+-            descriptor.url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:archive_path.c_str()]];
++            // Metal may move an unchanged input archive on serialize. Always read a private
++            // copy; the original/legacy file is never a serializer input or removed on error.
++            std::string name=(std::filesystem::temp_directory_path()/
++                ("bbport-metal-read-"+std::to_string(getpid())+"-XXXXXX")).string();
++            const int fd=mkstemp(name.data());
++            if(fd>=0) {
++                close(fd);impl->archive_snapshot=name;
++                std::filesystem::copy_file(input_path,impl->archive_snapshot,
++                    std::filesystem::copy_options::overwrite_existing,ec);
++                if(!ec)descriptor.url=[NSURL fileURLWithPath:@(name.c_str())];
++            }
++            if(!descriptor.url)LOG_WARNING(Render,"Metal archive snapshot unavailable; preserving {}",input_path.string());
+         }
+         NSError* error = nil;
+         id<MTLBinaryArchive> archive =
+             [impl->mtl_device newBinaryArchiveWithDescriptor:descriptor error:&error];
+-        if (archive && exists) {
++        if (archive && descriptor.url) {
+             archive_loaded = true;
+-        } else if (!archive && exists) {
+-            // Another device or OS build, or a damaged file: start over.
+-            LOG_WARNING(Render, "Metal binary archive {} unusable ({}), starting a new one",
+-                        archive_path.string(), FirstLine(error));
+-            std::filesystem::remove(archive_path, ec);
++        } else if (!archive && descriptor.url) {
++            LOG_WARNING(Render, "Metal binary archive {} unusable ({}); preserving original",
++                        input_path.string(), FirstLine(error));
+             descriptor.url = nil;
+             error = nil;
+             archive = [impl->mtl_device newBinaryArchiveWithDescriptor:descriptor error:&error];
+@@ -246,6 +273,7 @@
+ 
+ PsoCache::~PsoCache() {
+     if (impl->persist_enabled) Flush();
++    ReleaseWarmArchive();
+ }
+ 
+ void PsoCache::ReleaseWarmArchive() {
+@@ -254,6 +282,10 @@
+     std::scoped_lock lock{impl->archive_mutex};
+     impl->archive = nil;
+     impl->archive_dirty = false;
++    impl->archive_descriptors.clear();
++    std::error_code ec;
++    if(!impl->archive_snapshot.empty())std::filesystem::remove(impl->archive_snapshot,ec);
++    impl->archive_snapshot.clear();
+ }
+ 
+ bool PsoCache::Flush() {
+@@ -262,6 +294,33 @@
+         return true;
+     }
+     @autoreleasepool {
++        if(impl->persist_enabled && !impl->archive_descriptors.empty()) {
++            // AGX can successfully read an archive, but corrupt its stage associations when
++            // appending and repacking ("expecting fragment"/"missing vertex"). Never repack
++            // a loaded object. Release it BEFORE creating the complete replacement, avoiding
++            // two large archive objects in memory. All live PSOs remain in their maps.
++            impl->archive=nil;
++            NSError* rebuild_error=nil;
++            auto fresh=[impl->mtl_device newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new]
++                                                                  error:&rebuild_error];
++            bool rebuilt=fresh!=nil;
++            for(id descriptor:impl->archive_descriptors) {
++                if(!rebuilt)break;
++                if([descriptor isKindOfClass:[MTLRenderPipelineDescriptor class]])
++                    rebuilt=[fresh addRenderPipelineFunctionsWithDescriptor:descriptor error:&rebuild_error];
++                else
++                    rebuilt=[fresh addComputePipelineFunctionsWithDescriptor:descriptor error:&rebuild_error];
++            }
++            impl->archive=fresh;
++            archive_loaded=false;
++            if(!rebuilt) {
++                if(!impl->archive_error_logged) {
++                    impl->archive_error_logged=true;
++                    LOG_WARNING(Render,"Metal archive rebuild failed ({}); existing files retained",FirstLine(rebuild_error));
++                }
++                return false;
++            }
++        }
+         std::error_code ec;
+         const std::filesystem::path temp = archive_path.string() + ".tmp";
+         std::filesystem::remove(temp, ec);
+@@ -283,6 +342,9 @@
+         }
+     }
+     impl->archive_dirty = false;
++    if(impl->persist_enabled)
++        LOG_INFO(Render,"Metal binary archive: saved {} prewarmed descriptors to {}",
++                 impl->archive_descriptors.size(),archive_path.filename().string());
+     return true;
+ }
+ 
+@@ -290,7 +352,8 @@
+ 
+ /// Makes `archive`'s handling of one descriptor uniform for render and compute: a lookup with
+ /// FailOnBinaryArchiveMiss first (an archive hit skips the compiler), the regular creation
+-/// otherwise, then the descriptor is added to the archive.
++/// otherwise. Persistence records every descriptor for a fresh Flush; loaded archives stay
++/// lookup-only. The nonpersistent transient compilation archive retains its prior behavior.
+ template <typename Descriptor, typename Create, typename Add>
+ id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* descriptor,
+                      Create create, Add add, bool& from_archive, std::string& error) {
+@@ -299,6 +362,13 @@
+     id<MTLBinaryArchive> archive = impl.archive;
+     from_archive = false;
+     NSError* ns_error = nil;
++    const auto record=[&] {
++        if(!impl.persist_enabled || !archive)return;
++        Descriptor* saved=[descriptor copy];
++        saved.binaryArchives=@[];
++        std::scoped_lock lock{impl.archive_mutex};
++        impl.archive_descriptors.push_back(saved);
++    };
+     if (archive) {
+         descriptor.binaryArchives = @[ archive ];
+         if (archive_loaded) {
+@@ -306,6 +376,7 @@
+             if (state) {
+                 from_archive = true;
+                 audit.ok = true; audit.cached = true;
++                record();
+                 return state;
+             }
+             ns_error = nil;
+@@ -317,8 +388,14 @@
+         return nil;
+     }
+     audit.ok = true;
++    record();
+     if (archive) {
+         std::scoped_lock lock{impl.archive_mutex};
++        if(impl.persist_enabled) {
++            // Read archive is lookup-only. Flush rebuilds from the full descriptor ledger.
++            impl.archive_dirty=true;
++            return state;
++        }
+         NSError* add_error = nil;
+         if (add(archive, descriptor, &add_error)) {
+             impl.archive_dirty = true;
+@@ -339,8 +416,8 @@
+                                                        const CompiledShader* fs,
+                                                        const RenderPipelineInput& input) {
+     ASSERT(vs && vs->function);
+-    const RenderMapKey map_key{
+-        .key = key,
++    RenderMapKey map_key{
++        .key = PipelineKeyBytes(key),
+         .vs = vs->function,
+         .fs = fs ? fs->function : nullptr,
+         .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
+@@ -802,8 +879,8 @@
+     const Vulkan::GraphicsPipelineKey& key, const TessellationInput& input,
+     const CompiledShader* fs) {
+     ASSERT(input.vertex[0] && input.control && input.eval);
+-    const TessMapKey map_key{
+-        .key = key,
++    TessMapKey map_key{
++        .key = PipelineKeyBytes(key),
+         .vertex = input.vertex[0]->function,
+         .control = input.control->function,
+         .eval = input.eval->function,
+@@ -1001,8 +1078,8 @@
+                                                       const GeometryPipelineInput& input,
+                                                       const CompiledShader* fs) {
+     ASSERT(input.es[0] && input.gs && input.pass_through);
+-    const GeometryMapKey map_key{
+-        .key = key,
++    GeometryMapKey map_key{
++        .key = PipelineKeyBytes(key),
+         .es = input.es[0]->function,
+         .gs = input.gs->function,
+         .pass_through = input.pass_through->function,
+--- a/tests/test_mtl_pipeline_core.mm
++++ b/tests/test_mtl_pipeline_core.mm
+@@ -233,6 +233,136 @@
+         shader.stage=stage;CHECK(!shader.HasOnlyDirectComputeResources());
+     }
+     std::puts("direct compute residency: plain and cached metadata accepted; unknown, graphics, synthesized, physical-pointer cases rejected; unused page-table name does not imply pointer access");
++}
++
++static void TestRenderArchiveRebuild(Metal::Device& device) {
++    const auto folder=std::filesystem::temp_directory_path()/
++        ("bb-render-archive-stages-"+std::to_string(getpid()));
++    CHECK(!std::filesystem::exists(folder));
++    if(std::filesystem::exists(folder)) return;
++    std::filesystem::create_directories(folder);
++    const auto path=folder/"pipelines.binaryarchive";
++    const auto active_path=folder/"pipelines-v2.binaryarchive";
++    auto native=device.GetImpl().device;
++    NSError* error=nil;
++    auto vl=[native newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
++        "vertex float4 main0(uint i [[vertex_id]]) {float2 p[3]={float2(-1,-1),float2(3,-1),float2(-1,3)};return float4(p[i],0.5,1);}"
++        options:nil error:&error];
++    auto fl=[native newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
++        "fragment float4 main0(){return float4(0.25,0.5,0.75,1);}"
++        options:nil error:&error];
++    auto fl2=[native newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
++        "fragment float4 main0(){return float4(0.75,0.5,0.25,1);}"
++        options:nil error:&error];
++    CHECK(vl&&fl&&fl2);if(!vl||!fl||!fl2)return;
++    Metal::CompiledShader vs,fs,fs2;
++    vs.stage=Metal::ShaderStage::Vertex;fs.stage=fs2.stage=Metal::ShaderStage::Fragment;
++    vs.library=(__bridge_retained void*)vl;
++    vs.function=(__bridge_retained void*)[vl newFunctionWithName:@"main0"];
++    fs.library=(__bridge_retained void*)fl;
++    fs.function=(__bridge_retained void*)[fl newFunctionWithName:@"main0"];
++    fs2.library=(__bridge_retained void*)fl2;
++    fs2.function=(__bridge_retained void*)[fl2 newFunctionWithName:@"main0"];
++    auto descriptor=[MTLRenderPipelineDescriptor new];
++    descriptor.vertexFunction=(__bridge id<MTLFunction>)vs.function;
++    descriptor.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++    // Preserve an older mixed-format archive while using a safe fresh-writer generation.
++    {
++        auto legacy=[native newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new] error:&error];
++        CHECK([legacy addRenderPipelineFunctionsWithDescriptor:descriptor error:&error]);
++        CHECK([legacy serializeToURL:[NSURL fileURLWithPath:@(path.c_str())] error:&error]);
++    }
++    Vulkan::GraphicsPipelineKey key{};
++    key.stage_hashes[u32(Shader::SwStage::Vertex)]=0x12345;
++    key.stage_hashes[u32(Shader::SwStage::Fragment)]=0x6789;
++    key.prim_type=AmdGpu::PrimitiveType::TriangleList;
++    key.num_samples=1;key.num_color_attachments=1;key.mrt_mask=1;
++    key.color_buffers[0].data_format=AmdGpu::DataFormat::Format8_8_8_8;
++    key.color_buffers[0].num_format=AmdGpu::NumberFormat::Unorm;
++    key.write_masks[0]=vk::ColorComponentFlagBits::eR|vk::ColorComponentFlagBits::eG|
++                       vk::ColorComponentFlagBits::eB|vk::ColorComponentFlagBits::eA;
++    auto vertex_only=key;vertex_only.stage_hashes[u32(Shader::SwStage::Fragment)]=0;
++    const char* previous=std::getenv("BB_MTL_PERSIST_WARM_ARCHIVE");
++    const bool had_previous=previous!=nullptr;const std::string previous_value=previous?previous:"";
++    setenv("BB_MTL_PERSIST_WARM_ARCHIVE","1",1);
++    const auto draw=[&](const Metal::RenderPipeline* pipeline,bool inverse=false) {
++        CHECK(pipeline&&pipeline->state);if(!pipeline)return;
++        auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
++        td.usage=MTLTextureUsageRenderTarget;td.storageMode=MTLStorageModeShared;
++        auto texture=[native newTextureWithDescriptor:td];
++        auto pass=[MTLRenderPassDescriptor renderPassDescriptor];
++        pass.colorAttachments[0].texture=texture;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
++        pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++        auto command=[[native newCommandQueue] commandBuffer];auto encoder=[command renderCommandEncoderWithDescriptor:pass];
++        [encoder setRenderPipelineState:(__bridge id<MTLRenderPipelineState>)pipeline->state];
++        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
++        [encoder endEncoding];[command commit];[command waitUntilCompleted];
++        CHECK(command.status==MTLCommandBufferStatusCompleted);
++        unsigned char pixel[4]{};
++        [texture getBytes:pixel bytesPerRow:4 fromRegion:MTLRegionMake2D(4,4,1,1) mipmapLevel:0];
++        CHECK(pixel[0]==(inverse?191:64)&&pixel[1]==128&&pixel[2]==(inverse?64:191)&&pixel[3]==255);
++    };
++    {
++        Metal::PsoCache cache{device,folder};CHECK(cache.ArchiveLoaded());
++        auto plain=cache.GetRenderPipeline(vertex_only,&vs,nullptr,{});
++        auto colored=cache.GetRenderPipeline(key,&vs,&fs,{});
++        CHECK(plain&&colored);
++        if(plain&&colored)CHECK(plain->vertex_function==vs.function&&colored->vertex_function==vs.function);
++        NSData* legacy=[NSData dataWithContentsOfFile:@(path.c_str())];
++        draw(colored);CHECK(cache.Flush());
++        CHECK([legacy isEqualToData:[NSData dataWithContentsOfFile:@(path.c_str())]]);
++        // The legacy mixed archive remains byte-identical and usable for rollback.
++        auto ad=[MTLBinaryArchiveDescriptor new];ad.url=[NSURL fileURLWithPath:@(path.c_str())];
++        auto retained=[native newBinaryArchiveWithDescriptor:ad error:&error];
++        descriptor.binaryArchives=@[retained];
++        CHECK([native newRenderPipelineStateWithDescriptor:descriptor
++            options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:&error]!=nil);
++        cache.ReleaseWarmArchive();CHECK(cache.GetRenderPipeline(key,&vs,&fs,{})==colored);draw(colored);
++    }
++    {
++        Metal::PsoCache cache{device,folder};CHECK(cache.ArchiveLoaded());
++        CHECK(cache.GetRenderPipeline(vertex_only,&vs,nullptr,{}));
++        draw(cache.GetRenderPipeline(key,&vs,&fs,{}));
++        CHECK(cache.GetCounters().archive_hits==2);
++        auto other=key;other.stage_hashes[u32(Shader::SwStage::Fragment)]+=1;
++        draw(cache.GetRenderPipeline(other,&vs,&fs2,{}),true);
++        CHECK(cache.Flush());cache.ReleaseWarmArchive();
++    }
++    {
++        Metal::PsoCache cache{device,folder};CHECK(cache.ArchiveLoaded());
++        auto other=key;other.stage_hashes[u32(Shader::SwStage::Fragment)]+=1;
++        draw(cache.GetRenderPipeline(other,&vs,&fs2,{}),true);
++        CHECK(cache.GetCounters().archive_hits==1);
++        // Force a genuinely new render state, then deny writes to this TEST directory.
++        auto library=[native newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;fragment float4 main0(){return float4(0,1,0,1);}"
++            options:nil error:&error];
++        Metal::CompiledShader third;third.stage=Metal::ShaderStage::Fragment;
++        third.library=(__bridge_retained void*)library;
++        third.function=(__bridge_retained void*)[library newFunctionWithName:@"main0"];
++        other.stage_hashes[u32(Shader::SwStage::Fragment)]+=1;
++        CHECK(cache.GetRenderPipeline(other,&vs,&third,{}));
++        NSData* original=[NSData dataWithContentsOfFile:@(active_path.c_str())];
++        std::filesystem::permissions(folder,std::filesystem::perms::owner_read|std::filesystem::perms::owner_exec);
++        CHECK(!cache.Flush());
++        std::filesystem::permissions(folder,std::filesystem::perms::owner_all);
++        CHECK([original isEqualToData:[NSData dataWithContentsOfFile:@(active_path.c_str())]]);
++        // A failed driver serialization can poison that compiler object; release it.
++        cache.ReleaseWarmArchive();
++    }
++    {
++        const auto bad=folder/"invalid";std::filesystem::create_directory(bad);
++        const auto file=bad/"pipelines-v2.binaryarchive";std::ofstream(file)<<"invalid-test-archive";
++        NSData* original=[NSData dataWithContentsOfFile:@(file.c_str())];
++        {Metal::PsoCache cache{device,bad};CHECK(!cache.ArchiveLoaded());}
++        CHECK([original isEqualToData:[NSData dataWithContentsOfFile:@(file.c_str())]]);
++    }
++    if(had_previous)setenv("BB_MTL_PERSIST_WARM_ARCHIVE",previous_value.c_str(),1);
++    else unsetenv("BB_MTL_PERSIST_WARM_ARCHIVE");
++    const auto prefix="bbport-metal-read-"+std::to_string(getpid())+"-";
++    for(const auto& entry:std::filesystem::directory_iterator(std::filesystem::temp_directory_path()))
++        CHECK(!entry.path().filename().string().starts_with(prefix));
++    std::filesystem::remove_all(folder);
++    std::puts("render archive: legacy file retained, incremental rebuild/reload hits, GPU pixels/lifetime unchanged, failed writes and invalid inputs preserved");
+ }
+ 
+ static void TestWarmArchiveLifetime(Metal::Device& device) {
+@@ -285,7 +415,7 @@
+         CHECK(cache.GetCounters().compute_pipelines==1);run(pipeline,0xaabbccdd);
+     }
+     setenv("BB_MTL_PERSIST_WARM_ARCHIVE", "0", 1);
+-    const auto archive_file=folder/"pipelines.binaryarchive";
++    const auto archive_file=folder/"pipelines-v2.binaryarchive";
+     NSData* saved_archive=[NSData dataWithContentsOfFile:@(archive_file.c_str())];
+     CHECK(saved_archive!=nil);
+     {
+@@ -301,7 +431,7 @@
+             Metal::PsoCache cache{device,no_auto_flush};
+             run(cache.GetComputePipeline(key,&shader),0x13572468);
+         }
+-        CHECK(!std::filesystem::exists(no_auto_flush/"pipelines.binaryarchive"));
++        CHECK(!std::filesystem::exists(no_auto_flush/"pipelines-v2.binaryarchive"));
+     }
+     {
+         const auto no_flush=folder/"without-persistence";
+@@ -329,6 +459,7 @@
+         Metal::Device device;
+         TestProfile(device, reference.c_str());
+         TestWarmArchiveLifetime(device);
++        TestRenderArchiveRebuild(device);
+         TestSerialization();
+         TestDirectComputeMetadata();
+         TestClipPlanes();

@@ -11,7 +11,7 @@ the `optimized` branch of `WiredThings/blood-echoes`:
 ```sh
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.34-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.35-source1
 ```
 
 See [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md) and the [README](../../README.md#build-from-source).
@@ -19,7 +19,7 @@ The build creates its own base app and needs no installed app or game files. The
 Release source archive contains pinned submodule sources with all adapter patches applied.
 Use the recursive clone to retain the Git metadata required by revision guards.
 
-The `v0.2.34` tag is the renamed app's build snapshot; older tags and their asset filenames
+The `v0.2.35` tag is the archive-safety build snapshot; older tags and their asset filenames
 remain historical releases. Private World Warper tools, routes, game data and saves are excluded.
 
 ## Original standalone release (historical)

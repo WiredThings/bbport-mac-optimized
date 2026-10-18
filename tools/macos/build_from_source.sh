@@ -3,7 +3,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
-version=${1:-0.2.34-source1}
+version=${1:-0.2.35-source1}
 jobs=${BB_BUILD_JOBS:-2}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { echo 'Use a semantic version without v.' >&2; exit 1; }
 [[ ! -e out/source-release-$version ]] || { echo 'Output already exists; choose a new version suffix.' >&2; exit 1; }

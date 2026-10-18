@@ -1,4 +1,4 @@
-# Metal optimization controls — 0.2.28
+# Metal optimization controls — 0.2.35
 
 The launcher exposes 25 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. The displayed badges are **Verified**,
@@ -47,8 +47,8 @@ remains available to native tests; ordinary startup already calls it only when o
 
 Native tests verify ON save/next-start hits, OFF with an existing file (zero archive hits and
 byte-identical file preservation), OFF without release (no destructor-created file), retained
-pipeline identity, late pipeline creation and GPU output. The archive-persistence check originally covered 33 patches; the current 0.2.28 series has
-36 patches and reconstructs idempotently. Swift tests exercise every toggle, defaults, parent gates, persistence, migration,
+pipeline identity, late pipeline creation and GPU output. The archive-persistence check originally covered 33 patches; the current 0.2.35 series has
+37 patches and reconstructs idempotently. Swift tests exercise every toggle, defaults, parent gates, persistence, migration,
 reset, environment precedence, backend isolation and all three localized descriptions.
 
 ## Retired offline-library experiment
@@ -112,3 +112,16 @@ capacity, image quality, game saves and existing effect choices are unchanged.
 The full-app QA bundle uses a distinct preference domain and a QA-only data path. Production
 ignores that path override. Tests cover every flag, dependency gating, legacy migration,
 backend isolation, presentation aliases, diagnostic precedence and localized format arguments.
+
+## Binary archive write safety (0.2.35)
+
+Persistence remains experimental/OFF by default; existing explicit choices are unchanged.
+Loaded archives are lookup-only. On a miss, the next startup save rebuilds the complete known
+prewarm set into a fresh object, releasing the read object first. The CPU descriptor ledger
+contains no texture/buffer contents and is cleared by warm-archive release; late game-time
+pipelines do not accumulate serialization metadata after release.
+
+The new files are `pipelines-v2.binaryarchive` / `pipelines-relaxed-math-v2.binaryarchive`.
+The old files remain in place and may supply first-upgrade lookup hits; no cache clearing is
+required. Existing SPIR-V/MSL file formats, capacity and paths are unchanged. This repair
+addresses archive persistence, not a claimed gameplay FPS gain.
