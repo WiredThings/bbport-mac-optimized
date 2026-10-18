@@ -98,11 +98,6 @@ struct LanguageSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if !model.prefs.usesCommunityChinese,
-               let warning = gameLanguageWarning(folder: model.prefs.gameFolder, language: model.prefs.language) {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-            }
         } header: {
             Text(L10n.key("Language"))
         } footer: {

@@ -238,7 +238,6 @@
 "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling." = "选择已在 out/ 中完成原生构建的优化版源码目录。启动器直接运行预先构建的原生渲染器。";
 "The port is not built yet: run bash tools/macos/build.sh in Terminal" = "尚未构建游戏引擎，请在终端运行 bash tools/macos/build.sh。";
 "The port's display, effects and patch settings as pages after Screen/Sound" = "增加显示、特效和补丁设置页面。";
-"The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language." = "所选中文需要对应的文本和字体文件。当前游戏目录缺少部分资源，游戏可能回退到其他语言。";
 "The update failed: see the log" = "更新失败，请查看日志";
 "Third-party patches" = "第三方补丁";
 "This app carries its own engine; settings, saves and logs go to the data folder. To use an optimized source checkout instead, choose its folder." = "本应用包含游戏引擎，设置、存档和日志保存在数据目录。若要改用优化版源码构建，请选择其目录。";

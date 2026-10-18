@@ -528,3 +528,18 @@ struct IniFile {
         return out.joined(separator: "\n") + "\n"
     }
 }
+
+/// QA builds never use protected Documents/Downloads paths or the production data folder.
+/// Per-run bundle identifiers prevent LaunchServices from selecting an older QA copy.
+func qaApplicationSupportURL(bundleIdentifier: String?, previewPath: String?) -> URL? {
+    let prefix = "io.github.bbport.optimized.options-qa"
+    guard let identifier = bundleIdentifier,
+          identifier == prefix || identifier.hasPrefix(prefix + ".") else { return nil }
+    let fallback = URL(fileURLWithPath: "/private/tmp/bbport-launcher-qa/" + identifier + "/data", isDirectory: true)
+    guard let path = previewPath, path.hasPrefix("/") else { return fallback }
+    let candidate = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+    // Foundation resolves existing /private/tmp directories to the /tmp alias on macOS.
+    let normalized = candidate.path.hasPrefix("/tmp/") ? "/private" + candidate.path : candidate.path
+    guard normalized.hasPrefix("/private/tmp/") else { return fallback }
+    return URL(fileURLWithPath: normalized, isDirectory: true)
+}

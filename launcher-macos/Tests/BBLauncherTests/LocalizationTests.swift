@@ -3,6 +3,26 @@ import XCTest
 @testable import BBLauncher
 
 final class LocalizationTests: XCTestCase {
+    func testQADataIsolationRejectsProtectedAndProductionPaths() throws {
+        let base = "io.github.bbport.optimized.options-qa"
+        let existing = URL(fileURLWithPath: "/private/tmp/bb-qa-path-test-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: existing) }
+        XCTAssertEqual(qaApplicationSupportURL(bundleIdentifier: base + ".existing",
+            previewPath: existing.path)?.path, existing.path)
+        for identifier in [base, base + ".chinese.acceptance"] {
+            XCTAssertEqual(qaApplicationSupportURL(bundleIdentifier: identifier,
+                previewPath: "/private/tmp/bb-qa-safe")?.path, "/private/tmp/bb-qa-safe")
+            for path in [nil, "relative", "/Users/test/Documents/qa", "/Users/test/Downloads/qa", "/private/tmp/../unsafe"] as [String?] {
+                let result = try XCTUnwrap(qaApplicationSupportURL(bundleIdentifier: identifier, previewPath: path))
+                XCTAssertTrue(result.path.hasPrefix("/private/tmp/bbport-launcher-qa/"))
+            }
+        }
+        for identifier in [nil, "io.github.bbport.optimized", base + "-unrelated"] as [String?] {
+            XCTAssertNil(qaApplicationSupportURL(bundleIdentifier: identifier, previewPath: "/private/tmp/override"))
+        }
+    }
+
     func testCommunityChineseRoutingPersistenceAndStaleEnvironment() throws {
         let suite = "bbport.community.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -103,18 +123,4 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.key("Untranslated diagnostic", language: "zh-Hans"), "Untranslated diagnostic")
     }
 
-    func testMissingChineseAssetsWarnWithoutTouchingGameFiles() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        for (language, code) in [("11", "zhocn"), ("10", "zhotw")] {
-            XCTAssertNotNil(gameLanguageWarning(folder: root.path, language: language))
-            for path in ["msg/\(code)/menu.msgbnd.dcx", "msg/\(code)/item.msgbnd.dcx", "menu/\(code)/font.gfx"] {
-                let url = root.appendingPathComponent("dvdroot_ps4/" + path)
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try Data([1, 2, 3]).write(to: url)
-            }
-            XCTAssertNil(gameLanguageWarning(folder: root.path, language: language))
-        }
-    }
 }

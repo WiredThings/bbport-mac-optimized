@@ -238,7 +238,6 @@
 "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling." = "The optimized source checkout with its native build in out/. The app starts the prebuilt native renderer without recompiling.";
 "The port is not built yet: run bash tools/macos/build.sh in Terminal" = "The port is not built yet: run bash tools/macos/build.sh in Terminal";
 "The port's display, effects and patch settings as pages after Screen/Sound" = "Adds display, effects and patch pages.";
-"The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language." = "The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language.";
 "The update failed: see the log" = "The update failed: see the log";
 "Third-party patches" = "Third-party patches";
 "This app carries its own engine; settings, saves and logs go to the data folder. To use an optimized source checkout instead, choose its folder." = "This app carries its own engine; settings, saves and logs go to the data folder. To use an optimized source checkout instead, choose its folder.";

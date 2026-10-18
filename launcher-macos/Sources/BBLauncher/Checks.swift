@@ -97,16 +97,6 @@ func checkGameFolder(_ path: String) -> Check {
 
 // MARK: - Repository
 
-/// The retail Chinese text and font assets are separate from the launcher translations.
-/// Warn without copying, renaming or modifying any game files.
-func gameLanguageWarning(folder: String, language: String) -> String? {
-    guard !folder.isEmpty, let code = ["10": "zhotw", "11": "zhocn"][language] else { return nil }
-    let root = URL(fileURLWithPath: folder).appendingPathComponent("dvdroot_ps4")
-    let required = ["msg/\(code)/menu.msgbnd.dcx", "msg/\(code)/item.msgbnd.dcx", "menu/\(code)/font.gfx"]
-    guard required.contains(where: { !isFile(root.appendingPathComponent($0)) }) else { return nil }
-    return L10n.key("The selected Chinese language needs matching text and font files. Some are missing from this game folder; the game may fall back to another language.")
-}
-
 /// The repository root: has tools/macos/run.sh.
 func isRepository(_ url: URL) -> Bool {
     isFile(url.appendingPathComponent("tools/macos/run.sh"))

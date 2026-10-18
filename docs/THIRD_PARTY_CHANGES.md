@@ -2,17 +2,17 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings 0.2.30 (0230)** release, compared with the optimized upstream
+Scope: the public **WiredThings 0.2.31 (0231)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.30 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.31 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
-0.2.30 adds Chinese-only text-source selection and a private local importer for the community
-GOTY retranslation. The production runtime, renderer and graphics patches are unchanged;
+0.2.30 added Chinese-only text-source selection and a private local importer for the community
+GOTY retranslation. 0.2.31 removes the incorrect official-Chinese asset warning and isolates QA paths. The production runtime, renderer and graphics patches are unchanged;
 0.2.29 previously updated Help/About links.
 
 ## Inherited foundations and imported work

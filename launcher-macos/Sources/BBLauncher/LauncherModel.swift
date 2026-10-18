@@ -137,10 +137,10 @@ final class LauncherModel: ObservableObject {
     var profile: OptimizedProfile { OptimizedProfile(prefs: prefs, game: game) }
 
     static var applicationSupportURL: URL {
-        if Bundle.main.bundleIdentifier == "io.github.bbport.optimized.options-qa",
-           let path = Bundle.main.object(forInfoDictionaryKey: "BBPreviewDataPath") as? String,
-           path.hasPrefix("/"), !path.isEmpty {
-            return URL(fileURLWithPath: path, isDirectory: true)
+        if let root = qaApplicationSupportURL(
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            previewPath: Bundle.main.object(forInfoDictionaryKey: "BBPreviewDataPath") as? String) {
+            return root
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")

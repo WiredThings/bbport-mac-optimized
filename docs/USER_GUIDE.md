@@ -1,9 +1,9 @@
-# Bloodborne Optimized 0.2.30: user guide
+# Bloodborne Optimized 0.2.31: user guide
 
 [简体中文](USER_GUIDE.zh-CN.md) · [Project overview](../README.md) · [Changes and credits](THIRD_PARTY_CHANGES.md)
 
-This guide covers the WiredThings **0.2.30 (0230) preview**. Older upstream guides describe
-different backends and defaults. Download the [complete public app](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.30).
+This guide covers the WiredThings **0.2.31 (0231) preview**. Older upstream guides describe
+different backends and defaults. Download the [complete public app](https://github.com/WiredThings/bbport-mac-optimized/releases/tag/v0.2.31).
 
 ## Requirements and installation
 
@@ -13,7 +13,7 @@ different backends and defaults. Download the [complete public app](https://gith
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
 
-Extract `Bloodborne-Optimized-0.2.30-macOS.zip`, move **Bloodborne Optimized.app** to Applications,
+Extract `Bloodborne-Optimized-0.2.31-macOS.zip`, move **Bloodborne Optimized.app** to Applications,
 and open it. The app is ad-hoc signed, not notarized; if macOS blocks it, use **System Settings →
 Privacy & Security → Open Anyway** for this app. Rosetta can be installed through macOS or with:
 
@@ -61,24 +61,14 @@ The control is hidden for all other languages. Existing installations default to
 
 ### Official Chinese (region unlock)
 
-The game must contain these files under `dvdroot_ps4`:
-
-| Language | Text files | Font |
-| --- | --- | --- |
-| 简体中文 | `msg/zhocn/menu.msgbnd.dcx`, `msg/zhocn/item.msgbnd.dcx` | `menu/zhocn/font.gfx` |
-| 繁體中文 | `msg/zhotw/menu.msgbnd.dcx`, `msg/zhotw/item.msgbnd.dcx` | `menu/zhotw/font.gfx` |
-
-The launcher warns when required files are missing. Choosing a language cannot generate missing
-text or fonts. Region-specific behavior was investigated on **CUSA03173 1.09**; other editions
-have not all been checked.
+This mode uses the game’s built-in text and fonts; no separate font pack is required.
 
 In official mode, values 10/11 automatically add **Unlock Game Region** by
 **Lance McDonald (manfightdragon), Kyo**. It was already in upstream's patch XML; the new part is
 this branch's language-selection integration. It operates on the prepared launch image through
 `patches.bin`, retaining the source game files and original Cross/Circle convention. This mode installs no external
 translation pack. After restarting, the log should identify `Game language: 11`
-(or 10) and `Unlock Game Region` in the selected patches. These log entries prove selection;
-actual text/font rendering still depends on the game files and edition.
+(or 10) and `Unlock Game Region` in the selected patches. The launcher does not request any external font or translation files in official mode.
 
 ### Community retranslation (GOTY English replacement)
 
@@ -252,7 +242,7 @@ save folder and select the copy. Do not use app deletion or shader-cache deletio
 | Slowdown after GPU profiling | Turn GPU timing/frame statistics off for normal play; detailed timing can lower FPS |
 | High memory / crackling / crash | Exit before launching a second copy; retain the log and report scene/session details. Crackling and long-session behavior are not claimed fixed |
 | Source-folder warning in a complete app | In launcher Settings choose the built-in engine; if files are missing, re-extract the complete public ZIP |
-| Help opens an older upstream page | Update to 0.2.30; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
+| Help opens an older upstream page | Update to 0.2.31; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
 
 Report to [this fork's Issues](https://github.com/WiredThings/bbport-mac-optimized/issues), including
 app version, Mac/RAM, macOS, backend, output and scene resolution/preset, effects, scene/location,
@@ -260,5 +250,5 @@ and a short relevant log excerpt. Remove private paths where appropriate. Do not
 files or saves. Public packages omit local benchmark/analyzer tools; runtime diagnostics are optional.
 
 For source work, use [SOURCE.md](release/SOURCE.md), [build instructions](release/BUILD-OPTIMIZED.md)
-and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.30 release tag/source archive is an
+and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.31 release tag/source archive is an
 immutable build snapshot; current branch documentation can include later corrections.
