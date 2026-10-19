@@ -1,5 +1,7 @@
 # Dimensional texture reuse
 
+This page records the 0.2.42 implementation and its tests. Version 0.2.43 supersedes same-layout dimensional replacement with normalized 2D backing; incompatible-layout checks remain. See [current lowering and validation](METAL-1D-IMAGE-LOWERING.md).
+
 ## Crash evidence
 
 The 2026-10-19 18:22 gameplay crash was `SIGABRT` (shell exit 134) on `bb:DrawRec`, in `Runtime::CreateImageView`. The preceding log identifies a `Color1D` view of a `Color2D` image. Metal rejected the `Texture2D` → `Texture1D` view. This is distinct from the earlier speculative numeric-format assertion and the separately logged tessellation pipeline failure. The player reported being killed by an enemy in `cummmfpk` immediately beforehand.
