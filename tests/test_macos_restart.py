@@ -35,7 +35,10 @@ if d:
     except ProcessLookupError: pass
     else: raise RuntimeError('old game is still alive')
 d.append(dict(pid=os.getpid(),quickload=os.environ.get('BB_QUICKLOAD_PENDING'),
-              supervised=os.environ.get('BB_RESTART_SUPERVISED')))
+              supervised=os.environ.get('BB_RESTART_SUPERVISED'),online=os.environ.get('BB_ONLINE'),
+              token=os.environ.get('BB_THD_TOKEN'),module=os.environ.get('BB_NET_MODULE'),
+              overrides=os.environ.get('SHADPS4_HTTP_HOST_OVERRIDES_JSON'),
+              choice=os.environ.get('BB_SKIP_NETWORK_CHOICE')))
 p.write_text(json.dumps(d))
 sys.exit(json.loads(os.environ['TEST_SEQUENCE'])[len(d)-1])
 ''')
@@ -53,6 +56,55 @@ sys.exit(json.loads(os.environ['TEST_SEQUENCE'])[len(d)-1])
         self.assertEqual([x['quickload'] for x in state], [None, '1', None, '1'])
         self.assertEqual(len({x['pid'] for x in state}), 4)
         self.assertTrue(all(x['supervised']=='1' for x in state))
+
+    def test_online_quickload_and_later_restarts_remain_offline_without_credentials(self):
+        supervisor, env = self.fixture([76, 75, 76, 0])
+        env.update(BB_ONLINE='1', BB_THD_TOKEN='fixture-token', BB_NET_MODULE='/fixture/module',
+                   SHADPS4_HTTP_HOST_OVERRIDES_JSON='/fixture/routes', BB_SKIP_NETWORK_CHOICE='0')
+        result = subprocess.run(['/bin/bash', str(supervisor)], env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads((self.root / 'state.json').read_text())
+        self.assertEqual(state[0]['online'], '1')
+        for row in state[1:]:
+            self.assertEqual(row['online'], '0')
+            self.assertEqual(row['choice'], '1')
+            for key in ['token', 'module', 'overrides']: self.assertIsNone(row[key])
+        self.assertEqual(result.stdout.count('Runtime: quickload switched to offline'), 2)
+
+    def test_online_to_repeated_offline_restore_with_real_checkpoint_helper(self):
+        supervisor, env = self.fixture([76, 76, 0])
+        user = self.root / 'isolated-user'
+        live = user / 'savedata/1/CUSA00207/SPRJ0005'
+        live.mkdir(parents=True)
+        (live / 'userdata0000').write_bytes(b'checkpoint')
+        (live / 'userdata0010').write_bytes(b'profile')
+        worker = self.root / 'worker.py'
+        code = worker.read_text().replace("sys.exit(json.loads(os.environ['TEST_SEQUENCE'])[len(d)-1])", """
+import importlib.util
+spec=importlib.util.spec_from_file_location('checkpoint_helper',os.environ['TEST_HELPER'])
+q=importlib.util.module_from_spec(spec);spec.loader.exec_module(q)
+saves=q.Checkpoints(os.environ['TEST_USER'],'CUSA00207')
+with saves.locked():
+    if len(d)==1:
+        saves.save()
+        (saves.live/'SPRJ0005/userdata0000').write_bytes(b'online progress')
+    else:
+        saves.load()
+        assert (saves.live/'SPRJ0005/userdata0000').read_bytes()==b'checkpoint'
+sys.exit(json.loads(os.environ['TEST_SEQUENCE'])[len(d)-1])
+""")
+        worker.write_text(code)
+        env.update(BB_ONLINE='1',BB_THD_TOKEN='fixture-token',BB_NET_MODULE='/fixture/module',
+                   TEST_HELPER=str(ROOT/'tools/macos/quicksave.py'),TEST_USER=str(user))
+        result=subprocess.run(['/bin/bash',str(supervisor)],env=env,capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        rows=json.loads((self.root/'state.json').read_text())
+        self.assertEqual([row['online'] for row in rows],['1','0','0'])
+        self.assertEqual((live/'userdata0000').read_bytes(),b'checkpoint')
+        self.assertEqual(json.loads((user/'.quickload-offline.json').read_text()),{'version':1})
+        backups=list((user/'quicksaves/CUSA00207').glob('before-load-*/data/SPRJ0005/userdata0000'))
+        self.assertEqual(len(backups),2)
+        self.assertIn(b'online progress',[path.read_bytes() for path in backups])
 
     def test_normal_failure_does_not_restart(self):
         supervisor, env = self.fixture([23])

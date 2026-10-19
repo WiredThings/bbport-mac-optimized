@@ -19,7 +19,7 @@ final class OnlineTests: XCTestCase {
         let on = OptimizedProfile(prefs: prefs, game: game)
         XCTAssertEqual(on.environment["BB_ONLINE"], "1")
         XCTAssertEqual(on.applyingEnvironment(to: ["BB_SKIP_NETWORK_CHOICE":"1"])["BB_SKIP_NETWORK_CHOICE"], "0")
-        XCTAssertEqual(on.environment["BB_QUICKSAVE"], "0")
+        XCTAssertEqual(on.environment["BB_QUICKSAVE"], "1")
         XCTAssertEqual(off.environment["BB_QUICKSAVE"], "1")
         XCTAssertTrue(prefs.quicksave)
         XCTAssertEqual(on.settings, off.settings)

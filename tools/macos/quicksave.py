@@ -155,6 +155,13 @@ class Checkpoints:
         return folder, expected
 
     def load(self):
+        if os.environ.get('BB_ONLINE') == '1':
+            raise ValueError('Quickload requires an offline restart; saves were not changed')
+        marker = self.user / '.quickload-offline.json'
+        if marker.is_symlink():
+            raise ValueError('Offline restore marker must not be a symlink')
+        # Durable before any recovery/restore mutation: the launcher may have crashed.
+        atomic_json(marker, {'version': 1})
         self.recover()
         folder, expected = self.check()
         before = inventory(self.live)
@@ -182,7 +189,7 @@ class Checkpoints:
             raise
         self.journal.unlink()
         sync_dir(self.root)
-        status('Quicksave restored - loading game')
+        status('Quicksave restored - loading game offline')
         return backup
 
 

@@ -113,6 +113,7 @@ final class LauncherModel: ObservableObject {
         prefs = initialPrefs
         refreshChecks()
         reloadRepositoryFiles()
+        synchronizeOfflineRestore()
         let store = saveStore, online = prefs.online
         let legacy = dataURL.appendingPathComponent("online-user")
         runSaveOperation { try store.prepareMode(online: online, legacy: legacy) }
@@ -628,9 +629,10 @@ final class LauncherModel: ObservableObject {
 
     private func startGame() {
         guard !isRunning, !saveBusy else { return }
+        synchronizeOfflineRestore()
         let store = saveStore, online = prefs.online
         let legacy = dataURL.appendingPathComponent("online-user")
-        runSaveOperation({ try store.prepareMode(online: online, legacy: legacy) }) { [weak self] in self?.startPreparedGame() }
+        runSaveOperation({ try store.prepareMode(online: online, legacy: legacy, newSession: true) }) { [weak self] in self?.startPreparedGame() }
     }
 
     private func startPreparedGame() {
@@ -742,6 +744,7 @@ final class LauncherModel: ObservableObject {
         guard let collector, let process else { return true }
         let (lines, ended) = collector.drain()
         if !lines.isEmpty { appendLines(lines) }
+        if job == .game { synchronizeOfflineRestore() }
         if process.isRunning { return false }
         if !ended {
             // A leftover child (tee, a Python step) may still hold the pipe: wait briefly.
@@ -772,6 +775,7 @@ final class LauncherModel: ObservableObject {
         var added: [LogLine] = []
         added.reserveCapacity(lines.count)
         for line in lines {
+            if job == .game && line == "Runtime: quickload switched to offline" { useOfflineAfterRestore() }
             if line.contains("STOP:") || line.contains("Traceback") || line.range(of: "error:", options: .caseInsensitive) != nil {
                 lastProblem = line
             }

@@ -47,31 +47,38 @@ extension LauncherModel {
         runSaveOperation { try store.locked { _ = try store.backup(label: "Manual backup", kinds: ["savedata", "quicksaves"]) } }
     }
 
-    func makeOfflineCheckpoint() {
-        guard !prefs.online else { return }
+    func synchronizeOfflineRestore() {
+        if prefs.online && saveStore.hasOfflineRestoreIntent { useOfflineAfterRestore() }
+    }
+
+    func useOfflineAfterRestore() {
+        if prefs.online { prefs.online = false; onlineController.cancel() }
+    }
+
+    func makeCheckpoint() {
         let store = saveStore
         runSaveOperation { try store.locked { try store.seedCheckpoint() } }
     }
 
     func restoreBackup(_ record: SaveBackup, kind: String) {
-        guard !isRunning, !saveBusy, !prefs.online || kind != "quicksaves" else { return }
+        guard !isRunning, !saveBusy else { return }
         let alert = NSAlert()
         alert.messageText = L10n.key("Restore this backup?")
-        alert.informativeText = L10n.key("Current saves will be backed up before replacement. Restore whole saves, not individual character files.")
-        alert.addButton(withTitle: L10n.key("Restore")); alert.addButton(withTitle: L10n.key("Cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let store = saveStore, online = prefs.online
-        runSaveOperation { try store.locked { try store.restore(record, kind: kind, online: online) } }
-    }
-
-    func restoreQuickCheckpoint(_ checkpoint: QuickCheckpoint) {
-        guard !isRunning, !saveBusy, !prefs.online else { return }
-        let alert = NSAlert(); alert.messageText = L10n.key("Restore this backup?")
-        alert.informativeText = L10n.key("Current saves will be backed up before replacement. Restore whole saves, not individual character files.")
+        alert.informativeText = L10n.key("Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files.")
         alert.addButton(withTitle: L10n.key("Restore")); alert.addButton(withTitle: L10n.key("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let store = saveStore
-        runSaveOperation { try store.locked { try store.restoreCheckpoint(checkpoint) } }
+        runSaveOperation({ try store.locked { try store.restore(record, kind: kind) } }) { [weak self] in self?.useOfflineAfterRestore() }
+    }
+
+    func restoreQuickCheckpoint(_ checkpoint: QuickCheckpoint) {
+        guard !isRunning, !saveBusy else { return }
+        let alert = NSAlert(); alert.messageText = L10n.key("Restore this backup?")
+        alert.informativeText = L10n.key("Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files.")
+        alert.addButton(withTitle: L10n.key("Restore")); alert.addButton(withTitle: L10n.key("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let store = saveStore
+        runSaveOperation({ try store.locked { try store.restoreCheckpoint(checkpoint) } }) { [weak self] in self?.useOfflineAfterRestore() }
     }
 
     func importGameSave() {
@@ -120,9 +127,9 @@ struct SaveManagerView: View {
                 Text(L10n.key("Quick checkpoints")).tag("quicksaves")
             }.pickerStyle(.segmented)
             if kind == "quicksaves" {
-                Text(L10n.key("Checkpoints contain game saves plus restore metadata. Archived online checkpoints are kept here; F3 is offline only."))
+                Text(L10n.key("Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play."))
                     .font(.caption).foregroundStyle(.secondary)
-                Button(L10n.key("Create checkpoint from current save")) { model.makeOfflineCheckpoint() }.disabled(model.prefs.online)
+                Button(L10n.key("Create checkpoint from current save")) { model.makeCheckpoint() }
             }
             if kind == "quicksaves", !model.quickCheckpoints.isEmpty {
                 ScrollView {
@@ -132,7 +139,7 @@ struct SaveManagerView: View {
                                 Text(checkpoint.created, format: .dateTime.year().month().day().hour().minute().second())
                                 if checkpoint.current { Text(L10n.key("Current checkpoint")).foregroundStyle(.secondary) }
                                 Spacer()
-                                Button(L10n.key("Restore…")) { model.restoreQuickCheckpoint(checkpoint) }.disabled(model.prefs.online)
+                                Button(L10n.key("Restore…")) { model.restoreQuickCheckpoint(checkpoint) }
                             }
                         }
                     }
@@ -151,7 +158,7 @@ struct SaveManagerView: View {
             }
             HStack {
                 Button(L10n.key("Restore…")) { if let selected { model.restoreBackup(selected, kind: kind) } }
-                    .disabled(selected == nil || model.prefs.online && kind == "quicksaves")
+                    .disabled(selected == nil)
                 Button(L10n.key("Export…")) { if let selected { model.exportBackup(selected) } }.disabled(selected == nil)
                 Button(L10n.key("Show backups")) { model.reveal(model.saveStore.directory) }
                 Spacer()

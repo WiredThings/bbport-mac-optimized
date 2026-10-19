@@ -75,7 +75,7 @@ if [[ ${BB_ONLINE:-0} == 1 ]]; then
     [[ -f $net ]] || die "Optional online module is missing"
     [[ ${BB_NET_BACKEND:-thd} == thd ]] || die "Unsupported online backend"
     [[ -n ${BB_THD_ONLINE_ID:-} && -n ${BB_THD_TOKEN:-} ]] || die "Sign in on the Online page first"
-    export BB_NET_MODULE=$net BB_NET_BACKEND=thd BB_SKIP_NETWORK_CHOICE=0 BB_QUICKSAVE=0
+    export BB_NET_MODULE=$net BB_NET_BACKEND=thd BB_SKIP_NETWORK_CHOICE=0
     export BB_THD_VERIFY_TLS=1 BB_BRIDGE_LIVE_MAP=0
 else
     export BB_ONLINE=0

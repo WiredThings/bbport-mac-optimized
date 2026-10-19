@@ -1,10 +1,10 @@
-# Experimental Mac online integration — 0.2.38
+# Experimental Mac online integration — 0.2.39
 
-Blood Echoes 0.2.38 (0238), 2026-10-19. Online is optional and defaults OFF.
+Blood Echoes 0.2.39 (0239), 2026-10-19. Online is optional and defaults OFF.
 
 ## 使用方法
 
-1. 使用 0.2.38 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
+1. 使用 0.2.39 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
 2. 点击网站登录，在 The Hunter’s Dream 的设备授权页登录 Discord 并批准设备码。
    授权码会过期；过期后重新生成。启动器账号状态只代表设备授权完成。
 3. 启动游戏，选择在线模式。游戏内公告和实际搜索结果用于确认游戏服务连接。
@@ -13,7 +13,11 @@ Blood Echoes 0.2.38 (0238), 2026-10-19. Online is optional and defaults OFF.
 
 正式版联网和离线共用选定的正常存档目录，不再创建隔离副本。旧正式版 `online-user` 若存在，迁移前先备份两边：迁移时联网已开启则沿用联网进度，否则沿用正常进度；旧目录仍保留，备份可在存档管理器中恢复。QA 存档永远不参与正式版选择、迁移或默认恢复。
 
-开启联网时先校验并归档正常存档与全部快速存档，然后清空活动快速存档；联网时禁用 F2/F3。恢复离线时从当前已提交的正常存档建立全新检查点，避免 F3 回滚到联网前。正常自动存档始终启用，离线快速存档开关偏好保留。
+进入联网及启动新的联网游戏前，先校验并归档正常存档与旧快速存档，再从当前已提交的正常存档建立新检查点。F2 在两种模式均可保存；F3 一律等待旧游戏退出，清除联网令牌、模块和路由，以新的离线进程恢复。快速存档开关与联网不再互斥。
+
+F3 或存档管理器恢复后保持离线，直到主动重新开启联网。恢复前写入所选存档目录内的离线保护标记；即使启动器异常退出，再次打开也不会自动联网。标记只在明确重新联网并成功归档、建立新起点后清除。恢复失败会保留备份与离线保护，不会悄悄改为在线启动。
+
+手动关闭联网时仍会从当前正常存档建立检查点；F3 恢复不会重新生成或覆盖它正在重试的检查点。没有完整正常存档的新角色无法预先生成检查点，可在游戏首次保存完成后用 F2 创建；缺少或校验失败的检查点不能恢复。正常自动存档始终启用。服务器已经提交的留言、统计等不随本地回档撤销。
 
 “存档管理”分正常存档与快速存档：备份、导入 `savedata` 目录、导出、整份恢复、查看目录。恢复前备份当前进度，校验失败不替换；游戏运行时禁止操作。快速存档内部仍为普通游戏存档，外加校验清单和活动指针。备份不会自动清理。开发隔离使用独立 Bundle ID、目录和钥匙串；正式版不扫描 QA 路径。
 
@@ -25,7 +29,7 @@ The Hunter’s Dream is the only service exposed by the launcher. There is no cu
 
 ## 验证状态
 
-下列游戏内联网结果沿用 0.2.37 隔离测试；0.2.38 的新增验证覆盖存档切换／恢复、THD 路由及界面，不代表合作或入侵已经验证。
+下列游戏内联网结果沿用 0.2.37 隔离测试；0.2.39 的新增验证覆盖存档切换／恢复、THD 路由及界面，不代表合作或入侵已经验证。
 
 基础 M4 Mac mini 16 GB，CUSA03173 1.09，社区简体中文，隔离 QA 存档：
 
@@ -81,9 +85,7 @@ BB_BUILD_JOBS=2 bash tools/macos/build_online.sh
 Opt-in Metal-only The Hunter’s Dream integration. Device authentication and in-game announcement
 are verified; the user verified chalice search and joining. Message creation/list/deletion was
 exercised locally in the game, without independent delivery confirmation. Glyph lookup, paired
-co-op/invasion and offline performance equivalence remain unverified. Online/offline share formal game saves. Going online archives and clears checkpoints; returning offline seeds a fresh checkpoint. Legacy formal copies are backed up before one-time migration; QA is never migrated. Tokens stay in the existing THD Keychain item.
+co-op/invasion and offline performance equivalence remain unverified. Online/offline share formal game saves. Going online archives old checkpoints and seeds a new baseline. F2 works in either mode; every F3 restore starts offline, strips credentials and stays offline until online is explicitly enabled again. A persistent per-save offline marker protects against launcher crashes. Manual offline transitions seed a checkpoint, while F3 retries preserve their target. Legacy formal copies are backed up before one-time migration; QA is never migrated. Tokens stay in the existing THD Keychain item.
 
-The 0.2.38 release rebuilds the launcher, Metal host and online module from the committed
-public source export. Its Metal renderer and Vulkan compatibility binaries are retained
-from 0.2.37 and verified unchanged. This is not a newly completed full dependency rebuild.
+The 0.2.39 release rebuilds the launcher and Metal host from the committed public source export. Its online module, Metal renderer and Vulkan compatibility binaries are retained from 0.2.38 and verified unchanged. This is not a newly completed full dependency rebuild.
 The updated full-build script includes network dependencies and corresponding-source export.

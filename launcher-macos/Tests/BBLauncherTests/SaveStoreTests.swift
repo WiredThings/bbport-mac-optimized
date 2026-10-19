@@ -13,14 +13,14 @@ final class SaveStoreTests: XCTestCase {
         try body(SaveStore(user: user, directory: root.appendingPathComponent("backups")), root)
     }
 
-    func testOnlineArchivesAndClearsThenOfflineSeedsAnInteroperableCheckpoint() throws {
+    func testOnlineArchivesAndSeedsThenManualOfflineSeedsAnInteroperableCheckpoint() throws {
         try fixture { store, _ in
             try store.seedCheckpoint()
             let quick = store.user.appendingPathComponent("quicksaves")
             let before = try SaveStore.inventory(quick).files
             let saves = try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files
             try store.prepareMode(online: true)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: quick.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: quick.path))
             let archived = try XCTUnwrap(try store.backups().first)
             XCTAssertEqual(try SaveStore.inventory(store.verify(archived).appendingPathComponent("quicksaves")).files, before)
             let count = try store.backups().count
@@ -37,7 +37,8 @@ final class SaveStoreTests: XCTestCase {
             XCTAssertEqual(files["SPRJ0005/userdata0000"]?["size"] as? Int, 15)
             XCTAssertNotEqual(try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files, saves)
             let data = try store.backup(label: "checkpoint verification", kinds: ["quicksaves"])
-            XCTAssertThrowsError(try store.restore(data, kind: "quicksaves", online: true))
+            try store.restore(data, kind: "quicksaves")
+            XCTAssertTrue(store.hasOfflineRestoreIntent)
         }
     }
 
@@ -114,7 +115,7 @@ final class SaveStoreTests: XCTestCase {
             try store.prepareMode(online: true, legacy: root.appendingPathComponent("optimized-launcher/online-user"))
             XCTAssertEqual(try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files, before)
             XCTAssertEqual(try Data(contentsOf: qa.appendingPathComponent("save")), Data("QA must not be imported".utf8))
-            XCTAssertTrue(try store.backups().isEmpty)
+            XCTAssertEqual(try store.backups().count, 1)
         }
     }
 
@@ -130,8 +131,57 @@ final class SaveStoreTests: XCTestCase {
             try JSONSerialization.data(withJSONObject: ["before": records, "after": records, "backup": name]).write(to: quick.appendingPathComponent("restore.json"))
             try store.prepareMode(online: true)
             XCTAssertEqual(try Data(contentsOf: live.appendingPathComponent("SPRJ0005/userdata0000")), Data("original".utf8))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: quick.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: quick.path))
             XCTAssertFalse(try store.backups().isEmpty)
+        }
+    }
+
+    func testOfflineRestoreIntentKeepsRetryCheckpointAndExplicitOnlineCreatesFreshBaseline() throws {
+        try fixture { store, _ in
+            try store.prepareMode(online: true)
+            let target = try XCTUnwrap(try store.checkpoints().first)
+            let quick = store.user.appendingPathComponent("quicksaves")
+            let baseline = try SaveStore.inventory(quick).files
+            // A successful offline F3 restore leaves this before mutating live saves.
+            try JSONSerialization.data(withJSONObject: ["version": 1]).write(to: store.offlineRestoreMarker)
+            try store.prepareMode(online: false)
+            XCTAssertTrue(store.hasOfflineRestoreIntent)
+            XCTAssertEqual(try SaveStore.inventory(quick).files, baseline)
+            XCTAssertEqual(try store.checkpoints().first?.id, target.id)
+            try store.prepareMode(online: false)
+            XCTAssertEqual(try SaveStore.inventory(quick).files, baseline)
+            let file = store.user.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005/userdata0000")
+            try Data("offline retries advanced".utf8).write(to: file)
+            try store.prepareMode(online: true)
+            XCTAssertNotEqual(try store.checkpoints().first?.id, target.id)
+            XCTAssertEqual(try store.checkpoints().count, 1)
+        }
+    }
+
+    func testEachNewOnlineSessionRefreshesItsBaselineButOrdinaryRefreshDoesNot() throws {
+        try fixture { store, _ in
+            try store.prepareMode(online: true)
+            let first = try XCTUnwrap(try store.checkpoints().first?.id)
+            try store.prepareMode(online: true)
+            XCTAssertEqual(try store.checkpoints().first?.id, first)
+            try store.prepareMode(online: true, newSession: true)
+            XCTAssertNotEqual(try store.checkpoints().first?.id, first)
+            XCTAssertEqual(try store.checkpoints().count, 1)
+            XCTAssertEqual(try store.backups().count, 2)
+        }
+    }
+
+    func testFailedOnlinePreparationKeepsOldCheckpointAndMode() throws {
+        try fixture { store, _ in
+            try store.prepareMode(online: false)
+            try store.seedCheckpoint()
+            let quick = store.user.appendingPathComponent("quicksaves")
+            let before = try SaveStore.inventory(quick).files
+            let marker = store.user.appendingPathComponent("savedata/unfinished.bbtmp")
+            try Data("incomplete write".utf8).write(to: marker)
+            XCTAssertThrowsError(try store.prepareMode(online: true))
+            XCTAssertEqual(try SaveStore.inventory(quick).files, before)
+            XCTAssertEqual(try JSONDecoder().decode(Bool.self, from: Data(contentsOf: store.directory.appendingPathComponent("mode.json"))), false)
         }
     }
 }

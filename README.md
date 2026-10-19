@@ -1,11 +1,11 @@
 # Blood Echoes for macOS
 
-[简体中文](README.zh-CN.md) · [Download 0.2.38](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.38) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
+[简体中文](README.zh-CN.md) · [Download 0.2.39](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.39) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
 
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current public build is **0.2.38 (0238), a preview release**.
+The current public build is **0.2.39 (0239), a preview release**.
 
 Version 0.2.36 defaults new configurations to the game's original model detail and warns
 about forced low LOD, which can hide walls or floors. If an existing configuration has
@@ -21,7 +21,7 @@ Requires **Apple Silicon, macOS 26+, Rosetta 2**, and your own decrypted Bloodbo
 with **update 1.09 merged into the base game**. Python and runtime libraries are bundled;
 Xcode, Homebrew and compilation are not required to play.
 
-1. Download **Blood-Echoes-0.2.38-macOS.zip** from [Releases](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.38).
+1. Download **Blood-Echoes-0.2.39-macOS.zip** from [Releases](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.39).
 2. Extract it and move **Blood Echoes.app** into Applications. Quit the old app before replacing it.
 3. Select the merged game folder containing `eboot.bin`, `sce_sys` and `dvdroot_ps4`.
    Select the full installation, rather than the separate `CUSA…-patch` update folder.
@@ -158,11 +158,11 @@ compilation. The discarded offline-library experiment is not part of this releas
 
 ## Experimental online play
 
-Version 0.2.38 includes an opt-in **Online** section for The Hunter’s Dream, using
+Version 0.2.39 includes an opt-in **Online** section for The Hunter’s Dream, using
 an optional bbnet module on the Metal backend. Website/device sign-in, the in-game server
 announcement and chalice **search → join** were exercised with an isolated client. Message
 write/list/delete was exercised in game; a second client has not verified delivery. Direct
-glyph lookup, co-op and invasions are not yet validated. Online defaults OFF. Online and offline share game saves; checkpoints are backed up and cleared before going online, and rebuilt when returning offline. The launcher includes a save manager, click-to-copy device codes. See [setup, backups and test boundaries](docs/ONLINE.md).
+glyph lookup, co-op and invasions are not yet validated. Online defaults OFF. Online and offline share game saves; old checkpoints are archived and replaced with a fresh baseline before online play. F2 saves in either mode; F3 always restarts offline and stays offline until explicitly re-enabled. The launcher includes a save manager, click-to-copy device codes. See [setup, backups and test boundaries](docs/ONLINE.md).
 
 ## Controls, saves and updates
 
@@ -190,7 +190,7 @@ softwareupdate --install-rosetta --agree-to-license
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.38-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.39-source1
 ```
 
 The script initializes submodules, builds the x86-64 libraries and arm64 Vulkan driver,
@@ -204,18 +204,18 @@ space. It never installs into `/Applications`, launches the game or edits saves/
 
 Outputs:
 
-- `out/source-release-0.2.38-source1/Blood Echoes.app`
-- `dist/Blood-Echoes-0.2.38-source1.zip` (complete Metal + Vulkan app)
-- `dist/blood-echoes-0.2.38-source1-source.tar.gz` (corresponding source/dependencies)
+- `out/source-release-0.2.39-source1/Blood Echoes.app`
+- `dist/Blood-Echoes-0.2.39-source1.zip` (complete Metal + Vulkan app)
+- `dist/blood-echoes-0.2.39-source1-source.tar.gz` (corresponding source/dependencies)
 - `dist/source-build-verification.json` (final packaging/signature/link checks)
 - `dist/source-build-SHA256SUMS.txt` (final app ZIP and source archive hashes)
 
 Build from a clean clone: the packager refuses uncommitted project files. Use a new version
 suffix for another final staging directory. With dependencies already prepared by this
-workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.38-source2`.
+workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.39-source2`.
 Keep the `.git` directories: GitHub's automatic source ZIP omits submodules, and the Release
 inspection source archive has no Git metadata required by the revision/patch guards.
-`v0.2.38` includes this build entry point; `optimized` also carries subsequent fixes.
+`v0.2.39` includes this build entry point; `optimized` also carries subsequent fixes.
 
 For an SDK/linker mismatch, set `SDKROOT` to an installed SDK supported by your active compiler;
 do not mix an old linker with a newer SDK. See [the detailed build guide](docs/release/BUILD-OPTIMIZED.md)
@@ -225,7 +225,7 @@ for individual commands, verification limits and troubleshooting.
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
 - [Full branch changes and third-party attribution](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.38 release notes](docs/release/0.2.38.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
+- [0.2.39 release notes](docs/release/0.2.39.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
 
 Built on **DiAvisoo's optimized launcher, bmy/bbport-mac, deadinside28's bbport, shadPS4,
 Huax-1839, IFreemz, Awakenchan, Wooloomooloo2/Mark Hall**, and the component contributors.

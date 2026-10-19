@@ -24,7 +24,7 @@ void runtime_restart(void) { assert(0); }
 int runtime_memory_is_mapped(uintptr_t p,uint64_t n) { (void)p;(void)n;return 0; }
 int main(void) {
     assert(mkdtemp(directory));
-    setenv("BB_ONLINE","1",1); setenv("BB_QUICKSAVE","1",1);
+    setenv("BB_ONLINE","1",1); setenv("BB_QUICKSAVE","0",1);
     runtime_quicksave_init("CUSA00207");
     assert(!runtime_quicksave_enabled() && runtime_quicksave_execute(1)==-1);
     char path[1024]; snprintf(path,sizeof(path),"%s/.quicksave-session.lock",directory);
@@ -32,7 +32,32 @@ int main(void) {
     assert(flock(other,LOCK_EX|LOCK_NB)!=0);
     close(other); close(session_fd);
     unlink(path); rmdir(directory);
-    puts("PASS: online runtime locks shared saves and refuses quickload even if requested");
+    puts("PASS: online runtime locks shared saves even when quicksave is disabled");
+}
+''',
+
+    'online_restore': r'''
+#include <assert.h>
+#include "runtime_quicksave.c"
+static char directory[]="/private/tmp/bb-online-restore-XXXXXX";
+static int restarted;
+int runtime_savedata_quick_action(int load) { (void)load; return 0; }
+const char *runtime_file_user_dir(void) { return directory; }
+void runtime_restart(void) { restarted=1; }
+int runtime_memory_is_mapped(uintptr_t p,uint64_t n) { (void)p;(void)n;return 0; }
+int main(void) {
+    assert(mkdtemp(directory));
+    setenv("BB_ONLINE","1",1); setenv("BB_QUICKSAVE","1",1);
+    setenv("BB_QUICKSAVE_PYTHON","/usr/bin/true",1); setenv("BB_QUICKSAVE_HELPER","/unused",1);
+    runtime_quicksave_init("CUSA00207"); assert(runtime_quicksave_enabled());
+    setenv("BB_THD_TOKEN","fixture",1); setenv("BB_NET_MODULE","fixture",1);
+    setenv("SHADPS4_HTTP_HOST_OVERRIDES_JSON","fixture",1);
+    assert(runtime_quicksave_execute(1)==-1 && restarted);
+    assert(!strcmp(getenv("BB_ONLINE"),"0") && !strcmp(getenv("BB_QUICKLOAD_PENDING"),"1"));
+    assert(!getenv("BB_THD_TOKEN") && !getenv("BB_NET_MODULE") && !getenv("SHADPS4_HTTP_HOST_OVERRIDES_JSON"));
+    close(session_fd); char path[1024]; snprintf(path,sizeof(path),"%s/.quicksave-session.lock",directory);
+    unlink(path); rmdir(directory);
+    puts("PASS: online checkpoints enabled; every quickload strips credentials before restarting offline");
 }
 ''',
 

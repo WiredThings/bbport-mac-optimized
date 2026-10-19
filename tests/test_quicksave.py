@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -36,6 +37,21 @@ class QuicksaveTests(unittest.TestCase):
             self.assertEqual(q.inventory(backup / 'data'), newer)
             self.assertEqual(q.inventory(self.live), original)
             self.assertEqual(q.inventory(slot / 'data'), original)
+
+    def test_load_is_rejected_in_online_host_without_changing_progress(self):
+        self.saves.save()
+        self.character.write_bytes(b'online progress')
+        before = q.inventory(self.live)
+        with patch.dict(os.environ, {'BB_ONLINE': '1'}):
+            with self.assertRaisesRegex(ValueError, 'offline restart'): self.saves.load()
+        self.assertEqual(q.inventory(self.live), before)
+        self.assertFalse((self.user / '.quickload-offline.json').exists())
+
+    def test_successful_load_leaves_durable_offline_intent_for_launcher_recovery(self):
+        self.saves.save()
+        self.character.write_bytes(b'new progress')
+        with patch.dict(os.environ, {'BB_ONLINE': '0'}): self.saves.load()
+        self.assertEqual(json.loads((self.user / '.quickload-offline.json').read_text()), {'version': 1})
 
     def test_missing_checkpoint_does_not_change_live_save(self):
         before = q.inventory(self.live)

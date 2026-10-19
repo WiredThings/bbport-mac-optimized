@@ -158,6 +158,21 @@ struct SaveStore {
         return result.sorted { $0.created > $1.created }
     }
 
+    var offlineRestoreMarker: URL { user.appendingPathComponent(".quickload-offline.json") }
+    var hasOfflineRestoreIntent: Bool { fm.fileExists(atPath: offlineRestoreMarker.path) }
+
+    private func validateOfflineRestoreIntent() throws {
+        guard try offlineRestoreMarker.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey]).isSymbolicLink != true,
+              (try offlineRestoreMarker.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 1025) <= 1024,
+              let value = try JSONSerialization.jsonObject(with: Data(contentsOf: offlineRestoreMarker)) as? [String: Int],
+              value["version"] == 1 else { throw fail("Invalid save backup.") }
+    }
+
+    private func markOfflineRestore() throws {
+        if hasOfflineRestoreIntent { try validateOfflineRestoreIntent() }
+        try JSONSerialization.data(withJSONObject: ["version": 1]).write(to: offlineRestoreMarker, options: .atomic)
+    }
+
     func restoreCheckpoint(_ checkpoint: QuickCheckpoint) throws {
         guard try checkpoints().contains(where: { $0.id == checkpoint.id && $0.title == checkpoint.title }) else { throw fail("Invalid save backup.") }
         let folder = user.appendingPathComponent("quicksaves/" + checkpoint.title + "/" + checkpoint.id)
@@ -170,18 +185,19 @@ struct SaveStore {
             throw fail("Backup verification failed; current saves were not changed.")
         }
         try backup(label: "Before restore", kinds: ["savedata", "quicksaves"])
+        try markOfflineRestore()
         try atomicInstall(data, live: user.appendingPathComponent("savedata/1/" + checkpoint.title))
         try seedCheckpoint()
     }
 
-    func restore(_ record: SaveBackup, kind: String, online: Bool = false) throws {
-        guard !online || kind != "quicksaves" else { throw fail("Quicksave is available offline only.") }
+    func restore(_ record: SaveBackup, kind: String) throws {
         guard record.kinds.contains(kind) else { throw fail("This backup does not contain that save type.") }
         let payload = try verify(record)
         // Keep both normal saves and checkpoints, so returning offline cannot expose an old pointer.
         try backup(label: "Before restore", kinds: ["savedata", "quicksaves"])
+        try markOfflineRestore()
         try install(payload.appendingPathComponent(kind), kind: kind)
-        if kind == "savedata" { try clearQuickload(); if !online { try seedCheckpoint() } }
+        if kind == "savedata" { try replaceCheckpointsWithCurrent() }
     }
 
     func clearQuickload() throws {
@@ -193,25 +209,39 @@ struct SaveStore {
     }
 
     /// A checkpoint of the committed on-disk save, before the next game launch.
-    func seedCheckpoint() throws {
+    func seedCheckpoint(into destination: URL? = nil) throws {
         let savedata = user.appendingPathComponent("savedata/1")
         guard fm.fileExists(atPath: savedata.path) else { return }
         for title in try fm.contentsOfDirectory(at: savedata, includingPropertiesForKeys: nil) {
             let files = try Self.inventory(title).files
             guard files["SPRJ0005/userdata0000"] != nil, files["SPRJ0005/userdata0010"] != nil else { continue }
-            let root = user.appendingPathComponent("quicksaves").appendingPathComponent(title.lastPathComponent)
+            guard title.lastPathComponent.range(of: "^CUSA[0-9]{5}$", options: .regularExpression) != nil else { continue }
+            let root = (destination ?? user.appendingPathComponent("quicksaves")).appendingPathComponent(title.lastPathComponent)
             let id = "save-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             let folder = root.appendingPathComponent(id)
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            var published = false
+            defer { if !published { try? fm.removeItem(at: folder) } }
             try fm.copyItem(at: title, to: folder.appendingPathComponent("data"))
-            guard try Self.inventory(folder.appendingPathComponent("data")).files == files else { throw fail("Could not create the offline checkpoint.") }
+            guard try Self.inventory(folder.appendingPathComponent("data")).files == files else { throw fail("Could not create the checkpoint.") }
             var records = [String: [String: Any]]()
             for (path, hash) in files {
                 records[path] = ["sha256": hash, "size": try title.appendingPathComponent(path).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0]
             }
             try JSONSerialization.data(withJSONObject: ["files": records, "created": Date().timeIntervalSince1970]).write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
             try JSONSerialization.data(withJSONObject: ["checkpoint": id]).write(to: root.appendingPathComponent("current.json"), options: .atomic)
+            published = true
         }
+    }
+
+    /// Prepare every new checkpoint before replacing the old active tree. A failed
+    /// copy leaves all existing pointers in place; the caller already made a backup.
+    private func replaceCheckpointsWithCurrent() throws {
+        let stage = user.appendingPathComponent(".checkpoint-seed-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: stage) }
+        try fm.createDirectory(at: stage, withIntermediateDirectories: true)
+        try seedCheckpoint(into: stage)
+        try install(stage, kind: "quicksaves")
     }
 
     /// Preserve the existing helper's crash-recovery contract before clearing any pointers.
@@ -248,7 +278,7 @@ struct SaveStore {
         }
     }
 
-    func prepareMode(online: Bool, legacy: URL? = nil) throws {
+    func prepareMode(online: Bool, legacy: URL? = nil, newSession: Bool = false) throws {
         try locked {
             try recoverInterruptedQuickload()
             if let legacy, fm.fileExists(atPath: legacy.appendingPathComponent("savedata").path),
@@ -262,17 +292,20 @@ struct SaveStore {
             }
             let state = directory.appendingPathComponent("mode.json")
             let previous = (try? JSONDecoder().decode(Bool.self, from: Data(contentsOf: state)))
+            let restored = hasOfflineRestoreIntent
+            if restored { try validateOfflineRestoreIntent() }
             let quick = user.appendingPathComponent("quicksaves")
-            if online, fm.fileExists(atPath: quick.path) {
+            if online && (previous != true || newSession || restored || !fm.fileExists(atPath: quick.path)) {
                 try backup(label: "Before online: quicksave archive", kinds: ["savedata", "quicksaves"])
-                try clearQuickload()
-            } else if !online, previous == true {
+                try replaceCheckpointsWithCurrent()
+            } else if !online && previous == true && !restored {
                 try backup(label: "Returned offline", kinds: ["savedata", "quicksaves"])
-                try clearQuickload()
-                try seedCheckpoint()
+                try replaceCheckpointsWithCurrent()
             }
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             try JSONEncoder().encode(online).write(to: state, options: .atomic)
+            // Keep the guard across offline launches; only an explicit online entry clears it.
+            if restored && online { try fm.removeItem(at: offlineRestoreMarker) }
         }
     }
 }

@@ -364,14 +364,13 @@ struct QuicksaveSection: View {
 
     var body: some View {
         Section {
-            Toggle(L10n.key("Enable quicksave / quickload"), isOn: Binding(get: { model.prefs.quicksave && !model.prefs.online }, set: { model.prefs.quicksave = $0 }))
-                .disabled(model.prefs.online)
+            Toggle(L10n.key("Enable quicksave / quickload"), isOn: $model.prefs.quicksave)
             Button(L10n.key("Save Manager…")) { openWindow(id: "saves") }
             if !model.saveStatus.isEmpty { Text(model.saveStatus).font(.caption).textSelection(.enabled) }
         } header: {
             Text(L10n.key("Save & load"))
         } footer: {
-            Text(L10n.key("Quicksave is offline only. Going online archives and clears checkpoints; returning offline creates a new one. Normal autosaving stays on."))
+            Text(L10n.key("Going online archives old checkpoints and creates a new one. F2 saves in either mode; F3 always restores offline."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -427,7 +426,7 @@ private struct OnlineControls: View {
             Text(L10n.key("Online"))
         } footer: {
             if model.prefs.online {
-                Text(L10n.key("Online and offline share saves. F2/F3 are disabled online. Multiplayer compatibility is experimental."))
+                Text(L10n.key("Online and offline share saves. Quickload switches to offline until you enable online again. Multiplayer compatibility is experimental."))
             }
         }
         .onAppear { if model.prefs.online { network.load() } }
