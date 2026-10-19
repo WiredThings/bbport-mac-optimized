@@ -26,7 +26,7 @@ Only **THD/bbhost-compatible** device-authenticated servers are supported. This 
 | Field | THD preset | Purpose |
 | --- | --- | --- |
 | Account service | `https://thehuntersdream.com` | `/auth/device/start`, `/auth/device/poll` and the authorization page |
-| Game service | `https://thehuntersdream.com` | Region-specific game HTTP endpoints |
+| Game service | `https://thehuntersdream.com:20443` | Region-specific game HTTP endpoints |
 | Session service | `https://thehuntersdream.com:18671` | Matchmaking, session/peer service and playlog routes |
 | STUN | empty: session host on UDP 3478; `off` disables it | NAT discovery and compatible relay negotiation |
 | Ruleset | `vanilla` | `X-BBHost-Ruleset` matchmaking group |
@@ -34,7 +34,7 @@ Only **THD/bbhost-compatible** device-authenticated servers are supported. This 
 
 HTTPS values are origins only: no URL path, credentials, query or fragment. Ports may differ on a custom deployment. The account website must return a verification URL on the configured account origin. Tokens are sent only to explicitly configured service origins, never unrelated redirect targets. P2P compatibility still depends on the server and peer implementation; no second custom deployment or paired co-op/invasion has been tested.
 
-Field semantics were checked against [bbhost's example configuration](https://github.com/droogie/bbhost/blob/master/bbhost.example.toml) and this pinned client's `gpu/bbnet/thd/thd_internal.h`. The THD preset continues to use its existing routes. Credential-free routing files now live under launcher `out/online-routes`, outside game saves.
+Field semantics were checked against [bbhost's example configuration](https://github.com/droogie/bbhost/blob/master/bbhost.example.toml) and this pinned client's `gpu/bbnet/thd/thd_internal.h`. The THD preset continues to use its existing port-preserving routes; its credential allowlist explicitly includes the game service on 20443. Custom routes pin the configured port, including an implicit HTTPS 443. Credential-free routing files now live under launcher `out/online-routes`, outside game saves.
 
 ## 验证状态
 

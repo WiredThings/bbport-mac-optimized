@@ -5,7 +5,7 @@ import CryptoKit
 struct OnlineServer: Codable, Equatable {
     var custom = false
     var auth = "https://thehuntersdream.com"
-    var game = "https://thehuntersdream.com"
+    var game = "https://thehuntersdream.com:20443"
     var session = "https://thehuntersdream.com:18671"
     var stun = ""
     var ruleset = "vanilla"
@@ -45,7 +45,12 @@ struct OnlineServer: Codable, Equatable {
     }
     var environment: [String: String] {
         let c = effective
-        return ["BB_THD_AUTH": c.auth, "BB_THD_HTTP_ORIGIN": c.game, "BB_THD_SERVER": c.session,
+        // The builtin legacy route preserves each PS4 endpoint's original port.
+        // Custom service origins must instead pin even their implicit HTTPS port.
+        var components = URLComponents(string: c.game)
+        if components?.port == nil { components?.port = 443 }
+        let route = c.custom ? (components?.string ?? c.game) : "https://thehuntersdream.com"
+        return ["BB_THD_AUTH": c.auth, "BB_THD_HTTP_ORIGIN": c.game, "BB_THD_HTTP_ROUTE": route, "BB_THD_SERVER": c.session,
                 "BB_THD_STUN": c.stun, "BB_THD_RULESET": c.ruleset, "BB_P2P_PORT": String(c.p2pPort)]
     }
 }

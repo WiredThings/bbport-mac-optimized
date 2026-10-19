@@ -23,6 +23,12 @@ int main() {
  assert(!BbThdHttpDestination("https", "thehuntersdream.com", 123));
  assert(!BbThdHttpDestination("https", "thehuntersdream.com.evil.test", 443));
  assert(!BbThdHttpDestination("https", "evil.test", 443));
+ setenv("BB_THD_HTTP_ORIGIN", "https://thehuntersdream.com:20443", 1);
+ setenv("BB_THD_AUTH", "https://thehuntersdream.com", 1);
+ setenv("BB_THD_SERVER", "https://thehuntersdream.com:18671", 1);
+ assert(BbThdHttpDestination("https", "thehuntersdream.com", 20443));
+ assert(!BbThdHttpDestination("https", "thehuntersdream.com", 123));
+ unsetenv("BB_THD_SERVER");
  setenv("BB_THD_HTTP_ORIGIN", "https://game.example.test:20443", 1);
  setenv("BB_THD_AUTH", "https://account.example.test", 1);
  assert(BbThdHttpDestination("https", "game.example.test", 20443));

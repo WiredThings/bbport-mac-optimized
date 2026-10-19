@@ -170,7 +170,7 @@ final class OnlineController: ObservableObject {
             defer { if operation == current { busy = false } }
             do {
                 let config = try server.validated()
-                let game = server.custom ? config.game : "https://thehuntersdream.com:20443"
+                let game = config.game
                 var request = URLRequest(url: try OnlineServer.origin(game).appendingPathComponent("bb-eu/ss.info"))
                 request.timeoutInterval = 10
                 request.cachePolicy = .reloadIgnoringLocalCacheData

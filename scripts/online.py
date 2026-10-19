@@ -51,7 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        print(prepare(args.user, os.environ.get('BB_THD_HTTP_ORIGIN', 'https://thehuntersdream.com'),
+        print(prepare(args.user, os.environ.get('BB_THD_HTTP_ROUTE', os.environ.get('BB_THD_HTTP_ORIGIN', 'https://thehuntersdream.com')),
                       os.environ.get('BB_THD_SERVER', 'https://thehuntersdream.com:18671'), args.output))
     except (OSError, ValueError) as error:
         parser.exit(1, f'STOP: {error}\n')

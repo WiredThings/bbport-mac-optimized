@@ -16,6 +16,14 @@ final class OnlineServerTests: XCTestCase {
         XCTAssertNotEqual(validated.accountSuffix, server.accountSuffix)
     }
 
+    func testBuiltinLegacyPortsAndCustomImplicitHTTPSPortStayDistinct() throws {
+        let preset = OnlineServer.thd.environment
+        XCTAssertEqual(preset["BB_THD_HTTP_ORIGIN"], "https://thehuntersdream.com:20443")
+        XCTAssertEqual(preset["BB_THD_HTTP_ROUTE"], "https://thehuntersdream.com")
+        var custom = OnlineServer(); custom.custom = true; custom.game = "https://game.example.test"
+        XCTAssertEqual(try custom.validated().environment["BB_THD_HTTP_ROUTE"], "https://game.example.test:443")
+    }
+
     func testMalformedEndpointsAndPortsAreRejected() {
         for value in ["http://example.test", "https://user:password@example.test", "https://example.test/path", "https://example.test?q=secret", "https://example.test:0"] {
             var server = OnlineServer(); server.custom = true; server.game = value
