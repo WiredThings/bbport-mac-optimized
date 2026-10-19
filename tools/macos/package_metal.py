@@ -15,7 +15,7 @@ from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loa
 from game_app import create_game_app
 from build_identity import source_revision
 
-VERSION = '0.2.40'
+VERSION = '0.2.41'
 UPSTREAM = '11992198df6306dacf6ec37de57ee920db1acc11'
 
 
@@ -61,7 +61,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40', '0.2.41'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -197,6 +197,9 @@ def main():
     manifest = dict(version=args.version, source_commit=run('git', '-C', ROOT, 'rev-parse', 'HEAD'),
                     upstream_repository='https://github.com/Huax-1839/bloodborne-macos',
                     upstream_commit=UPSTREAM, adapter_patches=patches,
+                    speculative_format_validation=True,
+                    speculative_invalid_format_policy='reject preparation; retry ordered GPU path',
+                    gpu_assertion_failure_thread_and_stack=True,
                     renderer_architecture='x86_64 under Rosetta, direct Metal API',
                     renderer_input_sha256=sha(source), cpu_text_sha256=text_hash(original), metal_probe_text_sha256=text_hash(probe),
                     metal_probe_snapshot_abi='_runtime_memory_snapshot_v1' in run('nm', '-g', probe),
