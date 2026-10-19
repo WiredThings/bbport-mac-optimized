@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings Blood Echoes 0.2.41** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.42** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
@@ -22,13 +22,16 @@ cover, avoiding icon changes during F3 restart. The launcher retains Hunter's Ma
 
 0.2.41 adds speculative resource-format rejection and failure-only thread/stack diagnostics. The upstream mechanism is corroborated by [PR #166](https://github.com/deadinside28/bloodborne_pc/pull/166), incorporated by its maintainer in 0.6. This branch uses explicit speculative rejection with strict ordered fallback on the pinned Metal engine; the original live caller remains unverified. See [validation scope](release/METAL-SPECULATIVE-RESOURCE-VALIDATION.md).
 
+0.2.42 fixes two cross-dimensional texture-cache lookup paths. Identical layouts replace the backing through the existing GPU copy/rebind/deferred-destruction lifecycle; incompatible layouts are rejected as reuse candidates. Synthetic Metal tests preserve GPU-only pixels through 32 replacements, and two isolated enemy-death regressions include a live incompatible-candidate rejection. No cache budget or archive format changes; see [validation and limits](release/METAL-DIMENSIONAL-TEXTURE-REUSE.md).
+
+
 ## Inherited foundations and imported work
 
 | Feature / area | Source | This branch's integration and boundary |
 | --- | --- | --- |
 | Standalone SwiftUI launcher, ultrawide management, patch compiler, quicksave foundation | [DiAvisoo optimized upstream](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83) | Extends/localizes the launcher and preserves its game preparation, saves and patch interfaces |
 | PS4 compatibility runtime and shader/game support | [deadinside28/bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), [bmy/bbport-mac](https://github.com/bmy/bbport-mac), [shadPS4](https://github.com/shadps4-emu/shadPS4) | The game still runs as x86-64 code through Rosetta; this fork is not an ARM recompilation of Bloodborne |
-| Direct Metal backend | [Huax-1839/bloodborne-macos `11992198`](https://github.com/Huax-1839/bloodborne-macos/tree/11992198df6306dacf6ec37de57ee920db1acc11) | Pinned submodule plus [38 ordered adapter patches](../gpu/patches/metal); launcher/runtime ABI, inputs, lifetime and efficiency work are layered on this engine |
+| Direct Metal backend | [Huax-1839/bloodborne-macos `11992198`](https://github.com/Huax-1839/bloodborne-macos/tree/11992198df6306dacf6ec37de57ee920db1acc11) | Pinned submodule plus [39 ordered adapter patches](../gpu/patches/metal); launcher/runtime ABI, inputs, lifetime and efficiency work are layered on this engine |
 | Process/graphics-ledger budgeting and completed-resource retirement | bmy [`4de5fd1`](https://github.com/bmy/bbport-mac/commit/4de5fd1340c8184dd88687fc07631ee2425cb587), [`a923b61`](https://github.com/bmy/bbport-mac/commit/a923b61ecce51d9d5bfe1deb855d82ed2683eb0c) | Adapts accounting to direct Metal, subtracting imported no-copy aliases to avoid double counting; [details](release/METAL-MEMORY-1.md) |
 | Sampler memoization | [Awakenchan/BloodBorneButPc `4f93643e`](https://github.com/Awakenchan/BloodBorneButPc/blob/4f93643eb573ae445a24db1d64eabf663a5d5147/engine/bbhost-changes.patch) | Ports complete-descriptor/LOD/depth keys and GC-generation invalidation to Metal references; [details](release/METAL-PERFORMANCE-1.md) |
 | Game-velocity mirror and temporal inputs | [IFreemz/shadPS4-Bloodborne-DLSS-FSR `149f6364`](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR/tree/149f63645bbb40fa587daa68fbf003b1f6dbcd7d) | Adapts velocity capture/decode to MetalFX; adds Metal lifetime handling, batching and motion-blur bypass compatibility; [route](release/METAL-GAME-MOTION-1.md), [follow-up](release/METAL-GAME-MOTION-2.md) |
