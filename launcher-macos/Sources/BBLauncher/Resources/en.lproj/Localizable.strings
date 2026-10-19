@@ -459,17 +459,6 @@
 "Legacy online progress" = "Legacy online progress";
 "Before online: quicksave archive" = "Before online: quicksave archive";
 "Returned offline" = "Returned offline";
-"Custom server" = "Custom server";
-"Account service (HTTPS)" = "Account service (HTTPS)";
-"Game service (HTTPS)" = "Game service (HTTPS)";
-"Session service (HTTPS)" = "Session service (HTTPS)";
-"Connection options" = "Connection options";
-"STUN host:port (optional)" = "STUN host:port (optional)";
-"Ruleset" = "Ruleset";
-"Local P2P UDP port" = "Local P2P UDP port";
-"Requires a THD/bbhost-compatible server. Obtain service addresses from its administrator. Accounts are separate for each server." = "Requires a THD/bbhost-compatible server. Obtain service addresses from its administrator. Accounts are separate for each server.";
-"Use HTTPS service origins, without a path, password or query." = "Use HTTPS service origins, without a path, password or query.";
-"Check the ruleset, STUN host and UDP port." = "Check the ruleset, STUN host and UDP port.";
 "Code copied" = "Code copied";
 "Click to copy code" = "Click to copy code";
 "Copy pairing code" = "Copy pairing code";

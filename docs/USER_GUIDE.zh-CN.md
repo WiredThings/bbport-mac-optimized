@@ -55,7 +55,7 @@ softwareupdate --install-rosetta --agree-to-license
 
 恢复前会备份当前进度，校验失败或目录正在被游戏使用时不会替换。正常存档恢复后清除旧检查点；离线时建立新检查点。备份保存在 `optimized-launcher/save-backups/<存档目录标识>`，不会自动淘汰，可导出到其他磁盘。QA 进度不出现在正式版管理器中。
 
-联网区可选择兼容 THD/bbhost 协议的自定义服务器，填写管理员提供的 HTTPS 账号、游戏与匹配服务地址；STUN、规则集和本地 UDP 端口可选。账号凭据按服务器分别保存。点击显示的设备配对码即可复制。详见[服务器参数](ONLINE.md#custom-servers)。
+联网服务为 The Hunter’s Dream，保留已有登录。点击设备配对码即可复制到网站授权页面。详见[联网说明](ONLINE.md)。
 
 设备登录、服务器公告、圣杯搜索与加入已经验证；按铭文直接搜索、合作和入侵尚未验证。详见[联网设置、来源与验证边界](ONLINE.md)。
 

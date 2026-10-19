@@ -393,22 +393,7 @@ private struct OnlineControls: View {
             Toggle(L10n.key("Play online (experimental)"), isOn: Binding(get: { model.prefs.online }, set: { model.setOnline($0) }))
                 .onChange(of: model.prefs.online) { on in if on { network.load() } else { network.cancel() } }
             if model.prefs.online {
-                Picker(L10n.key("Server"), selection: $model.prefs.onlineServer.custom) {
-                    Text("The Hunter’s Dream").tag(false)
-                    Text(L10n.key("Custom server")).tag(true)
-                }.disabled(network.busy)
-                if model.prefs.onlineServer.custom {
-                    TextField(L10n.key("Account service (HTTPS)"), text: $model.prefs.onlineServer.auth)
-                    TextField(L10n.key("Game service (HTTPS)"), text: $model.prefs.onlineServer.game)
-                    TextField(L10n.key("Session service (HTTPS)"), text: $model.prefs.onlineServer.session)
-                    DisclosureGroup(L10n.key("Connection options")) {
-                        TextField(L10n.key("STUN host:port (optional)"), text: $model.prefs.onlineServer.stun)
-                        TextField(L10n.key("Ruleset"), text: $model.prefs.onlineServer.ruleset)
-                        TextField(L10n.key("Local P2P UDP port"), value: $model.prefs.onlineServer.p2pPort, format: .number.grouping(.never))
-                    }
-                    Text(L10n.key("Requires a THD/bbhost-compatible server. Obtain service addresses from its administrator. Accounts are separate for each server."))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                LabeledContent(L10n.key("Server"), value: "The Hunter’s Dream")
                 if model.prefs.renderer != "metal" {
                     Text(L10n.key("Online play currently requires the Metal backend."))
                         .font(.caption).foregroundStyle(.orange)
@@ -445,8 +430,7 @@ private struct OnlineControls: View {
                 Text(L10n.key("Online and offline share saves. F2/F3 are disabled online. Multiplayer compatibility is experimental."))
             }
         }
-        .onAppear { network.configure(model.prefs.onlineServer); if model.prefs.online { network.load() } }
-        .onChange(of: model.prefs.onlineServer) { server in network.configure(server) }
+        .onAppear { if model.prefs.online { network.load() } }
     }
 }
 

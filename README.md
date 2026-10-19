@@ -162,7 +162,7 @@ Version 0.2.38 includes an opt-in **Online** section for The Hunter’s Dream, u
 an optional bbnet module on the Metal backend. Website/device sign-in, the in-game server
 announcement and chalice **search → join** were exercised with an isolated client. Message
 write/list/delete was exercised in game; a second client has not verified delivery. Direct
-glyph lookup, co-op and invasions are not yet validated. Online defaults OFF. Online and offline share game saves; checkpoints are backed up and cleared before going online, and rebuilt when returning offline. The launcher includes a save manager, THD-compatible custom-server settings and click-to-copy device codes. See [setup, backups and test boundaries](docs/ONLINE.md).
+glyph lookup, co-op and invasions are not yet validated. Online defaults OFF. Online and offline share game saves; checkpoints are backed up and cleared before going online, and rebuilt when returning offline. The launcher includes a save manager, click-to-copy device codes. See [setup, backups and test boundaries](docs/ONLINE.md).
 
 ## Controls, saves and updates
 

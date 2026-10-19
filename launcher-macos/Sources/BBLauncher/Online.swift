@@ -16,8 +16,8 @@ struct OnlineError: LocalizedError {
 
 struct OnlineAccountStore {
     let service: String
-    init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.bbport.optimized", server: OnlineServer = .thd) {
-        service = bundleIdentifier + server.accountSuffix
+    init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.bbport.optimized") {
+        service = bundleIdentifier + ".huntersdream"
     }
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -55,6 +55,15 @@ struct OnlineAccountStore {
 
 enum HuntersDream {
     static let base = URL(string: "https://thehuntersdream.com")!
+    static let game = URL(string: "https://thehuntersdream.com:20443")!
+    // A portless host override preserves the game's original PS4 service ports.
+    static let environment = [
+        "BB_THD_AUTH": base.absoluteString,
+        "BB_THD_HTTP_ORIGIN": game.absoluteString,
+        "BB_THD_HTTP_ROUTE": base.absoluteString,
+        "BB_THD_SERVER": "https://thehuntersdream.com:18671",
+        "BB_THD_STUN": "", "BB_THD_RULESET": "vanilla", "BB_P2P_PORT": "3658"
+    ]
     static func call(_ path: String, body: [String: String], base: URL = base) async throws -> [String: Any] {
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
@@ -89,14 +98,7 @@ final class OnlineController: ObservableObject {
     private var task: Task<Void, Never>?
     private var operation = UUID()
     private var loaded = false
-    private var server = OnlineServer.thd
-    private var store: OnlineAccountStore { OnlineAccountStore(server: server) }
-
-    func configure(_ selected: OnlineServer) {
-        guard selected != server else { return }
-        cancel(); server = selected; loaded = false; account = nil; status = ""
-        load()
-    }
+    private let store = OnlineAccountStore()
 
     func copyCode() {
         guard !code.isEmpty else { return }
@@ -124,8 +126,7 @@ final class OnlineController: ObservableObject {
         task = Task {
             defer { if operation == current { busy = false; code = "" } }
             do {
-                let config = try server.validated()
-                let base = try OnlineServer.origin(config.auth)
+                let base = HuntersDream.base
                 let start = try await HuntersDream.call("auth/device/start", body: ["DeviceName": "Blood Echoes on macOS"], base: base)
                 guard let device = start["DeviceCode"] as? String, !device.isEmpty,
                       let userCode = start["UserCode"] as? String, !userCode.isEmpty,
@@ -169,9 +170,7 @@ final class OnlineController: ObservableObject {
         task = Task {
             defer { if operation == current { busy = false } }
             do {
-                let config = try server.validated()
-                let game = config.game
-                var request = URLRequest(url: try OnlineServer.origin(game).appendingPathComponent("bb-eu/ss.info"))
+                var request = URLRequest(url: HuntersDream.game.appendingPathComponent("bb-eu/ss.info"))
                 request.timeoutInterval = 10
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 let (data, reply) = try await URLSession.shared.data(for: request)

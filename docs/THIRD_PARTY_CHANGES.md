@@ -188,8 +188,8 @@ cause on Metal. The matching local LOD comparison is the basis of this repair.
 The large-heap trial reached critical memory pressure and was stopped before
 visual validation; the larger heap is not enabled.
 
-## Shared save management and configurable online services (0.2.38)
+## Shared save management and online usability (0.2.38)
 
 Adds a native save manager with streamed SHA-256 verification, whole-directory atomic replacement and pre-restore backups. Formal offline/online saves now share one root; legacy formal online copies are backed up before migration. QA roots are never scanned or imported. Checkpoints retain the existing upstream file format; online mode archives/clears them and offline return seeds a new one. The runtime now holds the save-session lock even with quicksave disabled.
 
-Custom-server fields use existing bbnet/bbhost account, game HTTP, session, STUN, ruleset and UDP configuration; this is not a new server protocol. The Mac credential destination policy accepts only explicitly selected HTTPS service origins, with server-specific Keychain accounts and click-to-copy device codes. Renderer code, Metal patches and game localization payloads are unchanged.
+The launcher retains The Hunter’s Dream as its only online service and keeps the existing Keychain identity. Device codes can be clicked to copy. The Mac credential destination policy accepts only explicitly permitted THD HTTPS service origins, including the game service on port 20443. Renderer code, Metal patches and game localization payloads are unchanged.

@@ -628,10 +628,6 @@ final class LauncherModel: ObservableObject {
 
     private func startGame() {
         guard !isRunning, !saveBusy else { return }
-        if prefs.online {
-            do { _ = try prefs.onlineServer.validated() }
-            catch { state = .failed(error.localizedDescription); return }
-        }
         let store = saveStore, online = prefs.online
         let legacy = dataURL.appendingPathComponent("online-user")
         runSaveOperation({ try store.prepareMode(online: online, legacy: legacy) }) { [weak self] in self?.startPreparedGame() }
@@ -644,20 +640,16 @@ final class LauncherModel: ObservableObject {
             guard profile.onlineActive else {
                 state = .failed(L10n.key("Online play currently requires the Metal backend.")); return
             }
-            onlineController.configure(prefs.onlineServer)
             onlineController.load()
             guard let account = onlineController.account else {
                 state = .failed(L10n.key("Sign in on the Online page before playing online.")); return
             }
-            do {
-                let server = try prefs.onlineServer.validated()
-                env.merge(server.environment) { _, value in value }
-            } catch { state = .failed(error.localizedDescription); return }
+            env.merge(HuntersDream.environment) { _, value in value }
             env["BB_NET_BACKEND"] = "thd"
             env["BB_THD_ONLINE_ID"] = account.name
             env["BB_THD_TOKEN"] = account.token
             env["BB_THD_VERIFY_TLS"] = "1"
-            env["BB_COMMUNITY_SERVER"] = prefs.onlineServer.effective.game
+            env["BB_COMMUNITY_SERVER"] = HuntersDream.game.absoluteString
             env["BB_CLIENT_VERSION"] = "BloodEchoes/\(appVersion)"
         }
         saveModProfile()

@@ -202,7 +202,7 @@ Open **Save & load → Save Manager** while the game is closed. **Game saves** l
 - Backups live in `optimized-launcher/save-backups/<save-folder-id>` and are not automatically pruned. Export important backups to another disk. Shader caches and credentials are excluded.
 - Isolated QA saves and developer mods remain development-only; the public app never discovers or imports them.
 
-Custom servers use the same THD/bbhost protocol and device authorization. Fill in the administrator-provided HTTPS account, game and session service origins; optional STUN, ruleset and local UDP settings are under Connection options. Accounts are isolated by server configuration. Click the displayed device code to copy it. See [all fields and limitations](ONLINE.md#custom-servers).
+The online service is The Hunter’s Dream. Click the displayed device code to copy it into the authorization page. Existing THD sign-in is retained. See [online setup and limitations](ONLINE.md).
 
 ## Controls and quicksave
 

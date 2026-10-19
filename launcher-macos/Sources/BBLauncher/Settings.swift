@@ -201,7 +201,6 @@ struct LauncherPrefs: Equatable {
     var metalObjectMotion = true
     var metalOcclusion = true
     var online = false
-    var onlineServer = OnlineServer()
     var metalOptimizations: [String: Bool] = [:]
     var frameStats = false
     var gpuProfile = false
@@ -248,7 +247,6 @@ struct LauncherPrefs: Equatable {
         static let metalObjectMotion = "metalObjectMotion"
         static let metalOcclusion = "metalOcclusion"
         static let online = "online"
-        static let onlineServer = "onlineServer"
         static let metalOptimizations = "metalOptimizations"
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
@@ -309,7 +307,6 @@ struct LauncherPrefs: Equatable {
         p.metalObjectMotion = flag(Key.metalObjectMotion, p.metalObjectMotion)
         p.metalOcclusion = flag(Key.metalOcclusion, p.metalOcclusion)
         p.online = flag(Key.online, p.online)
-        if let data = defaults.data(forKey: Key.onlineServer), let server = try? JSONDecoder().decode(OnlineServer.self, from: data) { p.onlineServer = server }
         if !Catalog.contains(Catalog.renderers, p.renderer) { p.renderer = "metal" }
         p.frameStats = flag(Key.frameStats, p.frameStats)
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
@@ -388,7 +385,6 @@ struct LauncherPrefs: Equatable {
         defaults.set(metalObjectMotion, forKey: Key.metalObjectMotion)
         defaults.set(metalOcclusion, forKey: Key.metalOcclusion)
         defaults.set(online, forKey: Key.online)
-        defaults.set(try? JSONEncoder().encode(onlineServer), forKey: Key.onlineServer)
         defaults.set(metalOptimizations, forKey: Key.metalOptimizations)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)

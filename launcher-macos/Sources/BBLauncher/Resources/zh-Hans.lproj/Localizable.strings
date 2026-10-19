@@ -459,17 +459,6 @@
 "Legacy online progress" = "旧版联网进度";
 "Before online: quicksave archive" = "联网前快速存档归档";
 "Returned offline" = "恢复离线时备份";
-"Custom server" = "自定义服务器";
-"Account service (HTTPS)" = "账号服务（HTTPS）";
-"Game service (HTTPS)" = "游戏服务（HTTPS）";
-"Session service (HTTPS)" = "匹配服务（HTTPS）";
-"Connection options" = "连接选项";
-"STUN host:port (optional)" = "STUN 主机:端口（选填）";
-"Ruleset" = "规则集";
-"Local P2P UDP port" = "本地 P2P UDP 端口";
-"Requires a THD/bbhost-compatible server. Obtain service addresses from its administrator. Accounts are separate for each server." = "需使用兼容 THD/bbhost 的服务器，地址由管理员提供。不同服务器的账号分别保存。";
-"Use HTTPS service origins, without a path, password or query." = "请填写 HTTPS 服务地址，不包含路径、密码或查询参数。";
-"Check the ruleset, STUN host and UDP port." = "请检查规则集、STUN 主机和 UDP 端口。";
 "Code copied" = "配对码已复制";
 "Click to copy code" = "点击复制配对码";
 "Copy pairing code" = "复制配对码";
