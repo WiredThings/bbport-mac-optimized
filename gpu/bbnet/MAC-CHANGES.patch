@@ -1,0 +1,80 @@
+--- a/gpu/bbnet/include/core/libraries/libs.h
++++ b/gpu/bbnet/include/core/libraries/libs.h
+@@ -15,7 +15,7 @@
+ };
+ } // namespace Core::Loader
+ 
+-#ifdef _WIN32
++#if defined(_WIN32) || defined(__APPLE__)
+ #include <cstdio>
+ #include <exception>
+ #include <type_traits>
+--- a/gpu/bbnet/vendor/shadps4/core/libraries/network/http.cpp
++++ b/gpu/bbnet/vendor/shadps4/core/libraries/network/http.cpp
+@@ -21,6 +21,7 @@
+ #include <fmt/format.h>
+ #include <nlohmann/json.hpp>
+ #include <zlib.h>
++#include "bb_thd_http_policy.h"
+ #include "common/elf_info.h"
+ #include "common/logging/log.h"
+ #include "common/path_util.h"
+@@ -848,6 +849,14 @@
+             }
+         }
+ 
++        // Recheck after every redirect, including cached 301s. Never forward our token
++        // to a different host, an unapproved port or a plain-HTTP destination.
++        const bool thd_destination = BbThdHttpDestination(plan.scheme, plan.host, plan.port);
++        if (!thd_destination) {
++            std::erase_if(plan.headers, [](const auto& header) {
++                return HeaderNameMatches(header.first, "X-BB-Token");
++            });
++        }
+         if (plan.scheme == "https" && !ORBIS_HTTP_HAS_HTTPS) {
+             LOG_ERROR(Lib_Http, "HTTPS request but cpp-httplib lacks OpenSSL support");
+             SynthesizeTransportFailureResponse(out_res);
+@@ -882,18 +891,20 @@
+             const bool game_disabled_verify =
+                 (plan.settings.ssl_flags & ORBIS_HTTPS_FLAG_SERVER_VERIFY) == 0;
+             bool verify_server = !config_disabled_verify && !game_disabled_verify;
+-            if (verify_server && plan.ctx_has_loaded_certs) {
++            if (verify_server && plan.ctx_has_loaded_certs && !thd_destination) {
+                 verify_server = false;
+                 LOG_INFO(Lib_Http,
+                          "{}://{}: ctx loaded custom CAs (libSceSsl integration absent) -> "
+                          "bypassing cert verification",
+                          plan.scheme, plan.host);
+             }
++            // PS4 certificate flags refer to its original service, not this community endpoint.
++            if (thd_destination) verify_server = true;
+             cli.enable_server_certificate_verification(verify_server);
+-            if (config_disabled_verify) {
++            if (config_disabled_verify && !thd_destination) {
+                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled by configuration",
+                          plan.scheme, plan.host);
+-            } else if (game_disabled_verify) {
++            } else if (game_disabled_verify && !thd_destination) {
+                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled (ssl_flags={:#x})",
+                          plan.scheme, plan.host, plan.settings.ssl_flags);
+             }
+@@ -1106,7 +1117,8 @@
+ 
+ static bool IsCredentialHeader(std::string_view name) {
+     return HeaderNameMatches(name, "Authorization") ||
+-           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
++           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie") ||
++           HeaderNameMatches(name, "X-BB-Token");
+ }
+ 
+ static std::string GetLibhttpSystemVersionString() {
+@@ -1761,7 +1773,8 @@
+                                                         : BuildLibhttpUserAgent(""));
+         }
+         // bbport: The Hunter's Dream binds the game's requests to the account and its ruleset.
+-        if (bbthd_enabled()) {
++        // Blood Echoes: a mod or an unrelated system request must not receive this token.
++        if (bbthd_enabled() && BbThdHttpDestination(plan.scheme, plan.host, plan.port)) {
+             bbthd_add_game_headers(&plan.headers);
+         }
+         // Pull Content-Type out of headers

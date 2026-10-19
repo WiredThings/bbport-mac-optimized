@@ -550,6 +550,11 @@ static int probe_main(int argc, char **argv) {
         sfo_value(sfo,"ATTRIBUTE",NULL,0,&attributes);
         uint64_t sdk=0;
         if (procparam) memcpy(&sdk,image+procparam+16,8); /* procparam: size, magic, count, sdk_version */
+        if (runtime_net_enabled()) {
+            char version[16]="";
+            sfo_value(sfo,"APP_VER",version,sizeof(version),NULL);
+            runtime_net_configure(app0,serial,title,version,image,size,(uint32_t)sdk);
+        }
         BbGpuConfig gpu={title,serial,user_dir ? user_dir : "user",(uint32_t)sdk,attributes,1920,1080};
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
         if (bbgpu_init(&gpu)) fail("GPU initialization failed");

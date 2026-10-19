@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Overlay the Metal backend and localized launcher on a verified 0.1.4-mem1 app."""
+"""Overlay the Metal backend, localized launcher and optional online module on a complete app."""
 import argparse
 import hashlib
 import json
@@ -14,7 +14,7 @@ import tempfile
 from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loads, minimum, run, sha, strip_development_tools
 from game_app import create_game_app
 
-VERSION = '0.2.0-metal1'
+VERSION = '0.2.37'
 UPSTREAM = '11992198df6306dacf6ec37de57ee920db1acc11'
 
 
@@ -42,6 +42,8 @@ def main():
     parser.add_argument('--baseline', type=Path, required=True)
     parser.add_argument('--gpu-build', type=Path, required=True)
     parser.add_argument('--metal-probe', type=Path, help='Optional rebuilt Metal-only probe with memory snapshot ABI')
+    parser.add_argument('--online-build', type=Path, help='Optional build directory containing libbbnet.dylib')
+    parser.add_argument('--online-deps', type=Path, help='Networking dependency prefix for bundled license texts')
     parser.add_argument('--launcher', type=Path, required=True)
     parser.add_argument('--spirv-cross-source', type=Path, required=True)
     parser.add_argument('--app', type=Path, required=True)
@@ -58,7 +60,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -179,6 +181,10 @@ def main():
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     (engine / '.version').write_text(args.version + '\n')
     create_game_app(app)
+    if args.online_build:
+        if not args.online_deps: raise ValueError('--online-deps is required with --online-build')
+        from package_online import install_online_module
+        install_online_module(app, args.online_build/'libbbnet.dylib', args.online_deps)
     copy(ROOT / 'tools/macos/resources/ATTRIBUTION.txt', engine / 'licenses/icons/BloodborneGame-ATTRIBUTION.txt')
     copy(ROOT / 'docs/release/METAL-PROXY-COMPRESSION.md', engine / 'METAL-PROXY-COMPRESSION.md')
     copy(ROOT / 'docs/release/METAL-ALPHA-MERGE.md', engine / 'METAL-ALPHA-MERGE.md')

@@ -19,6 +19,7 @@ struct ContentView: View {
                 LanguageSection()
                 BasicDisplaySection()
                 QuicksaveSection()
+                OnlineSection()
                 KeyLegend()
                 Section {
                     Button {
@@ -363,12 +364,68 @@ struct QuicksaveSection: View {
     var body: some View {
         Section {
             Toggle(L10n.key("Enable quicksave / quickload"), isOn: $model.prefs.quicksave)
+                .disabled(model.profile.onlineActive)
         } header: {
             Text(L10n.key("Save & load"))
         } footer: {
             Text(L10n.key("Loading restores your latest checkpoint and restarts the game. Normal autosaving stays on."))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct OnlineSection: View {
+    @EnvironmentObject var model: LauncherModel
+    var body: some View {
+        OnlineControls(network: model.onlineController)
+            .environmentObject(model)
+    }
+}
+
+private struct OnlineControls: View {
+    @EnvironmentObject var model: LauncherModel
+    @ObservedObject var network: OnlineController
+    var body: some View {
+        Section {
+            Toggle(L10n.key("Play online (experimental)"), isOn: $model.prefs.online)
+                .onChange(of: model.prefs.online) { on in if on { network.load() } else { network.cancel() } }
+            if model.prefs.online {
+                LabeledContent(L10n.key("Server"), value: "The Hunter’s Dream")
+                if model.prefs.renderer != "metal" {
+                    Text(L10n.key("Online play currently requires the Metal backend."))
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                if let account = network.account {
+                    HStack {
+                        Label(account.name, systemImage: "person.crop.circle.badge.checkmark")
+                        Spacer()
+                        Button(L10n.key("Sign out")) { network.signOut() }.disabled(network.busy)
+                    }
+                } else {
+                    HStack {
+                        Button(L10n.key("Sign in on website…")) { network.signIn() }.disabled(network.busy)
+                        if network.busy {
+                            ProgressView().controlSize(.small)
+                            Button(L10n.key("Cancel")) { network.cancel() }
+                        }
+                    }
+                }
+                if !network.code.isEmpty {
+                    LabeledContent(L10n.key("Enter this code on the website")) {
+                        Text(network.code).monospaced().textSelection(.enabled)
+                    }
+                }
+                Button(L10n.key("Check server connection")) { network.checkConnection() }.disabled(network.busy)
+                if !network.status.isEmpty { Text(network.status).font(.caption).textSelection(.enabled) }
+            }
+        } header: {
+            Text(L10n.key("Online"))
+        } footer: {
+            if model.prefs.online {
+                Text(L10n.key("Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental."))
+            }
+        }
+        .onAppear { if model.prefs.online { network.load() } }
     }
 }
 
@@ -557,6 +614,7 @@ struct EffectsSection: View {
                 Text(L10n.key("Skip the online/offline screen"))
                 Text(L10n.key("The game starts straight at its main menu, offline"))
             }
+            .disabled(model.profile.onlineActive)
             ForEach($model.game.effects) { $effect in
                 Toggle(isOn: $effect.isOn) {
                     Text(L10n.key(effect.title))

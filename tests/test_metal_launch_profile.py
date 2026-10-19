@@ -16,6 +16,7 @@ class MetalLaunchProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'tools/macos').mkdir(parents=True)
             shutil.copy2(ROOT/'tools/macos/run_optimized.sh',root/'tools/macos/run_optimized.sh')
+            shutil.copy2(ROOT/'tools/macos/supervise_restart.sh',root/'tools/macos/supervise_restart.sh')
             (root/'.packaged').touch();(root/'bin/gpu-metal').mkdir(parents=True)
             (root/'bin/bb-probe-metal').touch();(root/'bin/bb-probe-metal').chmod(0o755)
             (root/'bin/gpu-metal/libbbgpu.dylib').touch()

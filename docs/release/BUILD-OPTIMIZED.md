@@ -24,7 +24,7 @@ with the game closed; reserve tens of GiB for two-architecture dependency/build/
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.34-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.37-source1
 ```
 
 The script performs the steps below in order. It builds its own Vulkan base package before
@@ -45,6 +45,7 @@ git submodule update --init --recursive
 BB_ARCH=x86_64 BB_SKIP_KOSMICKRISP=1 bash tools/macos/setup_deps.sh
 BB_ARCH=arm64 bash tools/macos/setup_deps.sh
 bash tools/macos/setup_metal_deps.sh
+bash tools/macos/setup_online_deps.sh
 brew install python@3.11
 export BB_PACKAGE_PYTHON="$(brew --prefix python@3.11)/Frameworks/Python.framework/Versions/3.11"
 
@@ -52,23 +53,25 @@ BB_SKIP_NATIVE_GPU=1 bash tools/macos/build.sh
 bash tools/macos/build_m2_native.command
 bash tools/macos/build_metal.sh
 bash tools/macos/build_metal_probe.sh
+bash tools/macos/build_online.sh
 swift test --package-path launcher-macos --jobs "$BB_SWIFT_JOBS"
 
-python3 tools/macos/package_optimized.py 0.2.34-source1
+python3 tools/macos/package_optimized.py 0.2.37-source1
 python3 tools/macos/package_metal.py \
-  --baseline "$PWD/out/package-optimized/blood-echoes-0.2.34-source1/Blood Echoes.app" \
-  --launcher "$PWD/out/package-optimized/blood-echoes-0.2.34-source1/Blood Echoes.app" \
+  --baseline "$PWD/out/package-optimized/blood-echoes-0.2.37-source1/Blood Echoes.app" \
+  --launcher "$PWD/out/package-optimized/blood-echoes-0.2.37-source1/Blood Echoes.app" \
   --gpu-build "$PWD/out/gpu-metal" \
   --metal-probe "$PWD/out/probe-metal/bb-probe-metal" \
+  --online-build "$PWD/out/online" --online-deps "$PWD/deps-online-x86_64" \
   --spirv-cross-source "$PWD/deps-x86_64/src/SPIRV-Cross" \
-  --app "$PWD/out/source-release-0.2.34-source1/Blood Echoes.app" \
-  --output "$PWD/dist" --version 0.2.34-source1 --verification-name source-build
+  --app "$PWD/out/source-release-0.2.37-source1/Blood Echoes.app" \
+  --output "$PWD/dist" --version 0.2.37-source1 --verification-name source-build
 ```
 
 `package_optimized.py` exports the current pinned and patched project/dependency sources,
 licenses and a source manifest. Its preliminary ZIP is Vulkan-only; use the final
-`Blood-Echoes-0.2.34-source1.zip` from `package_metal.py` for the combined app.
-The source archive is `dist/blood-echoes-0.2.34-source1-source.tar.gz`.
+`Blood-Echoes-0.2.37-source1.zip` from `package_metal.py` for the combined app.
+The source archive is `dist/blood-echoes-0.2.37-source1-source.tar.gz`.
 The enhanced `bb-probe-metal` is rebuilt from the public root runtime source, rather than
 preserved from a previous App. Both backends' runtime/renderer libraries are relocated into
 the bundle and checked for non-system external loads. The icon and localization bundle are
@@ -113,3 +116,7 @@ usage-only eager-link exits, and the native GPU process's no-argument eager-link
 36 Swift tests, 19 Python packaging/launch-path tests and the old-SDK early-rejection check
 passed. Original preferences, 2,257 save/configuration files and installed app binaries were
 unchanged. These are source/build/link tests; no game was started for this audit.
+
+The optional network module is a separate x86-64 dylib. Offline mode does not load it.
+Pinned source dependencies and license texts are exported with the source asset; see
+[`gpu/bbnet/DEPENDENCIES.json`](../../gpu/bbnet/DEPENDENCIES.json) and [online notes](../ONLINE.md).

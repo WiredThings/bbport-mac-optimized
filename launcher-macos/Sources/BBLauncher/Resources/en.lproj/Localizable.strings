@@ -396,3 +396,24 @@
 "Import" = "Import";
 "Checking translation files…" = "Checking translation files…";
 "Could not import or verify the translation package." = "Could not import or verify the translation package.";
+
+/* Optional online play */
+"Play online (experimental)" = "Play online (experimental)";
+"Server" = "Server";
+"Online" = "Online";
+"Sign out" = "Sign out";
+"Sign in on website…" = "Sign in on website…";
+"Enter this code on the website" = "Enter this code on the website";
+"Check server connection" = "Check server connection";
+"Online play currently requires the Metal backend." = "Online play currently requires the Metal backend.";
+"Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental." = "Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental.";
+"Could not save sign-in in Keychain." = "Could not save sign-in in Keychain.";
+"Could not remove sign-in from Keychain." = "Could not remove sign-in from Keychain.";
+"Unexpected reply from the account service." = "Unexpected reply from the account service.";
+"Sign-in was refused." = "Sign-in was refused.";
+"The sign-in code expired. Try again." = "The sign-in code expired. Try again.";
+"The game service is not reachable." = "The game service is not reachable.";
+"Game service reachable. In-game login is checked after launch." = "Game service reachable. In-game login is checked after launch.";
+"The save copy contains an unsupported link." = "The save copy contains an unsupported link.";
+"Online play requires its own isolated save copy." = "Online play requires its own isolated save copy.";
+"Sign in on the Online page before playing online." = "Sign in on the Online page before playing online.";

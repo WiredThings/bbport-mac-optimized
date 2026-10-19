@@ -68,6 +68,20 @@ fi
 export BB_DATA_DIR=${BB_DATA_DIR:-$HOME/Library/Application Support/bbport/optimized-launcher}
 export BB_USER_DIR=${BB_USER_DIR:-$HOME/Library/Application Support/bbport/user}
 export BB_CONFIG=${BB_CONFIG:-$BB_DATA_DIR/bbport.ini}
+if [[ ${BB_ONLINE:-0} == 1 ]]; then
+    [[ $renderer == metal ]] || die "Online play currently requires Metal"
+    if [[ -f .packaged ]]; then net=$PWD/bin/gpu-net/libbbnet.dylib
+    else net=${BB_NET_MODULE:-$PWD/out/online/libbbnet.dylib}; fi
+    [[ -f $net ]] || die "Optional online module is missing"
+    [[ ${BB_NET_BACKEND:-thd} == thd ]] || die "Unsupported online backend"
+    [[ -n ${BB_THD_ONLINE_ID:-} && -n ${BB_THD_TOKEN:-} ]] || die "Sign in on the Online page first"
+    export BB_NET_MODULE=$net BB_NET_BACKEND=thd BB_SKIP_NETWORK_CHOICE=0 BB_QUICKSAVE=0
+    export BB_THD_VERIFY_TLS=1 BB_BRIDGE_LIVE_MAP=0
+else
+    export BB_ONLINE=0
+    unset BB_NET_MODULE BB_NET_BACKEND BB_THD_TOKEN BB_THD_ONLINE_ID
+    unset BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN SHADPS4_HTTP_HOST_OVERRIDES_JSON
+fi
 if [[ $renderer == vulkan ]]; then
 export BB_PREBUILT=1 BB_NATIVE_GPU=1 BB_PROBE=$probe BB_GPU_PROCESS=$gpu BB_GPU_DEPS=$deps
 export BB_VULKAN_LIBRARY=$deps/lib/libvulkan.1.dylib SDL_VULKAN_LIBRARY=$deps/lib/libvulkan.1.dylib
@@ -110,6 +124,13 @@ else
     [[ ${BB_QUICKSAVE:-0} == 0 ]] || die "Benchmark does not restore live quicksaves"
 fi
 mkdir -p "$BB_DATA_DIR/out"
+if [[ ${BB_ONLINE:-0} == 1 ]]; then
+    export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py --user "$BB_USER_DIR")
+    export BB_THD_SERVER=https://thehuntersdream.com:18671 BB_THD_AUTH=https://thehuntersdream.com
+    export BB_THD_RULESET=vanilla BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-BloodEchoes}
+    unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
+fi
 export BB_FRAME_LOG=$BB_DATA_DIR/out/frames.csv
 log=$BB_DATA_DIR/out/last-run.log
 [[ ! -f $log ]] || cp "$log" "$BB_DATA_DIR/out/previous-run.log"

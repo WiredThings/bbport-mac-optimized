@@ -8,7 +8,7 @@ This is a provenance/evidence guide, not a claim that this fork originated the g
 Metal engine, community patches or every optimization it integrates.
 
 Versioned technical notes preserve their original test/experimental state. For current defaults,
-use the 0.2.36 user guide and optimization-control reference; an older note saying a path was
+use the 0.2.37 user guide and optimization-control reference; an older note saying a path was
 unverified is not a new claim about every later revision.
 
 0.2.30 added Chinese-only text-source selection and a private local importer for the community
@@ -40,6 +40,11 @@ being claimed as a newly transplanted implementation. See the existing-fixes sec
 [Metal memory notes](release/METAL-MEMORY-1.md).
 
 ## Runtime and framework dependencies
+
+Version 0.2.37 separately ports Supermedo's bbnet / shadPS4 / bbhost THD
+integration at `de2e38af055f09f819946951075c6bb119e62ae6`. The optional module retains its
+GPL-3.0 bbhost notice and OpenSSL, Protobuf, MiniUPnP, nlohmann/json and cpp-httplib notices.
+The renderer is unchanged. [Online implementation, source attribution and validation limits](ONLINE.md).
 
 The underlying projects also rely on SDL3 (window/input/audio), SPIRV-Cross and the shader-toolchain
 components (translation), FFmpeg/LibAtrac9 (media/audio), Dear ImGui (overlay), and utility libraries

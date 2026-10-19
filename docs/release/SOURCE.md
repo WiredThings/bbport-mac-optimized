@@ -11,7 +11,7 @@ the `optimized` branch of `WiredThings/blood-echoes`:
 ```sh
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.36-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.37-source1
 ```
 
 See [BUILD-OPTIMIZED.md](BUILD-OPTIMIZED.md) and the [README](../../README.md#build-from-source).
@@ -19,7 +19,7 @@ The build creates its own base app and needs no installed app or game files. The
 Release source archive contains pinned submodule sources with all adapter patches applied.
 Use the recursive clone to retain the Git metadata required by revision guards.
 
-The `v0.2.36` tag is the archive-safety build snapshot; older tags and their asset filenames
+The `v0.2.37` tag includes the opt-in online module; older tags and their asset filenames
 remain historical releases. Private World Warper tools, routes, game data and saves are excluded.
 
 ## Original standalone release (historical)
@@ -45,3 +45,8 @@ The committed FSR-Vulkan and Mesa patches were checked against the exact local d
 Python 3.11 is bundled with its license; the precise version appears in `THIRD-PARTY-NOTICES.txt` inside the app. CPython source is available from [python.org](https://www.python.org/downloads/source/). Boost, magic_enum and robin-map headers come from the Homebrew packages used by the build scripts.
 
 The packager also produces a local source export containing checked-out project and dependency sources. The public Release includes the app ZIP and a source archive with pinned submodule source. Source is also accessible through this tagged repository and the dependency links above. Component license notices are included in the app.
+
+Networking sources are vendored under `gpu/bbnet`; dependency revisions are in
+`gpu/bbnet/DEPENDENCIES.json`. The source asset includes pristine pinned OpenSSL,
+Protobuf, MiniUPnP and nlohmann/json trees, not local dependency build directories.
+See [online setup and validation](../ONLINE.md).

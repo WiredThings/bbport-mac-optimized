@@ -3,7 +3,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
-version=${1:-0.2.36-source1}
+version=${1:-0.2.37-source1}
 jobs=${BB_BUILD_JOBS:-2}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { echo 'Use a semantic version without v.' >&2; exit 1; }
 [[ ! -e out/source-release-$version ]] || { echo 'Output already exists; choose a new version suffix.' >&2; exit 1; }
@@ -26,6 +26,7 @@ if [[ ${BB_SKIP_DEPS:-0} != 1 ]]; then
     BB_ARCH=x86_64 BB_SKIP_KOSMICKRISP=1 bash tools/macos/setup_deps.sh
     BB_ARCH=arm64 bash tools/macos/setup_deps.sh
     bash tools/macos/setup_metal_deps.sh
+    bash tools/macos/setup_online_deps.sh
     HOMEBREW_NO_INSTALL_UPGRADE=1 brew install python@3.11
 fi
 export BB_PACKAGE_PYTHON=${BB_PACKAGE_PYTHON:-$(brew --prefix python@3.11)/Frameworks/Python.framework/Versions/3.11}
@@ -34,6 +35,7 @@ BB_SKIP_NATIVE_GPU=1 bash tools/macos/build.sh
 bash tools/macos/build_m2_native.command
 bash tools/macos/build_metal.sh
 bash tools/macos/build_metal_probe.sh
+bash tools/macos/build_online.sh
 swift test --package-path launcher-macos --jobs "$BB_SWIFT_JOBS"
 # First assemble a fresh Vulkan base FROM SOURCE, then add the rebuilt Metal runtime.
 # This base is a disposable build artifact, never /Applications or a downloaded app.
@@ -41,6 +43,7 @@ python3 tools/macos/package_optimized.py "$version"
 baseline="$repo/out/package-optimized/blood-echoes-$version/Blood Echoes.app"
 python3 tools/macos/package_metal.py --baseline "$baseline" --launcher "$baseline" \
     --gpu-build "$repo/out/gpu-metal" --metal-probe "$repo/out/probe-metal/bb-probe-metal" \
+    --online-build "$repo/out/online" --online-deps "${BB_ONLINE_DEPS:-$repo/deps-online-x86_64}" \
     --spirv-cross-source "$repo/deps-x86_64/src/SPIRV-Cross" \
     --app "$repo/out/source-release-$version/Blood Echoes.app" \
     --output "$repo/dist" --version "$version" --verification-name source-build

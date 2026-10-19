@@ -1,0 +1,6 @@
+{
+  "openssl": {"repository": "openssl/openssl", "commit": "286ddeaac037533bbdce65b3c689e3f7ffebf0f6", "version": "3.5.6"},
+  "protobuf": {"repository": "protocolbuffers/protobuf", "commit": "f0dc78d7e6e331b8c6bb2d5283e06aa26883ca7c", "version": "21.12"},
+  "miniupnp": {"repository": "miniupnp/miniupnp", "commit": "bf4215a7574f88aa55859db9db00e3ae58cf42d6", "version": "2.3.3"},
+  "json": {"repository": "nlohmann/json", "commit": "55f93686c01528224f448c19128836e7df245f72", "version": "3.12.0"}
+}

@@ -200,6 +200,7 @@ struct LauncherPrefs: Equatable {
     var renderer = "metal"
     var metalObjectMotion = true
     var metalOcclusion = true
+    var online = false
     var metalOptimizations: [String: Bool] = [:]
     var frameStats = false
     var gpuProfile = false
@@ -245,6 +246,7 @@ struct LauncherPrefs: Equatable {
         static let renderer = "renderer"
         static let metalObjectMotion = "metalObjectMotion"
         static let metalOcclusion = "metalOcclusion"
+        static let online = "online"
         static let metalOptimizations = "metalOptimizations"
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
@@ -304,6 +306,7 @@ struct LauncherPrefs: Equatable {
         p.renderer = text(Key.renderer, p.renderer)
         p.metalObjectMotion = flag(Key.metalObjectMotion, p.metalObjectMotion)
         p.metalOcclusion = flag(Key.metalOcclusion, p.metalOcclusion)
+        p.online = flag(Key.online, p.online)
         if !Catalog.contains(Catalog.renderers, p.renderer) { p.renderer = "metal" }
         p.frameStats = flag(Key.frameStats, p.frameStats)
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
@@ -381,6 +384,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(renderer, forKey: Key.renderer)
         defaults.set(metalObjectMotion, forKey: Key.metalObjectMotion)
         defaults.set(metalOcclusion, forKey: Key.metalOcclusion)
+        defaults.set(online, forKey: Key.online)
         defaults.set(metalOptimizations, forKey: Key.metalOptimizations)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)

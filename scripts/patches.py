@@ -72,6 +72,8 @@ def language_patches(env=os.environ):
 
 
 def skip_network_choice(env=os.environ):
+    if env.get('BB_ONLINE') == '1':
+        return False
     return env.get('BB_SKIP_NETWORK_CHOICE','1')!='0'
 
 
@@ -313,6 +315,17 @@ def compile_patches(xml, names, app_version, segments):
     return writes
 
 
+def validate_online_writes(writes, xml, app_version, segments, env=os.environ):
+    """Reject offline-only edits, including renamed third-party copies of those edits."""
+    if env.get('BB_ONLINE') != '1':
+        return
+    blocked = compile_patches(xml, [SKIP_NETWORK_CHOICE, 'Disable HTTP Requests'], app_version, segments)
+    if any(offset < other + len(payload) and other < offset + len(data)
+           for offset, data in writes for other, payload in blocked):
+        raise ValueError('Online play conflicts with an offline-only patch; disable Skip Online/Offline Choice, '
+                         'Disable HTTP Requests, or an external patch editing the same addresses')
+
+
 # Third-party patch files (shadPS4/GoldHEN XML) in the data directory's patches/ folder.
 BLOODBORNE_IDS={'CUSA00207','CUSA00208','CUSA00900','CUSA01363','CUSA03173','CUSA03023'}
 
@@ -438,6 +451,7 @@ def main():
         if any(offset < r+len(b) and r < offset+len(data)
                for offset,data in writes for r,b in region):
             raise ValueError('Chinese Retranslation conflicts with an external region patch; disable that patch')
+    validate_online_writes(writes, a.xml, a.app_version, segments)
     validate_velocity_writes(writes, settings)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).

@@ -396,3 +396,24 @@
 "Import" = "匯入";
 "Checking translation files…" = "正在驗證漢化檔案…";
 "Could not import or verify the translation package." = "無法匯入或驗證漢化包。";
+
+/* Optional online play */
+"Play online (experimental)" = "連線遊玩（實驗）";
+"Server" = "伺服器";
+"Online" = "連線";
+"Sign out" = "登出";
+"Sign in on website…" = "前往網頁登入⋯";
+"Enter this code on the website" = "在網頁輸入此驗證碼";
+"Check server connection" = "檢查伺服器連線";
+"Online play currently requires the Metal backend." = "連線目前需要使用 Metal 後端。";
+"Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental." = "連線使用獨立存檔副本，不影響單機存檔。連線時停用快速讀檔；多人相容性仍在測試。";
+"Could not save sign-in in Keychain." = "無法將登入憑證存入鑰匙圈。";
+"Could not remove sign-in from Keychain." = "無法從鑰匙圈移除登入憑證。";
+"Unexpected reply from the account service." = "帳號服務傳回無法辨識的回應。";
+"Sign-in was refused." = "登入要求遭拒。";
+"The sign-in code expired. Try again." = "登入驗證碼已過期，請重試。";
+"The game service is not reachable." = "無法連線遊戲伺服器。";
+"Game service reachable. In-game login is checked after launch." = "可連線遊戲伺服器；進入遊戲後再驗證登入。";
+"The save copy contains an unsupported link." = "存檔副本包含不支援的連結。";
+"Online play requires its own isolated save copy." = "連線需要獨立的存檔副本。";
+"Sign in on the Online page before playing online." = "請先在「連線」中完成登入。";

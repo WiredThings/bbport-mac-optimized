@@ -38,6 +38,7 @@ struct OptimizedProfile {
     }
 
     var gpuProfileVariable: String { prefs.renderer == "metal" ? "BB_MTL_GPU_TIMING" : "BB_GPU_PROFILE" }
+    var onlineActive: Bool { prefs.online && prefs.renderer == "metal" }
 
     /// Mirror the pinned Metal SceneResolution::ForPreset, including even-pixel rounding.
     /// The preview is not an override and does not change the selected quality or effects.
@@ -61,7 +62,8 @@ struct OptimizedProfile {
             "BB_SKIP_EMPTY_DRAWS": "1", "BB_VK_RECORD_THREADS": "1",
             "BB_FRAMES_AHEAD": "2", "BB_GPU_QOS": "1",
             "BB_MAC_UNIFIED_MEMORY": "0", "BB_PIPE_PARK_WAITS": "0",
-            "BB_QUICKSAVE": prefs.quicksave ? "1" : "0",
+            "BB_ONLINE": onlineActive ? "1" : "0",
+            "BB_QUICKSAVE": prefs.quicksave && !onlineActive ? "1" : "0",
             "BB_QUICKSAVE_SCANCODE": String(prefs.quicksaveKey.code),
             "BB_QUICKLOAD_SCANCODE": String(prefs.quickloadKey.code),
             "BB_MENU_SCANCODE": String(prefs.menuKey.code),
@@ -98,6 +100,13 @@ struct OptimizedProfile {
             env.removeValue(forKey: "BB_PREUPLOAD")
         }
         env.merge(environment) { _, selected in selected }
+        if onlineActive { env["BB_SKIP_NETWORK_CHOICE"] = "0" }
+        else {
+            for key in Array(env.keys) where key.hasPrefix("BB_THD_") || key.hasPrefix("BB_SHADNET_") ||
+                ["BB_NET_MODULE", "BB_NET_BACKEND", "SHADPS4_HTTP_HOST_OVERRIDES_JSON"].contains(key) {
+                env.removeValue(forKey: key)
+            }
+        }
         return env
     }
 

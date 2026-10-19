@@ -14,5 +14,5 @@ ar rcs "$out/libatrac9.a" "$out"/atrac9/*.o
 clang -arch x86_64 -mmacosx-version-min=26.0 -std=c11 -O2 -g -Wall -Wextra -pthread \
     -I"$prefix/include" -I. -Isrc src/probe.c src/runtime*.c src/low_heap.c src/vulkan_smoke.c \
     "$out/libatrac9.a" -lm -L"$build" -lbbgpu -L"$prefix/lib" -lvulkan -lSDL3.0 \
-    -Wl,-rpath,@loader_path/gpu-metal -Wl,-export_dynamic -o "$out/bb-probe-metal"
+    -Wl,-rpath,@loader_path/gpu-metal -Wl,-export_dynamic -Wl,-headerpad_max_install_names -o "$out/bb-probe-metal"
 printf 'Built %s/bb-probe-metal (diagnostic snapshot ABI v1).\n' "$out"

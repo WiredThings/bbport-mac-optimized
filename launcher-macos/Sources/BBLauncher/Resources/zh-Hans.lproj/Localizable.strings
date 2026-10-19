@@ -396,3 +396,24 @@
 "Import" = "导入";
 "Checking translation files…" = "正在校验汉化文件…";
 "Could not import or verify the translation package." = "无法导入或校验汉化包。";
+
+/* Optional online play */
+"Play online (experimental)" = "联网游玩（实验）";
+"Server" = "服务器";
+"Online" = "联网";
+"Sign out" = "退出登录";
+"Sign in on website…" = "前往网页登录…";
+"Enter this code on the website" = "在网页输入此验证码";
+"Check server connection" = "检查服务器连接";
+"Online play currently requires the Metal backend." = "联网目前需要使用 Metal 后端。";
+"Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental." = "联网使用独立存档副本，不影响单机存档。联网时停用快速读档；多人兼容性仍在测试。";
+"Could not save sign-in in Keychain." = "无法将登录凭据存入钥匙串。";
+"Could not remove sign-in from Keychain." = "无法从钥匙串移除登录凭据。";
+"Unexpected reply from the account service." = "账号服务返回了无法识别的响应。";
+"Sign-in was refused." = "登录请求被拒绝。";
+"The sign-in code expired. Try again." = "登录验证码已过期，请重试。";
+"The game service is not reachable." = "无法连接游戏服务器。";
+"Game service reachable. In-game login is checked after launch." = "游戏服务器可达；进入游戏后再验证登录。";
+"The save copy contains an unsupported link." = "存档副本包含不支持的链接。";
+"Online play requires its own isolated save copy." = "联网需要独立的存档副本。";
+"Sign in on the Online page before playing online." = "请先在“联网”中完成登录。";

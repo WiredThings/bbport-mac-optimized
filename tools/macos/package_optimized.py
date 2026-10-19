@@ -242,6 +242,10 @@ def main():
             seen.add(key)
             export_git(dep, source_top / 'dependencies' / arch / dep.name, records, arch + '/' + dep.name)
     # Header-only libraries linked into the engine also retain their notices and source headers.
+    if (ROOT/'gpu/bbnet/DEPENDENCIES.json').is_file():
+        from package_online import export_online_sources
+        online_prefix = Path(os.environ.get('BB_ONLINE_DEPS', ROOT/'deps-online-x86_64'))
+        records.extend(export_online_sources(source_top/'dependencies/online', online_prefix/'source-archives'))
     for component in ('boost', 'magic_enum', 'robin-map'):
         prefix = Path('/opt/homebrew/opt') / component
         if not prefix.exists(): continue

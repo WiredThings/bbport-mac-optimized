@@ -43,6 +43,7 @@ final class LauncherModel: ObservableObject {
     static let shared = LauncherModel()
 
     static let maxLogLines = 5000
+    let onlineController = OnlineController()
 
     @Published var prefs: LauncherPrefs {
         didSet { prefsChanged(from: oldValue) }
@@ -620,6 +621,26 @@ final class LauncherModel: ObservableObject {
 
     private func startGame() {
         guard process == nil, let repo = repoURL, repoCheck.allowsPlay, gameCheck.allowsPlay else { return }
+        var env = environment()
+        if prefs.online {
+            guard profile.onlineActive else {
+                state = .failed(L10n.key("Online play currently requires the Metal backend.")); return
+            }
+            onlineController.load()
+            guard let account = onlineController.account else {
+                state = .failed(L10n.key("Sign in on the Online page before playing online.")); return
+            }
+            let isolated = dataURL.appendingPathComponent("online-user", isDirectory: true)
+            do { try OnlineSaves.prepare(source: userFolderURL, destination: isolated) }
+            catch { state = .failed(error.localizedDescription); return }
+            env["BB_USER_DIR"] = isolated.path
+            env["BB_NET_BACKEND"] = "thd"
+            env["BB_THD_ONLINE_ID"] = account.name
+            env["BB_THD_TOKEN"] = account.token
+            env["BB_THD_VERIFY_TLS"] = "1"
+            env["BB_COMMUNITY_SERVER"] = "https://thehuntersdream.com"
+            env["BB_CLIENT_VERSION"] = "BloodEchoes/\(appVersion)"
+        }
         saveModProfile()
         savePatchProfile()
         do {
@@ -628,8 +649,6 @@ final class LauncherModel: ObservableObject {
             state = .failed(L10n.format("cannot write %@: %@", String(describing: iniURL.path), String(describing: error.localizedDescription)))
             return
         }
-
-        let env = environment()
         let summary = ["BB_GAME_DIR", "BB_LANGUAGE", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
             .map { "\($0)=\(env[$0] ?? "")" }.joined(separator: " ")
         start(.game, arguments: ["tools/macos/run_optimized.sh"], in: repo, env: env,
