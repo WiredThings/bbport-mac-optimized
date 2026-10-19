@@ -50,13 +50,20 @@ void runtime_quicksave_committed(const char *path) {
     else if (!strcmp(name,"userdata0010"))
         __atomic_add_fetch(&profile_commits,1,__ATOMIC_RELEASE);
 }
-static int request_fresh_save(void) {
-    if (!game_save) return -1;
+/* This flag is the guest's own SaveRequest readiness gate, not a host save
+ * mount. The title screen also mounts/writes the profile before Continue. */
+static int character_ready(void) {
+    if (!guest_image || !game_save) return 0;
     uintptr_t context=0, manager=0;
     memcpy(&context,guest_image+0x553b0c8,sizeof(context));
     memcpy(&manager,guest_image+0x5556678,sizeof(manager));
     if (!context || !manager || !runtime_memory_is_mapped(manager,0x1579) ||
         !*(volatile unsigned char *)(manager+0x1578)) return 0;
+    return 1;
+}
+static int request_fresh_save(void) {
+    if (!game_save) return -1;
+    if (!character_ready()) return 0;
     character_before=__atomic_load_n(&character_commits,__ATOMIC_ACQUIRE);
     profile_before=__atomic_load_n(&profile_commits,__ATOMIC_ACQUIRE);
     /* Called on the guest input thread, with no live save mount. The verified
@@ -197,10 +204,15 @@ void runtime_quicksave_keys(int save, int load, int blocked) {
     }
 }
 void runtime_quicksave_loaded(void) {
+    if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE) || !character_ready()) return;
     if (__atomic_exchange_n(&auto_confirm,0,__ATOMIC_ACQ_REL))
-        puts("Quicksave: character load started; automatic menu input released");
+        puts("Quicksave: character ready; automatic menu input released");
 }
 int runtime_quicksave_autoconfirm(void) {
+    if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE)) return -1;
+    /* Poll as well as checking mounts: the final mount can precede readiness.
+     * Check before generating Cross, including when readiness changes mid-tap. */
+    runtime_quicksave_loaded();
     if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE)) return -1;
     const uint64_t now=clock_ms();
     if (!auto_start) auto_start=now;
@@ -209,8 +221,8 @@ int runtime_quicksave_autoconfirm(void) {
         message("Quicksave restored - select Continue to finish loading");
         return -1;
     }
-    /* A short Cross tap each second advances Offline/Continue. A writable save mount
-     * ends this before gameplay; held input never carries across the loading screen. */
+    /* A short Cross tap advances Offline/Continue. Profile mounts cannot stop it;
+     * the verified guest readiness gate releases input before the next tap. */
     return now-auto_start>2000 && ((now-auto_start)%1200)<160 ? 1 : 0;
 }
 #else

@@ -233,10 +233,9 @@ index 6707470..6c0a123 100644
  void runtime_savedata_report(void) {}
 diff --git a/src/runtime_quicksave.c b/src/runtime_quicksave.c
 new file mode 100644
-index 0000000..1520bd7
 --- /dev/null
 +++ b/src/runtime_quicksave.c
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,238 @@
 +/* Checkpoint controls, opt-in with BB_QUICKSAVE=1. Copy only outside all save mounts;
 + * restore before the guest starts, using the port's normal restart mechanism. */
 +#define _GNU_SOURCE
@@ -289,13 +288,20 @@ index 0000000..1520bd7
 +    else if (!strcmp(name,"userdata0010"))
 +        __atomic_add_fetch(&profile_commits,1,__ATOMIC_RELEASE);
 +}
-+static int request_fresh_save(void) {
-+    if (!game_save) return -1;
++/* This flag is the guest's own SaveRequest readiness gate, not a host save
++ * mount. The title screen also mounts/writes the profile before Continue. */
++static int character_ready(void) {
++    if (!guest_image || !game_save) return 0;
 +    uintptr_t context=0, manager=0;
 +    memcpy(&context,guest_image+0x553b0c8,sizeof(context));
 +    memcpy(&manager,guest_image+0x5556678,sizeof(manager));
 +    if (!context || !manager || !runtime_memory_is_mapped(manager,0x1579) ||
 +        !*(volatile unsigned char *)(manager+0x1578)) return 0;
++    return 1;
++}
++static int request_fresh_save(void) {
++    if (!game_save) return -1;
++    if (!character_ready()) return 0;
 +    character_before=__atomic_load_n(&character_commits,__ATOMIC_ACQUIRE);
 +    profile_before=__atomic_load_n(&profile_commits,__ATOMIC_ACQUIRE);
 +    /* Called on the guest input thread, with no live save mount. The verified
@@ -358,7 +364,12 @@ index 0000000..1520bd7
 +    const char *on=getenv("BB_QUICKSAVE"), *restore=getenv("BB_QUICKLOAD_PENDING");
 +    const int loading=restore && !strcmp(restore,"1");
 +    unsetenv("BB_QUICKLOAD_PENDING");
-+    if (!on || strcmp(on,"1")) return;
++    /* One save lock in both modes. A restore may only run in a new offline host. */
++    const char *online=getenv("BB_ONLINE");
++    const int active=on && !strcmp(on,"1");
++    if (loading && (!active || (online && !strcmp(online,"1")))) {
++        message("Quickload requires an offline restart; game launch stopped"); exit(1);
++    }
 +    snprintf(game_title,sizeof(game_title),"%s",title);
 +    char path[1024];
 +    snprintf(path,sizeof(path),"%s/.quicksave-session.lock",runtime_file_user_dir());
@@ -367,6 +378,7 @@ index 0000000..1520bd7
 +        message("Another game is using these saves; close it before launching again");
 +        exit(1);
 +    }
++    if (!active) return;
 +    if (helper("recover")) { message("Save recovery failed; game launch stopped"); exit(1); }
 +    if (loading && helper("load")) { message("Quickload failed; game launch stopped to protect saves"); exit(1); }
 +    enabled=1;
@@ -391,8 +403,15 @@ index 0000000..1520bd7
 +    }
 +    if (helper(load ? "check" : "save")) return -1;
 +    if (load) {
-+        message("Loading quicksave...");
-+        if (setenv("BB_QUICKLOAD_PENDING","1",1)) return -1;
++        message("Loading quicksave offline...");
++        if (setenv("BB_QUICKLOAD_PENDING","1",1) || setenv("BB_ONLINE","0",1) ||
++            setenv("BB_SKIP_NETWORK_CHOICE","1",1)) return -1;
++        // Also protect the direct-exec fallback; the supervised parent repeats this.
++        const char *keys[]={"BB_NET_MODULE","BB_NET_BACKEND","BB_THD_TOKEN","BB_THD_ONLINE_ID",
++            "BB_THD_SERVER","BB_THD_AUTH","BB_THD_HTTP_ORIGIN","BB_THD_HTTP_ROUTE","BB_THD_STUN",
++            "BB_THD_RULESET","BB_P2P_PORT","BB_COMMUNITY_SERVER","BB_SHADNET_SERVER","BB_SHADNET_WEBAPI",
++            "BB_SHADNET_NPID","BB_SHADNET_PASSWORD","BB_SHADNET_TOKEN","SHADPS4_HTTP_HOST_OVERRIDES_JSON"};
++        for (size_t i=0;i<sizeof(keys)/sizeof(keys[0]);++i) unsetenv(keys[i]);
 +        runtime_restart(); /* does not return; closes the session lock before exec */
 +        return -1;
 +    }
@@ -423,10 +442,15 @@ index 0000000..1520bd7
 +    }
 +}
 +void runtime_quicksave_loaded(void) {
++    if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE) || !character_ready()) return;
 +    if (__atomic_exchange_n(&auto_confirm,0,__ATOMIC_ACQ_REL))
-+        puts("Quicksave: character load started; automatic menu input released");
++        puts("Quicksave: character ready; automatic menu input released");
 +}
 +int runtime_quicksave_autoconfirm(void) {
++    if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE)) return -1;
++    /* Poll as well as checking mounts: the final mount can precede readiness.
++     * Check before generating Cross, including when readiness changes mid-tap. */
++    runtime_quicksave_loaded();
 +    if (!__atomic_load_n(&auto_confirm,__ATOMIC_ACQUIRE)) return -1;
 +    const uint64_t now=clock_ms();
 +    if (!auto_start) auto_start=now;
@@ -435,8 +459,8 @@ index 0000000..1520bd7
 +        message("Quicksave restored - select Continue to finish loading");
 +        return -1;
 +    }
-+    /* A short Cross tap each second advances Offline/Continue. A writable save mount
-+     * ends this before gameplay; held input never carries across the loading screen. */
++    /* A short Cross tap advances Offline/Continue. Profile mounts cannot stop it;
++     * the verified guest readiness gate releases input before the next tap. */
 +    return now-auto_start>2000 && ((now-auto_start)%1200)<160 ? 1 : 0;
 +}
 +#else

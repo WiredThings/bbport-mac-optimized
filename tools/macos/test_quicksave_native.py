@@ -90,13 +90,49 @@ int main(void) {
     auto_confirm=1;
     assert(runtime_quicksave_autoconfirm()==0);
     runtime_quicksave_request(1); assert(!pending);
-    runtime_quicksave_loaded(); assert(runtime_quicksave_autoconfirm()==-1);
+    runtime_quicksave_loaded(); assert(runtime_quicksave_autoconfirm()==0);
+    auto_start=clock_ms()-90001;
+    assert(runtime_quicksave_autoconfirm()==-1); /* bounded even for unknown builds */
     allow=0;
     runtime_quicksave_keys(0,0,0);
     runtime_quicksave_keys(1,0,0); assert(pending==1);
     requested_at=clock_ms()-16000;
     runtime_quicksave_keys(0,0,0); assert(!pending);
     puts("PASS: S/L edge triggering, held keys, modifiers/text capture, deferred save, autoload release");
+}
+''',
+    'autoload': r'''
+#include <assert.h>
+#include "runtime_quicksave.c"
+static unsigned char image[0x5578a40], manager[0x1579];
+static int mapped=1;
+int runtime_savedata_quick_action(int load) { (void)load; return 0; }
+const char *runtime_file_user_dir(void) { return "/unused"; }
+void runtime_restart(void) { assert(0); }
+int runtime_memory_is_mapped(uintptr_t p,uint64_t n) {
+    return mapped && p==(uintptr_t)manager && n<=sizeof(manager);
+}
+static ABI void save_request(void) { assert(0); }
+int main(void) {
+    enabled=1; guest_image=image; game_save=save_request; auto_confirm=1;
+    uintptr_t context=1, ptr=(uintptr_t)manager;
+    memcpy(image+0x553b0c8,&context,sizeof(context));
+    memcpy(image+0x5556678,&ptr,sizeof(ptr));
+    /* Profile writable mounts happen before Continue; neither those mounts nor
+     * profile commits may cancel the remaining menu confirmations. */
+    runtime_quicksave_loaded(); assert(auto_confirm);
+    runtime_quicksave_committed("/savedata0/userdata0010");
+    runtime_quicksave_loaded(); assert(auto_confirm);
+    auto_start=clock_ms()-2401;
+    assert(runtime_quicksave_autoconfirm()==1); /* Continue is still pressed */
+    manager[0x1578]=1; mapped=0;
+    assert(runtime_quicksave_autoconfirm()==1); /* unmapped pointer never read */
+    mapped=1;
+    assert(runtime_quicksave_autoconfirm()==-1); /* release in the middle of a tap */
+    assert(!auto_confirm); /* never rearm during later autosaves/deaths */
+    manager[0x1578]=0;
+    assert(runtime_quicksave_autoconfirm()==-1);
+    puts("PASS: profile mount cannot cancel Continue; verified character readiness releases input once");
 }
 ''',
     'freshness': r'''

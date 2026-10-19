@@ -208,3 +208,7 @@ Revises the shared-save policy: online entry archives old checkpoints and seeds 
 ## Build provenance display and release organization (0.2.40)
 
 The launcher About panel and embedded-engine version display now show the short project Git revision instead of repeating the numeric build number. Full provenance is embedded as `BBSourceCommit`; Git-less exports resolve it from the source manifest, without borrowing a parent repository identity. The numeric macOS build number is retained. Existing gameplay, saves, settings, networking and renderer binaries are unchanged. Older GitHub releases are retained as Pre-release; Latest points to the current package.
+
+## F3 automatic Continue (0.2.44)
+
+Local runtime fix: replace writable-mount-only autoload cancellation with the signature-verified Bloodborne 1.09 character-readiness gate already used by fresh checkpoints. Menu input is checked before each tap, retains its timeout, and releases once. Network credential removal and supervised restart ordering are unchanged.

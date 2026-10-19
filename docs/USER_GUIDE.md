@@ -208,6 +208,8 @@ The online service is The Hunter’s Dream. Click the displayed device code to c
 
 ## Controls and quicksave
 
+F3 automatically confirms Continue after the offline restart. Profile-save initialization does not stop this sequence; it releases input when the verified game state is ready. If startup exceeds the 90-second input timeout, select Continue manually.
+
 Controller input uses SDL gamepad mappings. The default keyboard fallback is:
 
 | Game input | Key |
