@@ -462,3 +462,4 @@
 "Online and offline share saves. Quickload switches to offline until you enable online again. Multiplayer compatibility is experimental." = "Online and offline share saves. Quickload switches to offline until you enable online again. Multiplayer compatibility is experimental.";
 "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play." = "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play.";
 "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files." = "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files.";
+"About Blood Echoes" = "About Blood Echoes";

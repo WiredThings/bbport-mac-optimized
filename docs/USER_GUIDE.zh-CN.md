@@ -1,9 +1,9 @@
-# Blood Echoes 0.2.39 使用指南
+# Blood Echoes 0.2.40 使用指南
 
 [English](USER_GUIDE.md) · [项目首页](../README.zh-CN.md) · [分支工作与第三方来源](THIRD_PARTY_CHANGES.md)
 
-本指南对应 WiredThings 分支 **0.2.39（0239）预览版**。
-[下载完整安装包](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.39)。
+本指南对应 WiredThings 分支 **0.2.40预览版**。
+[下载完整安装包](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.40)。
 旧上游指南中的后端、硬件测试和默认值不一定适用于此版本。
 
 ## 环境与安装
@@ -14,7 +14,7 @@
 - 自行准备的解密《血源诅咒》文件，且**已经合并 1.09 更新**。
 - 安装包自带 Python 和运行库，游玩无需 Xcode、Homebrew 或自行编译。
 
-解压 `Blood-Echoes-0.2.39-macOS.zip`，把 **Blood Echoes.app** 放进“应用程序”后打开。
+解压 `Blood-Echoes-0.2.40-macOS.zip`，把 **Blood Echoes.app** 放进“应用程序”后打开。
 应用使用临时签名，未经 Apple 公证；若被拦截，可到“系统设置 → 隐私与安全性”对该应用选择“仍要打开”。
 Rosetta 可通过 macOS 提示安装，也可在终端执行：
 
@@ -243,14 +243,16 @@ XML 保留作者信息，但“数据库中存在”不等于“本机已启用�
 | 开过性能分析后变慢 | 正常游玩关闭 GPU 计时和帧统计；详细诊断自身会影响帧率 |
 | 高内存、爆音或闪退 | 避免同时启动两份游戏；保留日志并反馈场景和运行时长。尚未宣称爆音／长时间运行问题已修复 |
 | 完整 App 提示选源码目录 | 启动器设置中选择内置引擎；若缺文件，重新解压完整 ZIP |
-| 帮助菜单打开了旧页面 | 更新至 0.2.39；帮助和关于入口已指向本分支，中文界面打开中文指南 |
+| 帮助菜单打开了旧页面 | 更新至 0.2.40；帮助和关于入口已指向本分支，中文界面打开中文指南 |
 
 请在[本分支 Issues](https://github.com/WiredThings/blood-echoes/issues)提供：
 App 版本、Mac／内存、macOS、后端、输出与场景渲染尺寸／预设、特效、位置和相关日志片段。
 可隐去私人路径，不要上传游戏文件或存档。公开包不包含本机 benchmark／分析脚本，运行时诊断按需开启。
 
 构建源码见 [SOURCE.md](release/SOURCE.md)、[构建指南](release/BUILD-OPTIMIZED.md)及[第三方来源](THIRD_PARTY_CHANGES.md)。
-0.2.39 标签和源码包保留为构建快照；当前分支文档可以包含后续勘误，不会因此改变已有安装包。
+0.2.40 标签和源码包保留为构建快照；当前分支文档可以包含后续勘误，不会因此改变已有安装包。
 
 更名说明：Blood Echoes 原名 Bloodborne Optimized。应用名和仓库名已更新，
 Bundle ID、偏好设置域及原有存档／数据路径保持不变，无需迁移。
+
+“关于”窗口的版本括号显示对应源码的 Git 短提交号；系统内部的数字构建号单独保留。GitHub 下载请选择 Latest，历史包保留为 Pre-release。

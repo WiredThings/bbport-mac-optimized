@@ -19,6 +19,10 @@ release=${BB_RELEASE:-}
 [[ $(uname -s) == Darwin ]] || { echo "STOP: run this on the Mac" >&2; exit 1; }
 command -v swift >/dev/null || { echo "STOP: swift missing: xcode-select --install" >&2; exit 1; }
 
+identity_args=("$repo")
+[[ -z $release ]] || identity_args+=(--required)
+source_commit=$(python3 tools/macos/build_identity.py "${identity_args[@]}")
+
 echo "=== swift build (release, $(uname -m))"
 swift --version 2>&1 | head -1
 # Plain `swift build` output goes to the terminal: send all of it back if this step fails.
@@ -42,10 +46,10 @@ cp "$bin" "$app/Contents/MacOS/bbport"
 resources=$(dirname "$bin")/BBLauncher_BBLauncher.bundle
 [[ -d $resources ]] || { echo "STOP: launcher localization resources missing" >&2; exit 1; }
 cp -R "$resources" "$app/Contents/Resources/"
-version=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 # macOS wants numbers here: the upstream part (0.4 of 0.4-v1); the app shows the full version.
 short_version=${release%%-*}
 short_version=${short_version:-0.1}
+version=${short_version//./}
 # KosmicKrisp needs macOS 26; a checkout build keeps the old minimum so its own checks explain.
 min_system=14.0
 [[ -n $release ]] && min_system=26.0
@@ -85,6 +89,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
+# The full Git revision is separate from Apple's numeric build-version field.
+[[ -z $source_commit ]] || plutil -insert BBSourceCommit -string "$source_commit" "$app/Contents/Info.plist"
 # plutil escapes the path for XML.
 [[ -n $release ]] || plutil -insert BBRepoPath -string "$repo" "$app/Contents/Info.plist"
 

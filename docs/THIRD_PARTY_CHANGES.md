@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings Blood Echoes 0.2.39 (0239)** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.40** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
@@ -197,3 +197,7 @@ The launcher retains The Hunter’s Dream as its only online service and keeps t
 ## Always-offline checkpoint restore (0.2.39)
 
 Revises the shared-save policy: online entry archives old checkpoints and seeds a fresh baseline; F2 saves in both modes. Every F3 quickload strips network credentials/routes and restores in a new offline process after the old process exits. Offline state persists across retries and launcher restarts until explicitly re-enabled. A per-save marker is written before restore mutations, so a launcher crash cannot silently reconnect a restored save. Save Manager restores follow the same offline rule. Replacing online checkpoint trees is staged and verified before atomic publication. The network module, renderer binaries and graphics/cache policies are unchanged. Remote server actions are not rolled back by local checkpoints.
+
+## Build provenance display and release organization (0.2.40)
+
+The launcher About panel and embedded-engine version display now show the short project Git revision instead of repeating the numeric build number. Full provenance is embedded as `BBSourceCommit`; Git-less exports resolve it from the source manifest, without borrowing a parent repository identity. The numeric macOS build number is retained. Existing gameplay, saves, settings, networking and renderer binaries are unchanged. Older GitHub releases are retained as Pre-release; Latest points to the current package.

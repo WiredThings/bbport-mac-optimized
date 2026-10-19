@@ -1,10 +1,10 @@
-# Experimental Mac online integration — 0.2.39
+# Experimental Mac online integration — 0.2.40
 
-Blood Echoes 0.2.39 (0239), 2026-10-19. Online is optional and defaults OFF.
+Blood Echoes 0.2.40 , 2026-10-19. Online is optional and defaults OFF.
 
 ## 使用方法
 
-1. 使用 0.2.39 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
+1. 使用 0.2.40 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
 2. 点击网站登录，在 The Hunter’s Dream 的设备授权页登录 Discord 并批准设备码。
    授权码会过期；过期后重新生成。启动器账号状态只代表设备授权完成。
 3. 启动游戏，选择在线模式。游戏内公告和实际搜索结果用于确认游戏服务连接。
@@ -29,7 +29,7 @@ The Hunter’s Dream is the only service exposed by the launcher. There is no cu
 
 ## 验证状态
 
-下列游戏内联网结果沿用 0.2.37 隔离测试；0.2.39 的新增验证覆盖存档切换／恢复、THD 路由及界面，不代表合作或入侵已经验证。
+下列游戏内联网结果沿用 0.2.37 隔离测试；存档切换／恢复沿用 0.2.39 自动测试。0.2.40 只新增版本身份和打包验证，合作或入侵仍未验证。
 
 基础 M4 Mac mini 16 GB，CUSA03173 1.09，社区简体中文，隔离 QA 存档：
 
@@ -87,5 +87,5 @@ are verified; the user verified chalice search and joining. Message creation/lis
 exercised locally in the game, without independent delivery confirmation. Glyph lookup, paired
 co-op/invasion and offline performance equivalence remain unverified. Online/offline share formal game saves. Going online archives old checkpoints and seeds a new baseline. F2 works in either mode; every F3 restore starts offline, strips credentials and stays offline until online is explicitly enabled again. A persistent per-save offline marker protects against launcher crashes. Manual offline transitions seed a checkpoint, while F3 retries preserve their target. Legacy formal copies are backed up before one-time migration; QA is never migrated. Tokens stay in the existing THD Keychain item.
 
-The 0.2.39 release rebuilds the launcher and Metal host from the committed public source export. Its online module, Metal renderer and Vulkan compatibility binaries are retained from 0.2.38 and verified unchanged. This is not a newly completed full dependency rebuild.
+The 0.2.40 release rebuilds only the launcher from the committed public source export. Its game host, online module, Metal renderer and Vulkan compatibility binaries are retained from 0.2.39 and verified unchanged. This is not a newly completed full dependency rebuild.
 The updated full-build script includes network dependencies and corresponding-source export.

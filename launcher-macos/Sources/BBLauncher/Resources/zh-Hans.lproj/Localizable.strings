@@ -462,3 +462,4 @@
 "Online and offline share saves. Quickload switches to offline until you enable online again. Multiplayer compatibility is experimental." = "联网和离线共用存档。快速恢复后保持离线，直至主动重新开启联网。多人兼容性仍在测试。";
 "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play." = "检查点包含游戏存档和恢复信息，恢复后一律离线游玩。";
 "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files." = "恢复会切换为离线模式，并先备份当前进度。请整份恢复存档。";
+"About Blood Echoes" = "关于 Blood Echoes";

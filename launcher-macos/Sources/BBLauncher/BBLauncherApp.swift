@@ -18,6 +18,11 @@ struct BBLauncherApp: App {
         }
         .defaultSize(width: 680, height: 860)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button(L10n.key("About Blood Echoes")) {
+                    NSApplication.shared.orderFrontStandardAboutPanel(options: AppBuild.current.aboutOptions)
+                }
+            }
             CommandGroup(replacing: .help) {
                 HelpCommands()
                     .environmentObject(model)
@@ -82,7 +87,7 @@ struct LauncherSettingsView: View {
             Section {
                 if model.engineURL != nil {
                     LabeledContent(L10n.key("Built into this app")) {
-                        Text(model.appVersion.isEmpty ? L10n.key("Yes") : L10n.format("Version %@", String(describing: model.appVersion)))
+                        Text(model.appVersion.isEmpty ? L10n.key("Yes") : L10n.format("Version %@", AppBuild.current.displayVersion))
                     }
                 } else {
                     LabeledContent(L10n.key("Embedded at build")) {
