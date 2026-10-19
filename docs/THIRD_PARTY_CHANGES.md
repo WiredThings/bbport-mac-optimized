@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings Blood Echoes 0.2.36 (0236)** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.37 (0237)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
