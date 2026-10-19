@@ -44,6 +44,10 @@ final class LauncherModel: ObservableObject {
 
     static let maxLogLines = 5000
     let onlineController = OnlineController()
+    @Published var saveBusy = false
+    @Published var saveStatus = ""
+    @Published var saveBackups: [SaveBackup] = []
+    @Published var quickCheckpoints: [QuickCheckpoint] = []
 
     @Published var prefs: LauncherPrefs {
         didSet { prefsChanged(from: oldValue) }
@@ -109,6 +113,9 @@ final class LauncherModel: ObservableObject {
         prefs = initialPrefs
         refreshChecks()
         reloadRepositoryFiles()
+        let store = saveStore, online = prefs.online
+        let legacy = dataURL.appendingPathComponent("online-user")
+        runSaveOperation { try store.prepareMode(online: online, legacy: legacy) }
     }
 
     // MARK: - Paths
@@ -174,7 +181,7 @@ final class LauncherModel: ObservableObject {
     var isRunning: Bool { process != nil }
 
     var canPlay: Bool {
-        !isRunning && !uiModBusy && !chineseTranslationBusy && !uiModStatus.blocksPlay
+        !isRunning && !saveBusy && !uiModBusy && !chineseTranslationBusy && !uiModStatus.blocksPlay
             && (!prefs.usesCommunityChinese || chineseTranslationValid)
             && repoCheck.allowsPlay && gameCheck.allowsPlay
     }
@@ -620,25 +627,37 @@ final class LauncherModel: ObservableObject {
     }
 
     private func startGame() {
+        guard !isRunning, !saveBusy else { return }
+        if prefs.online {
+            do { _ = try prefs.onlineServer.validated() }
+            catch { state = .failed(error.localizedDescription); return }
+        }
+        let store = saveStore, online = prefs.online
+        let legacy = dataURL.appendingPathComponent("online-user")
+        runSaveOperation({ try store.prepareMode(online: online, legacy: legacy) }) { [weak self] in self?.startPreparedGame() }
+    }
+
+    private func startPreparedGame() {
         guard process == nil, let repo = repoURL, repoCheck.allowsPlay, gameCheck.allowsPlay else { return }
         var env = environment()
         if prefs.online {
             guard profile.onlineActive else {
                 state = .failed(L10n.key("Online play currently requires the Metal backend.")); return
             }
+            onlineController.configure(prefs.onlineServer)
             onlineController.load()
             guard let account = onlineController.account else {
                 state = .failed(L10n.key("Sign in on the Online page before playing online.")); return
             }
-            let isolated = dataURL.appendingPathComponent("online-user", isDirectory: true)
-            do { try OnlineSaves.prepare(source: userFolderURL, destination: isolated) }
-            catch { state = .failed(error.localizedDescription); return }
-            env["BB_USER_DIR"] = isolated.path
+            do {
+                let server = try prefs.onlineServer.validated()
+                env.merge(server.environment) { _, value in value }
+            } catch { state = .failed(error.localizedDescription); return }
             env["BB_NET_BACKEND"] = "thd"
             env["BB_THD_ONLINE_ID"] = account.name
             env["BB_THD_TOKEN"] = account.token
             env["BB_THD_VERIFY_TLS"] = "1"
-            env["BB_COMMUNITY_SERVER"] = "https://thehuntersdream.com"
+            env["BB_COMMUNITY_SERVER"] = prefs.onlineServer.effective.game
             env["BB_CLIENT_VERSION"] = "BloodEchoes/\(appVersion)"
         }
         saveModProfile()

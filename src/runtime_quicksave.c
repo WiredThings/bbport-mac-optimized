@@ -119,7 +119,9 @@ void runtime_quicksave_init(const char *title) {
     const char *on=getenv("BB_QUICKSAVE"), *restore=getenv("BB_QUICKLOAD_PENDING");
     const int loading=restore && !strcmp(restore,"1");
     unsetenv("BB_QUICKLOAD_PENDING");
-    if (!on || strcmp(on,"1")) return;
+    /* Shared saves must be locked even online, where checkpoints are disabled. */
+    const char *online=getenv("BB_ONLINE");
+    const int active=on && !strcmp(on,"1") && !(online && !strcmp(online,"1"));
     snprintf(game_title,sizeof(game_title),"%s",title);
     char path[1024];
     snprintf(path,sizeof(path),"%s/.quicksave-session.lock",runtime_file_user_dir());
@@ -128,6 +130,7 @@ void runtime_quicksave_init(const char *title) {
         message("Another game is using these saves; close it before launching again");
         exit(1);
     }
+    if (!active) return;
     if (helper("recover")) { message("Save recovery failed; game launch stopped"); exit(1); }
     if (loading && helper("load")) { message("Quickload failed; game launch stopped to protect saves"); exit(1); }
     enabled=1;

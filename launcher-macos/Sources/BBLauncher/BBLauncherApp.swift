@@ -31,6 +31,10 @@ struct BBLauncherApp: App {
         }
         .defaultSize(width: 900, height: 560)
 
+        Window(L10n.key("Save Manager"), id: "saves") {
+            SaveManagerView().environmentObject(model).environment(\.locale, L10n.locale)
+        }.defaultSize(width: 740, height: 560)
+
         Settings {
             LauncherSettingsView()
                 .environment(\.locale, L10n.locale)

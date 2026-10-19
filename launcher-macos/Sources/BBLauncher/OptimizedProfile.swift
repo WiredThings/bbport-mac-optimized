@@ -63,7 +63,7 @@ struct OptimizedProfile {
             "BB_FRAMES_AHEAD": "2", "BB_GPU_QOS": "1",
             "BB_MAC_UNIFIED_MEMORY": "0", "BB_PIPE_PARK_WAITS": "0",
             "BB_ONLINE": onlineActive ? "1" : "0",
-            "BB_QUICKSAVE": prefs.quicksave && !onlineActive ? "1" : "0",
+            "BB_QUICKSAVE": prefs.quicksave && !prefs.online ? "1" : "0",
             "BB_QUICKSAVE_SCANCODE": String(prefs.quicksaveKey.code),
             "BB_QUICKLOAD_SCANCODE": String(prefs.quickloadKey.code),
             "BB_MENU_SCANCODE": String(prefs.menuKey.code),

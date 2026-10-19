@@ -80,6 +80,7 @@ if [[ ${BB_ONLINE:-0} == 1 ]]; then
 else
     export BB_ONLINE=0
     unset BB_NET_MODULE BB_NET_BACKEND BB_THD_TOKEN BB_THD_ONLINE_ID
+    unset BB_THD_SERVER BB_THD_AUTH BB_THD_HTTP_ORIGIN BB_THD_STUN BB_THD_RULESET BB_P2P_PORT BB_COMMUNITY_SERVER
     unset BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN SHADPS4_HTTP_HOST_OVERRIDES_JSON
 fi
 if [[ $renderer == vulkan ]]; then
@@ -126,9 +127,10 @@ fi
 mkdir -p "$BB_DATA_DIR/out"
 if [[ ${BB_ONLINE:-0} == 1 ]]; then
     export SHADPS4_HTTP_HOST_OVERRIDES_JSON
-    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py --user "$BB_USER_DIR")
-    export BB_THD_SERVER=https://thehuntersdream.com:18671 BB_THD_AUTH=https://thehuntersdream.com
-    export BB_THD_RULESET=vanilla BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-BloodEchoes}
+    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py --user "$BB_USER_DIR" --output "$BB_DATA_DIR/out/online-routes")
+    export BB_THD_SERVER=${BB_THD_SERVER:-https://thehuntersdream.com:18671} BB_THD_AUTH=${BB_THD_AUTH:-https://thehuntersdream.com}
+    export BB_THD_HTTP_ORIGIN=${BB_THD_HTTP_ORIGIN:-https://thehuntersdream.com}
+    export BB_THD_RULESET=${BB_THD_RULESET:-vanilla} BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-BloodEchoes}
     unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
 fi
 export BB_FRAME_LOG=$BB_DATA_DIR/out/frames.csv

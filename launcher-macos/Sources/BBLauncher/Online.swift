@@ -16,8 +16,8 @@ struct OnlineError: LocalizedError {
 
 struct OnlineAccountStore {
     let service: String
-    init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.bbport.optimized") {
-        service = bundleIdentifier + ".huntersdream"
+    init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.bbport.optimized", server: OnlineServer = .thd) {
+        service = bundleIdentifier + server.accountSuffix
     }
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -55,7 +55,7 @@ struct OnlineAccountStore {
 
 enum HuntersDream {
     static let base = URL(string: "https://thehuntersdream.com")!
-    static func call(_ path: String, body: [String: String]) async throws -> [String: Any] {
+    static func call(_ path: String, body: [String: String], base: URL = base) async throws -> [String: Any] {
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.timeoutInterval = 15
@@ -72,10 +72,10 @@ enum HuntersDream {
         }
         return reply
     }
-    static func trustedVerificationURL(_ text: String?) -> URL? {
-        guard let url = URL(string: text ?? "https://thehuntersdream.com/link"),
-              url.scheme == "https", url.host?.lowercased() == "thehuntersdream.com",
-              url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return nil }
+    static func trustedVerificationURL(_ text: String?, base: URL = base) -> URL? {
+        guard let url = URL(string: text ?? base.appendingPathComponent("link").absoluteString),
+              url.scheme == "https", url.host?.lowercased() == base.host?.lowercased(),
+              url.user == nil, url.password == nil, (url.port ?? 443) == (base.port ?? 443) else { return nil }
         return url
     }
 }
@@ -89,7 +89,21 @@ final class OnlineController: ObservableObject {
     private var task: Task<Void, Never>?
     private var operation = UUID()
     private var loaded = false
-    private let store = OnlineAccountStore()
+    private var server = OnlineServer.thd
+    private var store: OnlineAccountStore { OnlineAccountStore(server: server) }
+
+    func configure(_ selected: OnlineServer) {
+        guard selected != server else { return }
+        cancel(); server = selected; loaded = false; account = nil; status = ""
+        load()
+    }
+
+    func copyCode() {
+        guard !code.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        status = L10n.key("Code copied")
+    }
 
     func load() {
         guard !loaded else { return }
@@ -110,10 +124,12 @@ final class OnlineController: ObservableObject {
         task = Task {
             defer { if operation == current { busy = false; code = "" } }
             do {
-                let start = try await HuntersDream.call("auth/device/start", body: ["DeviceName": "Blood Echoes on macOS"])
+                let config = try server.validated()
+                let base = try OnlineServer.origin(config.auth)
+                let start = try await HuntersDream.call("auth/device/start", body: ["DeviceName": "Blood Echoes on macOS"], base: base)
                 guard let device = start["DeviceCode"] as? String, !device.isEmpty,
                       let userCode = start["UserCode"] as? String, !userCode.isEmpty,
-                      let page = HuntersDream.trustedVerificationURL(start["VerificationUri"] as? String) else {
+                      let page = HuntersDream.trustedVerificationURL(start["VerificationUri"] as? String, base: base) else {
                     throw OnlineError(message: L10n.key("Unexpected reply from the account service."))
                 }
                 try Task.checkCancellation()
@@ -123,7 +139,7 @@ final class OnlineController: ObservableObject {
                 let deadline = Date().addingTimeInterval(Double(min(start["ExpiresIn"] as? Int ?? 600, 900)))
                 while Date() < deadline {
                     try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
-                    let poll = try await HuntersDream.call("auth/device/poll", body: ["DeviceCode": device])
+                    let poll = try await HuntersDream.call("auth/device/poll", body: ["DeviceCode": device], base: base)
                     try Task.checkCancellation()
                     switch poll["Status"] as? String {
                     case "approved":
@@ -153,7 +169,9 @@ final class OnlineController: ObservableObject {
         task = Task {
             defer { if operation == current { busy = false } }
             do {
-                var request = URLRequest(url: URL(string: "https://thehuntersdream.com:20443/bb-eu/ss.info")!)
+                let config = try server.validated()
+                let game = server.custom ? config.game : "https://thehuntersdream.com:20443"
+                var request = URLRequest(url: try OnlineServer.origin(game).appendingPathComponent("bb-eu/ss.info"))
                 request.timeoutInterval = 10
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 let (data, reply) = try await URLSession.shared.data(for: request)
@@ -165,46 +183,5 @@ final class OnlineController: ObservableObject {
             } catch is CancellationError { }
             catch { if operation == current { status = error.localizedDescription } }
         }
-    }
-}
-
-enum OnlineSaves {
-    /// Publish a complete first copy atomically. Never overwrite an existing online save.
-    static func prepare(source: URL, destination: URL, manager: FileManager = .default) throws {
-        let marker = ".blood-echoes-online-save"
-        let markerText = "Blood Echoes isolated online saves v1\n"
-        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isDirectoryKey]
-        if manager.fileExists(atPath: destination.path) {
-            let values = try destination.resourceValues(forKeys: keys)
-            let markerURL = destination.appendingPathComponent(marker)
-            guard values.isSymbolicLink != true, values.isDirectory == true,
-                  try markerURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
-                  try String(contentsOf: markerURL) == markerText else {
-                throw OnlineError(message: L10n.key("Online play requires its own isolated save copy."))
-            }
-            return
-        }
-        let parent = destination.deletingLastPathComponent()
-        try manager.createDirectory(at: parent, withIntermediateDirectories: true)
-        let stage = parent.appendingPathComponent(".online-user-\(UUID().uuidString)")
-        try manager.createDirectory(at: stage, withIntermediateDirectories: false)
-        defer { try? manager.removeItem(at: stage) }
-        // Only saves: no shader caches, quickload state, injected test mods or account files.
-        let savedata = source.appendingPathComponent("savedata")
-        if manager.fileExists(atPath: savedata.path) {
-            if let iterator = manager.enumerator(at: savedata, includingPropertiesForKeys: Array(keys)) {
-                for case let path as URL in iterator {
-                    if try path.resourceValues(forKeys: keys).isSymbolicLink == true {
-                        throw OnlineError(message: L10n.key("The save copy contains an unsupported link."))
-                    }
-                }
-            }
-            guard try savedata.resourceValues(forKeys: keys).isSymbolicLink != true else {
-                throw OnlineError(message: L10n.key("The save copy contains an unsupported link."))
-            }
-            try manager.copyItem(at: savedata, to: stage.appendingPathComponent("savedata"))
-        }
-        try markerText.write(to: stage.appendingPathComponent(marker), atomically: true, encoding: .utf8)
-        try manager.moveItem(at: stage, to: destination)
     }
 }

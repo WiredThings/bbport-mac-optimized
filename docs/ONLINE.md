@@ -1,23 +1,44 @@
-# Experimental Mac online integration — 0.2.37
+# Experimental Mac online integration — 0.2.38
 
-Blood Echoes 0.2.37 (0237), 2026-10-19. Online is optional and defaults OFF.
+Blood Echoes 0.2.38 (0238), 2026-10-19. Online is optional and defaults OFF.
 
 ## 使用方法
 
-1. 使用 0.2.37 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
+1. 使用 0.2.38 或更新版本，选择 Metal 后端，在“联网”区开启实验性联网。
 2. 点击网站登录，在 The Hunter’s Dream 的设备授权页登录 Discord 并批准设备码。
    授权码会过期；过期后重新生成。启动器账号状态只代表设备授权完成。
 3. 启动游戏，选择在线模式。游戏内公告和实际搜索结果用于确认游戏服务连接。
 4. 在任一空的普通仪式祭坛选择“圣杯地牢搜索”，搜索并加入角色满足条件的地牢。
    普通祭坛的编号不限制迷宫种类。临时祭坛用于快捷匹配，是另一套入口。
 
-联网首次启动只复制选定存档根目录的 `savedata` 到启动器数据目录的 `online-user`。
-以后继续使用此副本，不覆盖离线存档，也不自动合并在线进度。不要手工给正式目录添加隔离标记。
-联网模式禁用快速存读档，避免回滚在线状态；原有离线快速存档设置仍保留。
-退出游戏后关闭联网即可恢复原离线目录。账号令牌保存在当前应用 Bundle ID 对应的 macOS 钥匙串项，
-不会写入偏好、路由 JSON、命令行摘要或文档。QA 使用独立 Bundle ID 和钥匙串项。
+正式版联网和离线共用选定的正常存档目录，不再创建隔离副本。旧正式版 `online-user` 若存在，迁移前先备份两边：迁移时联网已开启则沿用联网进度，否则沿用正常进度；旧目录仍保留，备份可在存档管理器中恢复。QA 存档永远不参与正式版选择、迁移或默认恢复。
+
+开启联网时先校验并归档正常存档与全部快速存档，然后清空活动快速存档；联网时禁用 F2/F3。恢复离线时从当前已提交的正常存档建立全新检查点，避免 F3 回滚到联网前。正常自动存档始终启用，离线快速存档开关偏好保留。
+
+“存档管理”分正常存档与快速存档：备份、导入 `savedata` 目录、导出、整份恢复、查看目录。恢复前备份当前进度，校验失败不替换；游戏运行时禁止操作。快速存档内部仍为普通游戏存档，外加校验清单和活动指针。备份不会自动清理。开发隔离使用独立 Bundle ID、目录和钥匙串；正式版不扫描 QA 路径。
+
+账号令牌仅保存在当前应用 Bundle ID 和服务器配置对应的钥匙串项。THD 原有钥匙串标识保留；切换自定义服务器不复用 THD 令牌。设备配对码可点击复制。
+
+## Custom servers
+
+Only **THD/bbhost-compatible** device-authenticated servers are supported. This is not an arbitrary PSN/shadNet URL selector. Ask the administrator for service origins; a website URL alone is insufficient. Current implementation requires HTTPS with a system-trusted certificate and device-code authorization; plain HTTP / anonymous LAN servers are not supported.
+
+| Field | THD preset | Purpose |
+| --- | --- | --- |
+| Account service | `https://thehuntersdream.com` | `/auth/device/start`, `/auth/device/poll` and the authorization page |
+| Game service | `https://thehuntersdream.com` | Region-specific game HTTP endpoints |
+| Session service | `https://thehuntersdream.com:18671` | Matchmaking, session/peer service and playlog routes |
+| STUN | empty: session host on UDP 3478; `off` disables it | NAT discovery and compatible relay negotiation |
+| Ruleset | `vanilla` | `X-BBHost-Ruleset` matchmaking group |
+| Local P2P UDP port | `3658` | Local game peer socket |
+
+HTTPS values are origins only: no URL path, credentials, query or fragment. Ports may differ on a custom deployment. The account website must return a verification URL on the configured account origin. Tokens are sent only to explicitly configured service origins, never unrelated redirect targets. P2P compatibility still depends on the server and peer implementation; no second custom deployment or paired co-op/invasion has been tested.
+
+Field semantics were checked against [bbhost's example configuration](https://github.com/droogie/bbhost/blob/master/bbhost.example.toml) and this pinned client's `gpu/bbnet/thd/thd_internal.h`. The THD preset continues to use its existing routes. Credential-free routing files now live under launcher `out/online-routes`, outside game saves.
 
 ## 验证状态
+
+下列游戏内联网结果沿用 0.2.37 隔离测试；0.2.38 的新增验证覆盖存档切换／恢复、路由配置及界面，不代表合作或入侵已经验证。
 
 基础 M4 Mac mini 16 GB，CUSA03173 1.09，社区简体中文，隔离 QA 存档：
 
@@ -43,7 +64,7 @@ shadPS4/bbhost 客户端之间的实时互通。服务状态和配对兼容性�
 - 联网模块独立编译为 x86-64 `libbbnet.dylib`，游戏宿主仍经 Rosetta 运行。
   Metal 渲染库不重新链接，打包校验渲染库哈希不变；现有两级页表、速度图、剔除和资源回收补丁保留。
 - 游戏 HTTP/SSL 和必要的 NP、匹配接口交给模块；奖杯、商店和个人资料对话框保留本地处理。
-- 仅启用 The Hunter’s Dream 后端。TLS 使用系统信任根并校验证书；令牌只附加到该服务明确允许的 HTTPS 端口。
+- 使用 The Hunter’s Dream / 兼容自定义服务器后端。TLS 使用系统信任根并校验证书；令牌只附加到当前配置明确允许的 HTTPS 服务源。
 - 联网时显示在线/离线选择，禁止旧“禁用 HTTP”及“跳过联网选择”补丁的地址覆盖，
   包括更名的外部 XML 副本。冲突时在游戏执行前报错，不静默修改已保存的补丁选择。
 - 不包含游戏文件、翻译包、存档、账号凭据、World Warper 或开发测试路线。
@@ -73,10 +94,9 @@ BB_BUILD_JOBS=2 bash tools/macos/build_online.sh
 Opt-in Metal-only The Hunter’s Dream integration. Device authentication and in-game announcement
 are verified; the user verified chalice search and joining. Message creation/list/deletion was
 exercised locally in the game, without independent delivery confirmation. Glyph lookup, paired
-co-op/invasion and offline performance equivalence remain unverified. Online saves are copied once
-into `online-user`; offline saves and quickload preferences remain separate. Tokens stay in Keychain.
+co-op/invasion and offline performance equivalence remain unverified. Online/offline share formal game saves. Going online archives and clears checkpoints; returning offline seeds a fresh checkpoint. Legacy formal copies are backed up before one-time migration; QA is never migrated. Tokens stay in server-scoped Keychain items.
 
-The 0.2.37 release rebuilds the launcher, Metal host and online module from the committed
+The 0.2.38 release rebuilds the launcher, Metal host and online module from the committed
 public source export. Its Metal renderer and Vulkan compatibility binaries are retained
-from 0.2.36 and verified unchanged. This is not a newly completed full dependency rebuild.
+from 0.2.37 and verified unchanged. This is not a newly completed full dependency rebuild.
 The updated full-build script includes network dependencies and corresponding-source export.

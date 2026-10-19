@@ -14,6 +14,28 @@ native = args.native_checkout.resolve()
 sdk = os.environ.get('SDKROOT') or subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
 
 CASES = {
+    'session_lock': r'''
+#include <assert.h>
+#include "runtime_quicksave.c"
+static char directory[]="/private/tmp/bb-save-lock-XXXXXX";
+int runtime_savedata_quick_action(int load) { (void)load; return 0; }
+const char *runtime_file_user_dir(void) { return directory; }
+void runtime_restart(void) { assert(0); }
+int runtime_memory_is_mapped(uintptr_t p,uint64_t n) { (void)p;(void)n;return 0; }
+int main(void) {
+    assert(mkdtemp(directory));
+    setenv("BB_ONLINE","1",1); setenv("BB_QUICKSAVE","1",1);
+    runtime_quicksave_init("CUSA00207");
+    assert(!runtime_quicksave_enabled() && runtime_quicksave_execute(1)==-1);
+    char path[1024]; snprintf(path,sizeof(path),"%s/.quicksave-session.lock",directory);
+    int other=open(path,O_RDWR); assert(other>=0);
+    assert(flock(other,LOCK_EX|LOCK_NB)!=0);
+    close(other); close(session_fd);
+    unlink(path); rmdir(directory);
+    puts("PASS: online runtime locks shared saves and refuses quickload even if requested");
+}
+''',
+
     'control': r'''
 #include <assert.h>
 #include "runtime_quicksave.c"
@@ -213,8 +235,8 @@ with tempfile.TemporaryDirectory(prefix='bb-quicksave-test-') as temp:
                    '-Wall', '-Wextra', '-Werror', '-pthread', '-I' + str(native),
                    '-I' + str(native / 'src'), str(c), '-o', str(exe)]
         if name == 'bindings':
-            deps = native / 'deps-x86_64'
+            deps = Path(os.environ.get('BB_METAL_DEPS', native / 'deps-x86_64'))
             command += ['-I' + str(deps / 'include'), '-L' + str(deps / 'lib'),
-                        '-Wl,-rpath,' + str(deps / 'lib'), '-lSDL3']
+                        '-Wl,-rpath,' + str(deps / 'lib'), '-lSDL3.0']
         subprocess.run(command, check=True)
         subprocess.run([str(exe)], check=True)

@@ -2,7 +2,7 @@
 
 [English overview](../README.md) · [中文概览](../README.zh-CN.md) · [使用指南](USER_GUIDE.zh-CN.md)
 
-Scope: the public **WiredThings Blood Echoes 0.2.37 (0237)** release, compared with the optimized upstream
+Scope: the public **WiredThings Blood Echoes 0.2.38 (0238)** release, compared with the optimized upstream
 snapshot [`DiAvisoo/bbport-mac-optimized` at `8289f83`](https://github.com/DiAvisoo/bbport-mac-optimized/tree/8289f83).
 This is a provenance/evidence guide, not a claim that this fork originated the game runtime,
 Metal engine, community patches or every optimization it integrates.
@@ -187,3 +187,9 @@ report model omissions from PS4-sized graphics heaps. Neither establishes the
 cause on Metal. The matching local LOD comparison is the basis of this repair.
 The large-heap trial reached critical memory pressure and was stopped before
 visual validation; the larger heap is not enabled.
+
+## Shared save management and configurable online services (0.2.38)
+
+Adds a native save manager with streamed SHA-256 verification, whole-directory atomic replacement and pre-restore backups. Formal offline/online saves now share one root; legacy formal online copies are backed up before migration. QA roots are never scanned or imported. Checkpoints retain the existing upstream file format; online mode archives/clears them and offline return seeds a new one. The runtime now holds the save-session lock even with quicksave disabled.
+
+Custom-server fields use existing bbnet/bbhost account, game HTTP, session, STUN, ruleset and UDP configuration; this is not a new server protocol. The Mac credential destination policy accepts only explicitly selected HTTPS service origins, with server-specific Keychain accounts and click-to-copy device codes. Renderer code, Metal patches and game localization payloads are unchanged.

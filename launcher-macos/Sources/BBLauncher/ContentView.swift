@@ -52,7 +52,7 @@ struct ContentView: View {
             }
             .formStyle(.grouped)
             .toggleStyle(.checkbox)
-            .disabled(model.isRunning || model.uiModBusy)
+            .disabled(model.isRunning || model.uiModBusy || model.saveBusy)
 
             Divider()
             PlayBar(showLog: { openWindow(id: "log") })
@@ -360,15 +360,18 @@ struct BasicDisplaySection: View {
 
 struct QuicksaveSection: View {
     @EnvironmentObject var model: LauncherModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Section {
-            Toggle(L10n.key("Enable quicksave / quickload"), isOn: $model.prefs.quicksave)
-                .disabled(model.profile.onlineActive)
+            Toggle(L10n.key("Enable quicksave / quickload"), isOn: Binding(get: { model.prefs.quicksave && !model.prefs.online }, set: { model.prefs.quicksave = $0 }))
+                .disabled(model.prefs.online)
+            Button(L10n.key("Save Manager…")) { openWindow(id: "saves") }
+            if !model.saveStatus.isEmpty { Text(model.saveStatus).font(.caption).textSelection(.enabled) }
         } header: {
             Text(L10n.key("Save & load"))
         } footer: {
-            Text(L10n.key("Loading restores your latest checkpoint and restarts the game. Normal autosaving stays on."))
+            Text(L10n.key("Quicksave is offline only. Going online archives and clears checkpoints; returning offline creates a new one. Normal autosaving stays on."))
                 .foregroundStyle(.secondary)
         }
     }
@@ -387,10 +390,25 @@ private struct OnlineControls: View {
     @ObservedObject var network: OnlineController
     var body: some View {
         Section {
-            Toggle(L10n.key("Play online (experimental)"), isOn: $model.prefs.online)
+            Toggle(L10n.key("Play online (experimental)"), isOn: Binding(get: { model.prefs.online }, set: { model.setOnline($0) }))
                 .onChange(of: model.prefs.online) { on in if on { network.load() } else { network.cancel() } }
             if model.prefs.online {
-                LabeledContent(L10n.key("Server"), value: "The Hunter’s Dream")
+                Picker(L10n.key("Server"), selection: $model.prefs.onlineServer.custom) {
+                    Text("The Hunter’s Dream").tag(false)
+                    Text(L10n.key("Custom server")).tag(true)
+                }.disabled(network.busy)
+                if model.prefs.onlineServer.custom {
+                    TextField(L10n.key("Account service (HTTPS)"), text: $model.prefs.onlineServer.auth)
+                    TextField(L10n.key("Game service (HTTPS)"), text: $model.prefs.onlineServer.game)
+                    TextField(L10n.key("Session service (HTTPS)"), text: $model.prefs.onlineServer.session)
+                    DisclosureGroup(L10n.key("Connection options")) {
+                        TextField(L10n.key("STUN host:port (optional)"), text: $model.prefs.onlineServer.stun)
+                        TextField(L10n.key("Ruleset"), text: $model.prefs.onlineServer.ruleset)
+                        TextField(L10n.key("Local P2P UDP port"), value: $model.prefs.onlineServer.p2pPort, format: .number.grouping(.never))
+                    }
+                    Text(L10n.key("Requires a THD/bbhost-compatible server. Obtain service addresses from its administrator. Accounts are separate for each server."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if model.prefs.renderer != "metal" {
                     Text(L10n.key("Online play currently requires the Metal backend."))
                         .font(.caption).foregroundStyle(.orange)
@@ -412,7 +430,9 @@ private struct OnlineControls: View {
                 }
                 if !network.code.isEmpty {
                     LabeledContent(L10n.key("Enter this code on the website")) {
-                        Text(network.code).monospaced().textSelection(.enabled)
+                        Button { network.copyCode() } label: {
+                            Label(network.code, systemImage: "doc.on.doc").monospaced()
+                        }.help(L10n.key("Click to copy code")).accessibilityLabel(L10n.key("Copy pairing code"))
                     }
                 }
                 Button(L10n.key("Check server connection")) { network.checkConnection() }.disabled(network.busy)
@@ -422,10 +442,11 @@ private struct OnlineControls: View {
             Text(L10n.key("Online"))
         } footer: {
             if model.prefs.online {
-                Text(L10n.key("Online uses a separate save copy. Offline saves stay unchanged. Quickload is disabled online. Multiplayer compatibility is experimental."))
+                Text(L10n.key("Online and offline share saves. F2/F3 are disabled online. Multiplayer compatibility is experimental."))
             }
         }
-        .onAppear { if model.prefs.online { network.load() } }
+        .onAppear { network.configure(model.prefs.onlineServer); if model.prefs.online { network.load() } }
+        .onChange(of: model.prefs.onlineServer) { server in network.configure(server) }
     }
 }
 
@@ -614,7 +635,7 @@ struct EffectsSection: View {
                 Text(L10n.key("Skip the online/offline screen"))
                 Text(L10n.key("The game starts straight at its main menu, offline"))
             }
-            .disabled(model.profile.onlineActive)
+            .disabled(model.prefs.online)
             ForEach($model.game.effects) { $effect in
                 Toggle(isOn: $effect.isOn) {
                     Text(L10n.key(effect.title))

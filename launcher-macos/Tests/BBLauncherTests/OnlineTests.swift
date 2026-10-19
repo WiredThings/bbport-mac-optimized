@@ -40,37 +40,7 @@ final class OnlineTests: XCTestCase {
         XCTAssertFalse(OptimizedProfile(prefs: prefs, game: GameSettings()).onlineActive)
     }
 
-    func testSaveIsolationCopiesOnceAndNeverOverwritesEitherSide() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let formal = root.appendingPathComponent("formal")
-        let target = root.appendingPathComponent("online")
-        try FileManager.default.createDirectory(at: formal.appendingPathComponent("savedata/1"), withIntermediateDirectories: true)
-        let original = formal.appendingPathComponent("savedata/1/save")
-        try Data("formal".utf8).write(to: original)
-        try OnlineSaves.prepare(source: formal, destination: target)
-        let copy = target.appendingPathComponent("savedata/1/save")
-        XCTAssertEqual(try Data(contentsOf: copy), Data("formal".utf8))
-        try Data("online progress".utf8).write(to: copy)
-        try OnlineSaves.prepare(source: formal, destination: target)
-        XCTAssertEqual(try Data(contentsOf: copy), Data("online progress".utf8))
-        XCTAssertEqual(try Data(contentsOf: original), Data("formal".utf8))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("quicksaves").path))
-    }
 
-    func testSaveIsolationRejectsLinksAndUnmarkedDestination() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let source = root.appendingPathComponent("source")
-        let destination = root.appendingPathComponent("online")
-        try FileManager.default.createDirectory(at: source.appendingPathComponent("savedata"), withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(atPath: source.appendingPathComponent("savedata/link").path,
-                                                   withDestinationPath: "/tmp")
-        XCTAssertThrowsError(try OnlineSaves.prepare(source: source, destination: destination))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        XCTAssertThrowsError(try OnlineSaves.prepare(source: source, destination: destination))
-    }
 
     func testVerificationURLCannotSendLoginToAnotherHost() {
         XCTAssertNotNil(HuntersDream.trustedVerificationURL("https://thehuntersdream.com/link"))
@@ -82,15 +52,4 @@ final class OnlineTests: XCTestCase {
                           OnlineAccountStore(bundleIdentifier: "qa").service)
     }
 
-    func testExistingOnlineMarkerMustNotBeALink() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let destination = root.appendingPathComponent("online")
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        let original = root.appendingPathComponent("marker")
-        try "Blood Echoes isolated online saves v1\n".write(to: original, atomically: true, encoding: .utf8)
-        try FileManager.default.createSymbolicLink(at: destination.appendingPathComponent(".blood-echoes-online-save"),
-                                                   withDestinationURL: original)
-        XCTAssertThrowsError(try OnlineSaves.prepare(source: root, destination: destination))
-    }
 }

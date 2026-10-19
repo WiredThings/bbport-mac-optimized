@@ -10,16 +10,17 @@ online = importlib.util.module_from_spec(spec); spec.loader.exec_module(online)
 
 
 class OnlineRoutingTests(unittest.TestCase):
-    def test_unmarked_formal_save_cannot_be_modified(self):
+    def test_shared_save_routing_stays_outside_save_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             user = Path(directory)
-            with self.assertRaises((OSError, ValueError)): online.prepare(user)
-            self.assertEqual(list(user.iterdir()), [])
+            target = user/"routes"
+            path = online.prepare(user, output=target)
+            self.assertTrue(path.is_file())
+            self.assertEqual(list(user.iterdir()), [target])
 
-    def test_isolated_routing_covers_regions_without_persisting_credentials(self):
+    def test_shared_routing_covers_regions_without_persisting_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             user = Path(directory)
-            (user/online.MARKER).write_text(online.MARKER_TEXT)
             path = online.prepare(user)
             data = json.loads(path.read_text())
             self.assertEqual(data['*.scej-network.jp'], 'https://thehuntersdream.com')
@@ -29,11 +30,20 @@ class OnlineRoutingTests(unittest.TestCase):
     def test_link_cannot_overwrite_another_file(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); user = root/'user'; user.mkdir()
-            (user/online.MARKER).write_text(online.MARKER_TEXT)
             original = root/'original'; original.write_text('unchanged')
             (user/'host_overrides.json').symlink_to(original)
             with self.assertRaises(ValueError): online.prepare(user)
             self.assertEqual(original.read_text(), 'unchanged')
+
+    def test_custom_endpoints_and_https_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            user = Path(directory)
+            path = online.prepare(user, 'https://game.example.test:20443', 'https://np.example.test:18671')
+            routes = json.loads(path.read_text())
+            self.assertEqual(routes['*.scej-network.jp'], 'https://game.example.test:20443')
+            self.assertEqual(routes['bb-playlog-prod.s3.amazonaws.com'], 'https://np.example.test:18671')
+            for value in ['http://example.test','https://user:secret@example.test','https://example.test/path','https://example.test:0']:
+                with self.assertRaises(ValueError): online.prepare(user, value)
 
     def test_online_forces_network_choice_without_changing_offline_policy(self):
         spec = importlib.util.spec_from_file_location('patches', ROOT/'scripts/patches.py')

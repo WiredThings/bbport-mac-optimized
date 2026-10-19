@@ -23,6 +23,13 @@ int main() {
  assert(!BbThdHttpDestination("https", "thehuntersdream.com", 123));
  assert(!BbThdHttpDestination("https", "thehuntersdream.com.evil.test", 443));
  assert(!BbThdHttpDestination("https", "evil.test", 443));
+ setenv("BB_THD_HTTP_ORIGIN", "https://game.example.test:20443", 1);
+ setenv("BB_THD_AUTH", "https://account.example.test", 1);
+ assert(BbThdHttpDestination("https", "game.example.test", 20443));
+ assert(BbThdHttpDestination("https", "account.example.test", 443));
+ assert(!BbThdHttpDestination("https", "game.example.test", 443));
+ assert(!BbThdHttpDestination("https", "thehuntersdream.com", 443));
+ assert(!BbThdHttpDestination("http", "game.example.test", 20443));
 }
 ''')
             subprocess.run(['clang++','-std=c++20','-I',str(ROOT),str(source),'-o',str(binary)],check=True,capture_output=True)

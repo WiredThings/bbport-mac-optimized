@@ -1,9 +1,9 @@
-# Blood Echoes 0.2.37: user guide
+# Blood Echoes 0.2.38: user guide
 
 [简体中文](USER_GUIDE.zh-CN.md) · [Project overview](../README.md) · [Changes and credits](THIRD_PARTY_CHANGES.md)
 
-This guide covers the WiredThings **0.2.37 (0237) preview**. Older upstream guides describe
-different backends and defaults. Download the [complete public app](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.37).
+This guide covers the WiredThings **0.2.38 (0238) preview**. Older upstream guides describe
+different backends and defaults. Download the [complete public app](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.38).
 
 ## Requirements and installation
 
@@ -13,7 +13,7 @@ different backends and defaults. Download the [complete public app](https://gith
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
 
-Extract `Blood-Echoes-0.2.37-macOS.zip`, move **Blood Echoes.app** to Applications,
+Extract `Blood-Echoes-0.2.38-macOS.zip`, move **Blood Echoes.app** to Applications,
 and open it. The app is ad-hoc signed, not notarized; if macOS blocks it, use **System Settings →
 Privacy & Security → Open Anyway** for this app. Rosetta can be installed through macOS or with:
 
@@ -53,7 +53,7 @@ variants can still compile at runtime. Clearing caches makes first-use compilati
 
 ## Online play (experimental)
 
-Online defaults OFF. With the Metal backend, open **Online**, sign in through The Hunter’s Dream device page, then start the game in online mode. The first online launch copies only `savedata` into the launcher data directory’s `online-user`; subsequent online progress remains there. Offline saves are never automatically overwritten or merged. F2/F3 quicksave and quickload are disabled online, while their offline preference is retained.
+Online defaults OFF. With the Metal backend, open **Online**, sign in through The Hunter’s Dream device page, then start the game in online mode. Online and offline now use the same game save directory. Before online mode is enabled, existing checkpoints are verified, backed up and cleared; F2/F3 are disabled. Returning offline first creates a new checkpoint from the current committed game save. Your offline quicksave preference is retained. Legacy formal `online-user` saves are backed up once: if online is selected at migration, its progress becomes the shared save; otherwise the current formal save remains active. Both originals are preserved in backups. QA saves never participate in this decision.
 
 Device sign-in, the server announcement and chalice search/join have been exercised. Direct glyph lookup, co-op and invasions remain unvalidated. See [online setup, credits and test boundaries](ONLINE.md).
 
@@ -192,6 +192,18 @@ cap. Shader/pipeline mode changes may rebuild the corresponding cache variant. F
 tradeoffs and historical scene results, see [the control notes](release/METAL-OPTIMIZATION-CONTROLS.md)
 and [measurement limits](THIRD_PARTY_CHANGES.md#measurements-and-limits).
 
+## Save Manager
+
+Open **Save & load → Save Manager** while the game is closed. **Game saves** lists verified full backups; **Quick checkpoints** lists offline checkpoints and archived checkpoint collections. The underlying character/profile files are the same game format; checkpoints additionally have a manifest and an active-checkpoint pointer. Restore whole saves, not individual character files.
+
+- Back up current saves, import a `savedata` folder as a backup, export a verified backup, or reveal the save/backup directories.
+- Every restore first backs up current game saves and checkpoints. A damaged backup or an occupied save lock blocks replacement.
+- Creating/restoring checkpoints is offline only. Restoring a normal save clears stale checkpoint pointers and seeds a fresh offline checkpoint.
+- Backups live in `optimized-launcher/save-backups/<save-folder-id>` and are not automatically pruned. Export important backups to another disk. Shader caches and credentials are excluded.
+- Isolated QA saves and developer mods remain development-only; the public app never discovers or imports them.
+
+Custom servers use the same THD/bbhost protocol and device authorization. Fill in the administrator-provided HTTPS account, game and session service origins; optional STUN, ruleset and local UDP settings are under Connection options. Accounts are isolated by server configuration. Click the displayed device code to copy it. See [all fields and limitations](ONLINE.md#custom-servers).
+
 ## Controls and quicksave
 
 Controller input uses SDL gamepad mappings. The default keyboard fallback is:
@@ -270,7 +282,7 @@ save folder and select the copy. Do not use app deletion or shader-cache deletio
 | Slowdown after GPU profiling | Turn GPU timing/frame statistics off for normal play; detailed timing can lower FPS |
 | High memory / crackling / crash | Exit before launching a second copy; retain the log and report scene/session details. Crackling and long-session behavior are not claimed fixed |
 | Source-folder warning in a complete app | In launcher Settings choose the built-in engine; if files are missing, re-extract the complete public ZIP |
-| Help opens an older upstream page | Update to 0.2.37; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
+| Help opens an older upstream page | Update to 0.2.38; its Help and About links target this fork, with a Chinese guide for Chinese launcher languages |
 
 Report to [this fork's Issues](https://github.com/WiredThings/blood-echoes/issues), including
 app version, Mac/RAM, macOS, backend, output and scene resolution/preset, effects, scene/location,
@@ -278,7 +290,7 @@ and a short relevant log excerpt. Remove private paths where appropriate. Do not
 files or saves. Public packages omit local benchmark/analyzer tools; runtime diagnostics are optional.
 
 For source work, use [SOURCE.md](release/SOURCE.md), [build instructions](release/BUILD-OPTIMIZED.md)
-and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.37 release tag/source archive is an
+and [third-party provenance](THIRD_PARTY_CHANGES.md). The 0.2.38 release tag/source archive is an
 immutable build snapshot; current branch documentation can include later corrections.
 
 Blood Echoes was previously named Bloodborne Optimized. The app and repository names
