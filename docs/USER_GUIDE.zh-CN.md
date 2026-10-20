@@ -79,7 +79,7 @@ softwareupdate --install-rosetta --agree-to-license
 
 ### iCloud Drive 同步
 
-在“当前存档 → iCloud Drive 存档同步”启用“同步正常存档”，选择 **iCloud Drive 内的文件夹**。首次选择后会建立 `Blood Echoes Saves`；其他 Mac 选择同一个目录。此功能默认关闭，需要 macOS 已登录 Apple 账户并开启 iCloud Drive；不需要项目的开发者 CloudKit 账号。
+在“当前存档 → iCloud Drive 存档同步”启用“同步正常存档”，启动器自动使用 **iCloud Drive/Blood Echoes Saves**。另一台 Mac 使用同一个 Apple 账户，打开相同开关即可，不需要选目录，也没有自定义同步路径。此功能默认关闭，需要 macOS 已登录 Apple 账户并开启 iCloud Drive；不需要项目的开发者 CloudKit 账号。
 
 只同步完整的最新正常 `savedata`，包含角色、系统和元数据文件；快速存档、历史备份、游戏文件、设置、缓存和联网凭据不上传。每台实际编辑过进度的设备只保留一个最新云端包，不在云端累计每次快速读档的历史。
 

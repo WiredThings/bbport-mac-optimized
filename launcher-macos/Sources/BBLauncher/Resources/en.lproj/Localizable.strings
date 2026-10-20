@@ -499,8 +499,6 @@
 "iCloud Drive save sync" = "iCloud Drive save sync";
 "Sync normal saves" = "Sync normal saves";
 "Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac." = "Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac.";
-"Choose iCloud folder…" = "Choose iCloud folder…";
-"Choose a folder in iCloud Drive" = "Choose a folder in iCloud Drive";
 "Sync now" = "Sync now";
 "Checking iCloud saves…" = "Checking iCloud saves…";
 "Different save progress found. Choose which progress to continue." = "Different save progress found. Choose which progress to continue.";
@@ -512,8 +510,8 @@
 "iCloud Drive is not ready. Try again later." = "iCloud Drive is not ready. Try again later.";
 "iCloud Drive has an unresolved file conflict. Both saves were preserved." = "iCloud Drive has an unresolved file conflict. Both saves were preserved.";
 "iCloud save is downloading. Try again after it finishes." = "iCloud save is downloading. Try again after it finishes.";
-"Choose an iCloud folder outside local saves and backups." = "Choose an iCloud folder outside local saves and backups.";
-"The selected sync folder is not a Blood Echoes save folder." = "The selected sync folder is not a Blood Echoes save folder.";
+"The iCloud save folder overlaps local saves or backups." = "The iCloud save folder overlaps local saves or backups.";
+"The iCloud save folder contains other files. Local saves were preserved." = "The iCloud save folder contains other files. Local saves were preserved.";
 "Invalid iCloud save package." = "Invalid iCloud save package.";
 "Invalid iCloud save state." = "Invalid iCloud save state.";
 "iCloud save is incomplete or changed. Local saves were preserved." = "iCloud save is incomplete or changed. Local saves were preserved.";

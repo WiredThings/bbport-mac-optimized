@@ -220,3 +220,7 @@ Local SwiftUI/SaveStore work separates live game saves and active checkpoints fr
 ### 0.2.46 — bounded save history and optional iCloud Drive
 
 Original launcher work adds 3/3/5 automatic history retention, explicit pinning, content-based automatic archive deduplication, and coordinated normal-save syncing through a user-selected iCloud Drive folder. Per-device latest packages and vector clocks preserve concurrent offline progress; restore uses existing verified backup/offline/F3 rules. No third-party mod, runtime host or renderer binary is changed. See [SAVE_SYNC.md](SAVE_SYNC.md) and the localized user guides.
+
+### 0.2.47 — automatic iCloud save folder
+
+Local launcher work removes the sync directory picker and stored custom-path preference. Enabling normal-save sync automatically creates or opens `iCloud Drive/Blood Echoes Saves`; another Mac uses the same location. Missing Drive and unrelated existing folders fail safely, and isolated QA uses its own fake home. The 3/3/5 retention, verified backups/imports, conflict handling, F3/offline protection, networking and renderer are unchanged.

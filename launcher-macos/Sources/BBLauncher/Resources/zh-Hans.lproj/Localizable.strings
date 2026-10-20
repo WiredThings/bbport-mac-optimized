@@ -499,8 +499,6 @@
 "iCloud Drive save sync" = "iCloud Drive 存档同步";
 "Sync normal saves" = "同步正常存档";
 "Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac." = "启动游戏前、退出游戏后同步正常存档。快速存档和历史备份只留在本机。";
-"Choose iCloud folder…" = "选择 iCloud 文件夹…";
-"Choose a folder in iCloud Drive" = "请选择 iCloud Drive 中的文件夹";
 "Sync now" = "立即同步";
 "Checking iCloud saves…" = "正在检查 iCloud 存档…";
 "Different save progress found. Choose which progress to continue." = "发现不同的存档进度，请选择要继续的进度。";
@@ -512,8 +510,8 @@
 "iCloud Drive is not ready. Try again later." = "iCloud Drive 尚未就绪，请稍后重试。";
 "iCloud Drive has an unresolved file conflict. Both saves were preserved." = "iCloud Drive 有未解决的文件冲突，两份存档均已保留。";
 "iCloud save is downloading. Try again after it finishes." = "iCloud 存档正在下载，完成后请重试。";
-"Choose an iCloud folder outside local saves and backups." = "请选择本地存档和备份目录以外的 iCloud 文件夹。";
-"The selected sync folder is not a Blood Echoes save folder." = "选择的同步目录不是 Blood Echoes 存档文件夹。";
+"The iCloud save folder overlaps local saves or backups." = "iCloud 存档目录与本地存档或备份目录重叠。";
+"The iCloud save folder contains other files. Local saves were preserved." = "iCloud 存档目录包含其他文件，本机存档未改动。";
 "Invalid iCloud save package." = "iCloud 存档包无效。";
 "Invalid iCloud save state." = "iCloud 同步记录无效。";
 "iCloud save is incomplete or changed. Local saves were preserved." = "iCloud 存档不完整或已变化，本机存档未改动。";

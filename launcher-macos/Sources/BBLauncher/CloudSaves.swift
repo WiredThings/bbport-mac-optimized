@@ -38,7 +38,7 @@ private struct CloudSaveState: Codable {
     var digest: String?
 }
 
-/// File-based iCloud Drive interoperability without a private CloudKit container.
+/// Fixed-folder iCloud Drive interoperability without a private CloudKit container.
 /// Each installation owns one latest normal-save package. Vector clocks preserve
 /// concurrent offline progress; wall-clock timestamps never pick a winner.
 struct CloudSaves: Sendable {
@@ -47,6 +47,10 @@ struct CloudSaves: Sendable {
     var transferStatus: @Sendable (URL) throws -> CloudTransferState = { try CloudSaves.systemTransferStatus($0) }
     private var fm: FileManager { .default }
     private let marker = "Blood Echoes normal save sync v1\n"
+
+    static func automaticRoot(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Blood Echoes Saves", isDirectory: true)
+    }
 
     static func systemTransferStatus(_ package: URL) throws -> CloudTransferState {
         guard let entries = FileManager.default.enumerator(at: package, includingPropertiesForKeys: nil) else { return .queued }
@@ -103,7 +107,7 @@ struct CloudSaves: Sendable {
         for protected in [store.user, store.directory] {
             let path = protected.resolvingSymlinksInPath().standardizedFileURL.path
             guard canonical.path != path, !canonical.path.hasPrefix(path + "/"), !path.hasPrefix(canonical.path + "/") else {
-                throw fail("Choose an iCloud folder outside local saves and backups.")
+                throw fail("The iCloud save folder overlaps local saves or backups.")
             }
         }
         let parent = root.deletingLastPathComponent()
@@ -113,10 +117,10 @@ struct CloudSaves: Sendable {
             if fm.fileExists(atPath: url.path) {
                 try ready(url)
                 let tag = url.appendingPathComponent("format.txt")
-                guard fm.fileExists(atPath: tag.path) else { throw fail("The selected sync folder is not a Blood Echoes save folder.") }
+                guard fm.fileExists(atPath: tag.path) else { throw fail("The iCloud save folder contains other files. Local saves were preserved.") }
                 try ready(tag)
                 guard (try tag.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 1024,
-                      try Data(contentsOf: tag) == Data(marker.utf8) else { throw fail("The selected sync folder is not a Blood Echoes save folder.") }
+                      try Data(contentsOf: tag) == Data(marker.utf8) else { throw fail("The iCloud save folder contains other files. Local saves were preserved.") }
             } else {
                 try fm.createDirectory(at: url, withIntermediateDirectories: false)
                 try Data(marker.utf8).write(to: url.appendingPathComponent("format.txt"), options: .atomic)

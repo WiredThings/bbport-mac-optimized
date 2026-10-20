@@ -23,6 +23,34 @@ final class CloudSaveTests: XCTestCase {
 
     func contents(_ store: SaveStore) throws -> [String: String] { try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files }
 
+    func testFreshMacFindsFixedDriveFolderWithoutPathPreferences() throws {
+        try fixture { a, b, root in
+            let home = root.deletingLastPathComponent().appendingPathComponent("home")
+            let shared = CloudSaves.automaticRoot(home: home)
+            XCTAssertFalse(fm.fileExists(atPath: home.path)) // resolving is read-only
+            try fm.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try progress("progress from old Mac", a)
+            _ = try sync(a, shared)
+            XCTAssertEqual(try Data(contentsOf: shared.appendingPathComponent("format.txt")), Data("Blood Echoes normal save sync v1\n".utf8))
+            try fm.removeItem(at: b.user.appendingPathComponent("savedata"))
+            let imported = try sync(b, CloudSaves.automaticRoot(home: home))
+            XCTAssertTrue(imported.imported)
+            XCTAssertEqual(try contents(b), try contents(a))
+            XCTAssertTrue(b.hasOfflineRestoreIntent)
+            XCTAssertEqual(try fm.contentsOfDirectory(at: shared, includingPropertiesForKeys: nil).filter { $0.pathExtension == "bbechoessave" }.count, 1)
+        }
+    }
+
+    func testUnavailableDriveNeverCreatesFakeCloudFoldersOrChangesProgress() throws {
+        try fixture { a, _, root in
+            let missingHome = root.deletingLastPathComponent().appendingPathComponent("missing-home")
+            let before = try contents(a)
+            XCTAssertThrowsError(try sync(a, CloudSaves.automaticRoot(home: missingHome)))
+            XCTAssertFalse(fm.fileExists(atPath: missingHome.path))
+            XCTAssertEqual(try contents(a), before)
+        }
+    }
+
     func testOnlyLatestNormalSavesPublishAndRepeatedSyncDoesNotRewrite() throws {
         try fixture { a, _, root in
             try a.seedCheckpoint()
@@ -175,7 +203,6 @@ final class CloudSaveTests: XCTestCase {
             XCTAssertThrowsError(try sync(a, root))
             XCTAssertEqual(try SaveStore.inventory(root).files, before)
             XCTAssertFalse(LauncherPrefs().cloudSaves)
-            XCTAssertTrue(LauncherPrefs().cloudSaveFolder.isEmpty)
         }
     }
 
