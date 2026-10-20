@@ -27,6 +27,10 @@ struct CloudSaveResult: Sendable {
     var imported = false
 }
 
+enum CloudTransferState: Sendable {
+    case local, queued, uploaded, failed(String)
+}
+
 private struct CloudSaveState: Codable {
     var device = UUID().uuidString
     var root: String
@@ -40,8 +44,24 @@ private struct CloudSaveState: Codable {
 struct CloudSaves: Sendable {
     let store: SaveStore
     let root: URL
+    var transferStatus: @Sendable (URL) throws -> CloudTransferState = { try CloudSaves.systemTransferStatus($0) }
     private var fm: FileManager { .default }
     private let marker = "Blood Echoes normal save sync v1\n"
+
+    static func systemTransferStatus(_ package: URL) throws -> CloudTransferState {
+        guard let entries = FileManager.default.enumerator(at: package, includingPropertiesForKeys: nil) else { return .queued }
+        var cloudFiles = 0, pending = false
+        for case var file as URL in entries {
+            file.removeAllCachedResourceValues()
+            let value = try file.resourceValues(forKeys: [.isRegularFileKey, .isUbiquitousItemKey, .ubiquitousItemIsUploadedKey, .ubiquitousItemUploadingErrorKey, .ubiquitousItemDownloadingErrorKey])
+            guard value.isRegularFile == true else { continue }
+            guard value.isUbiquitousItem == true else { pending = true; continue }
+            cloudFiles += 1
+            if let error = value.ubiquitousItemUploadingError ?? value.ubiquitousItemDownloadingError { return .failed(error.localizedDescription) }
+            if value.ubiquitousItemIsUploaded != true { pending = true }
+        }
+        return cloudFiles == 0 ? .local : pending ? .queued : .uploaded
+    }
 
     static func digest(_ files: [String: String]) -> String {
         let data = try! JSONSerialization.data(withJSONObject: files, options: [.sortedKeys])
@@ -226,6 +246,17 @@ struct CloudSaves: Sendable {
         state.clock = merged; state.digest = Self.digest(files)
         try fm.createDirectory(at: store.directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
-        return CloudSaveResult(message: L10n.key(publish ? "Saved to iCloud Drive. macOS handles uploading." : "Save copies match."), imported: imported)
+        let observedPackage = publish ? package(state.device) : package(heads.first(where: { $0.files == files })?.id ?? winner.id)
+        let transfer: CloudTransferState
+        do { transfer = try transferStatus(observedPackage) }
+        catch { transfer = .failed(error.localizedDescription) }
+        let message: String
+        switch transfer {
+        case .failed(let problem): message = L10n.format("iCloud transfer paused: %@", problem)
+        case .uploaded: message = L10n.key("macOS confirmed the save files uploaded.")
+        case .queued: message = L10n.key("Saved to iCloud Drive. macOS handles uploading.")
+        case .local: message = L10n.key("iCloud Drive has not confirmed these files. Local copies are preserved.")
+        }
+        return CloudSaveResult(message: message, imported: imported)
     }
 }

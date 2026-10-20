@@ -521,3 +521,6 @@
 "Could not update iCloud saves. The previous copy was preserved." = "Could not update iCloud saves. The previous copy was preserved.";
 "Before iCloud restore" = "Before iCloud restore";
 "iCloud conflict backup" = "iCloud conflict backup";
+"iCloud transfer paused: %@" = "iCloud transfer paused: %@";
+"macOS confirmed the save files uploaded." = "macOS confirmed the save files uploaded.";
+"iCloud Drive has not confirmed these files. Local copies are preserved." = "iCloud Drive has not confirmed these files. Local copies are preserved.";

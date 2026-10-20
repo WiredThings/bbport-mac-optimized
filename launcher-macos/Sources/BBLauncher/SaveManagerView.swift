@@ -288,8 +288,10 @@ struct SaveManagerView: View {
                                         }
                                     }.disabled(!canChange).fixedSize()
                                     Spacer()
-                                    Toggle(L10n.key("Keep"), isOn: Binding(get: { backup.kept == true }, set: { model.keepBackup(backup, $0) }))
-                                        .toggleStyle(.checkbox).disabled(!canChange)
+                                    if SaveStore.automatic(backup) {
+                                        Toggle(L10n.key("Keep"), isOn: Binding(get: { backup.kept == true }, set: { model.keepBackup(backup, $0) }))
+                                            .toggleStyle(.checkbox).disabled(!canChange)
+                                    }
                                 }
                             }.padding(.vertical, 6)
                         }

@@ -1,11 +1,11 @@
 # Blood Echoes for macOS
 
-[简体中文](README.zh-CN.md) · [Download 0.2.46](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.46) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
+[简体中文](README.zh-CN.md) · [Download Latest](https://github.com/WiredThings/blood-echoes/releases/latest) · [User guide](docs/USER_GUIDE.md) · [Changes and third-party credits](docs/THIRD_PARTY_CHANGES.md)
 
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current public build is **0.2.46, a preview release**. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
+The current public build is **0.2.45**. This branch contains the **0.2.46 candidate**, with save retention implemented and iCloud upload/UI acceptance pending the host account and screen unlock. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
 
 Version 0.2.36 defaults new configurations to the game's original model detail and warns
 about forced low LOD, which can hide walls or floors. If an existing configuration has
@@ -21,7 +21,7 @@ Requires **Apple Silicon, macOS 26+, Rosetta 2**, and your own decrypted Bloodbo
 with **update 1.09 merged into the base game**. Python and runtime libraries are bundled;
 Xcode, Homebrew and compilation are not required to play.
 
-1. Download **Blood-Echoes-0.2.46-macOS.zip** from [Releases](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.46).
+1. Download the **macOS.zip** installation package from [Latest Release](https://github.com/WiredThings/blood-echoes/releases/latest).
 2. Extract it and move **Blood Echoes.app** into Applications. Quit the old app before replacing it.
 3. Select the merged game folder containing `eboot.bin`, `sce_sys` and `dvdroot_ps4`.
    Select the full installation, rather than the separate `CUSA…-patch` update folder.

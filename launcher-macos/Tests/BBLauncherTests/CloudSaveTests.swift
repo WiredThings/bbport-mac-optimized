@@ -192,27 +192,43 @@ final class CloudSaveTests: XCTestCase {
             _ = try sync(store, root)
             let package = try XCTUnwrap(try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).first { $0.pathExtension == "bbechoessave" })
             let manifest = package.appendingPathComponent("manifest.json")
-            let payload = package.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005/userdata0000")
+            let uploadFiles = try XCTUnwrap(fm.enumerator(at: package, includingPropertiesForKeys: [.isRegularFileKey]))
+                .allObjects.compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            XCTAssertEqual(uploadFiles.count, 3) // manifest plus both required normal-save files
             XCTAssertTrue(fm.isUbiquitousItem(at: manifest), "The selected folder is not managed by iCloud Drive")
             let deadline = Date().addingTimeInterval(25)
             var uploaded = false
             repeat {
-                uploaded = try [manifest, payload].allSatisfy { file in
+                uploaded = try uploadFiles.allSatisfy { file in
                     var fresh = file; fresh.removeAllCachedResourceValues()
                     return try fresh.resourceValues(forKeys: [.ubiquitousItemIsUploadedKey]).ubiquitousItemIsUploaded == true
                 }
                 if !uploaded { Thread.sleep(forTimeInterval: 0.5) }
             } while !uploaded && Date() < deadline
             if !uploaded {
-                for var file in [manifest, payload] {
+                for var file in uploadFiles {
                     file.removeAllCachedResourceValues()
                     let status = try file.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey, .ubiquitousItemIsUploadingKey, .ubiquitousItemUploadingErrorKey])
                     print("Synthetic iCloud status", file.lastPathComponent, "managed", status.isUbiquitousItem as Any, "uploaded", status.ubiquitousItemIsUploaded as Any, "uploading", status.ubiquitousItemIsUploading as Any, "error", status.ubiquitousItemUploadingError as Any)
                 }
             }
-            XCTAssertTrue(uploaded, "iCloud did not confirm both synthetic files uploaded within the bounded window")
+            XCTAssertTrue(uploaded, "iCloud did not confirm all synthetic files uploaded within the bounded window")
             XCTAssertTrue(try sync(store, root).conflicts.isEmpty)
             XCTAssertEqual(try contents(store), before)
+        }
+    }
+
+    func testUploadAccountFailureIsVisibleWithoutChangingLocalProgress() throws {
+        try fixture { a, _, root in
+            let before = try contents(a)
+            let cloud = CloudSaves(store: a, root: root, transferStatus: { _ in .failed("NSCocoaErrorDomain 4355: iCloud account unavailable") })
+            let result = try a.locked { try cloud.synchronize() }
+            XCTAssertTrue(result.message.contains("4355"))
+            XCTAssertEqual(try contents(a), before)
+            XCTAssertFalse(result.imported)
+            XCTAssertTrue(result.conflicts.isEmpty)
+            // A failed transfer still retains the verified local queued package.
+            XCTAssertEqual(try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "bbechoessave" }.count, 1)
         }
     }
 }

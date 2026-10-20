@@ -521,3 +521,6 @@
 "Could not update iCloud saves. The previous copy was preserved." = "無法更新 iCloud 存檔，原有副本已保留。";
 "Before iCloud restore" = "iCloud 恢復前備份";
 "iCloud conflict backup" = "iCloud 衝突進度備份";
+"iCloud transfer paused: %@" = "iCloud 傳輸暫停：%@";
+"macOS confirmed the save files uploaded." = "macOS 已確認存檔檔案上傳完成。";
+"iCloud Drive has not confirmed these files. Local copies are preserved." = "iCloud Drive 尚未確認這些檔案，本機副本已保留。";

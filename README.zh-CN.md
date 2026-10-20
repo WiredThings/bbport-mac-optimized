@@ -1,10 +1,10 @@
 # Blood Echoes：macOS 血源运行器
 
-[English](README.md) · [下载 0.2.46](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.46) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
+[English](README.md) · [下载 Latest](https://github.com/WiredThings/blood-echoes/releases/latest) · [使用指南](docs/USER_GUIDE.zh-CN.md) · [分支改动与第三方来源](docs/THIRD_PARTY_CHANGES.md)
 
 这是 [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized) 的
 **WiredThings 分支**，提供独立 macOS 启动器、**直接 Metal 渲染**、**MetalFX 时域升频**，
-以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.46 预览版**。“关于”中的版本括号显示对应源码的 Git 短提交号，macOS 内部仍保留数字构建号。历史版本标为 Pre-release，下载请认准 Latest。
+以及英文、简体中文、繁体中文启动器界面。当前公开版本是 **0.2.45**；本分支包含 **0.2.46 候选版**，历史回收已完成，iCloud 整包上传及界面验收仍待本机账户恢复与解锁。“关于”中的版本括号显示对应源码的 Git 短提交号，macOS 内部仍保留数字构建号。历史版本标为 Pre-release，下载请认准 Latest。
 
 0.2.36 起为新配置默认采用原版模型细节，并提示强制低 LOD 可能造成墙体或地板缺失。
 已有配置若遇到缺失场景，请将“模型细节”改为 **游戏默认（0）** 后重新启动。
@@ -17,8 +17,8 @@
 需要 **Apple Silicon Mac、macOS 26 或更新版本、Rosetta 2**，以及自行准备的、
 **已合并 1.09 更新的解密游戏文件**。安装包自带 Python 和运行库，游玩无需安装 Xcode、Homebrew 或自行编译。
 
-1. 从 [Releases](https://github.com/WiredThings/blood-echoes/releases/tag/v0.2.46)
-   下载 **Blood-Echoes-0.2.46-macOS.zip**。
+1. 从 [Latest Release](https://github.com/WiredThings/blood-echoes/releases/latest)
+   下载 **macOS.zip** 安装包。
 2. 解压并把 **Blood Echoes.app** 放进“应用程序”；更新前先退出旧启动器和游戏。
 3. 选择同时包含 `eboot.bin`、`sce_sys`、`dvdroot_ps4` 的完整合并目录，
    不要只选择单独的 `CUSA…-patch` 更新目录。
