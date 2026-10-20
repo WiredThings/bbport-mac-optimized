@@ -463,3 +463,30 @@
 "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play." = "检查点包含游戏存档和恢复信息，恢复后一律离线游玩。";
 "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files." = "恢复会切换为离线模式，并先备份当前进度。请整份恢复存档。";
 "About Blood Echoes" = "关于 Blood Echoes";
+
+// Current saves and separate history
+"Save view" = "存档视图";
+"Current saves" = "当前存档";
+"Save history" = "历史备份";
+"Current game saves" = "当前正常存档";
+"Current quick checkpoints" = "当前快速存档";
+"Files: %@" = "文件数：%@";
+"Modified" = "修改时间";
+"Open folder" = "打开目录";
+"Back up" = "备份";
+"No game saves yet." = "尚无正常存档。";
+"No active checkpoint." = "尚未建立当前快速存档。";
+"Archive backups" = "存档备份归档";
+"No archived backups." = "尚无备份归档。";
+"Previous checkpoints and pre-restore backups" = "旧快速存档与恢复前备份";
+"No checkpoint history." = "尚无快速存档历史。";
+"Before quickload" = "快速恢复前";
+"Back up all saves" = "备份全部存档";
+"Restoring backs up current saves and switches to offline play." = "恢复前会备份当前存档，并切换为离线模式。";
+"Close the game to back up, export or restore saves." = "退出游戏后可备份、导出或恢复存档。";
+"Game save backup" = "正常存档备份";
+"Quick checkpoint backup" = "快速存档备份";
+"Choose an export folder outside saves and backups." = "请选择存档与备份目录以外的导出位置。";
+"Saves changed. Refresh and try again." = "存档已变化，请刷新后重试。";
+"Exported to %@" = "已导出到 %@";
+"Save folder not found. Refresh and try again." = "存档目录不存在，请刷新后重试。";

@@ -48,6 +48,10 @@ final class LauncherModel: ObservableObject {
     @Published var saveStatus = ""
     @Published var saveBackups: [SaveBackup] = []
     @Published var quickCheckpoints: [QuickCheckpoint] = []
+    @Published var currentGameSave: SaveSummary?
+    @Published var saveRefreshing = false
+    @Published var saveReadError = ""
+    var saveRefreshID = UUID()
 
     @Published var prefs: LauncherPrefs {
         didSet { prefsChanged(from: oldValue) }

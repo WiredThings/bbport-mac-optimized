@@ -212,3 +212,7 @@ The launcher About panel and embedded-engine version display now show the short 
 ## F3 automatic Continue (0.2.44)
 
 Local runtime fix: replace writable-mount-only autoload cancellation with the signature-verified Bloodborne 1.09 character-readiness gate already used by fresh checkpoints. Menu input is checked before each tap, retains its timeout, and releases once. Network credential removal and supervised restart ordering are unchanged.
+
+## Complete Save Manager (0.2.45)
+
+Local SwiftUI/SaveStore work separates live game saves and active checkpoints from archive history, older checkpoints and pre-F3 backups. Adds metadata-only background refresh, individual backup and verified export, complete normal-save wrappers, helper-compatible checkpoint exports, unique atomic publication and destination checks. Viewing/exporting does not change active pointers or formal saves. Existing lock, offline restore, network and F3 policies are retained. No new third-party patch or game resource is bundled.

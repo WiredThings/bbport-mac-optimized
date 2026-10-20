@@ -196,15 +196,15 @@ and [measurement limits](THIRD_PARTY_CHANGES.md#measurements-and-limits).
 
 ## Save Manager
 
-Open **Save & load → Save Manager** while the game is closed. **Game saves** lists verified full backups; **Quick checkpoints** lists active checkpoints and archived checkpoint collections. The underlying character/profile files are the same game format; checkpoints additionally have a manifest and an active-checkpoint pointer. Restore whole saves, not individual character files.
+Open **Save & load → Save Manager**. **Current saves** shows the live normal save folder (file count, size and modification time) and the active quick checkpoint for each title. **Save history** separately lists archived backups, older checkpoints and the automatic backups made before F3 restores. Opening or refreshing reads metadata only; it does not create a checkpoint or change the active pointer. Folder browsing remains available during play; close the game before backup, export, import or restore.
 
-- Back up current saves, import a `savedata` folder as a backup, export a verified backup, or reveal the save/backup directories.
-- Every restore first backs up current game saves and checkpoints. A damaged backup or an occupied save lock blocks replacement.
-- Checkpoints can be created in either mode while the game is closed. Every restore switches the launcher to offline; restoring a normal save also replaces stale checkpoint pointers with a fresh checkpoint. Server-side messages, statistics and other completed online actions cannot be rolled back by a local restore.
-- Backups live in `optimized-launcher/save-backups/<save-folder-id>` and are not automatically pruned. Export important backups to another disk. Shader caches and credentials are excluded.
-- Isolated QA saves and developer mods remain development-only; the public app never discovers or imports them.
+- **Open folder**, **Back up** and **Export…** are available for current normal saves and individual checkpoints. **Back up all saves** archives both complete trees. Backups appear under **Save history** and are never automatically pruned.
+- Normal-save exports contain a `savedata` folder with the complete directory structure, including `SPRJ0005.sce_sys`. Choose this `savedata` folder when importing. Import adds a verified backup; it does not replace live saves until you explicitly restore it.
+- Checkpoint exports contain `quicksaves/<title>/current.json`, a selected checkpoint and its hash manifest. Only the selected checkpoint is exported, not every historical copy. A pre-F3 backup is packaged as a normal selectable checkpoint. The original active pointer is unchanged. Existing backup exports keep all save types contained in that backup.
+- Every export creates a new uniquely named directory, verifies the copy, and leaves existing exports untouched. Exporting inside the live save or backup directories is rejected. Shader caches, settings and credentials are excluded.
+- Restoring verifies the whole payload, backs up the displaced saves, and switches to offline play. Current normal saves and checkpoints use the same underlying game-file format; checkpoints add a manifest and a pointer. Restore complete saves, not individual character files. QA saves are never scanned or imported automatically.
 
-The online service is The Hunter’s Dream. Click the displayed device code to copy it into the authorization page. Existing THD sign-in is retained. See [online setup and limitations](ONLINE.md).
+Backups live in `optimized-launcher/save-backups/<save-folder-id>`. The default live normal saves are in `~/Library/Application Support/bbport/user/savedata/1/CUSA00207/`; quick checkpoints are in the neighboring `user/quicksaves/CUSA00207/` folder. A custom save location selected in Settings takes precedence.
 
 ## Controls and quicksave
 

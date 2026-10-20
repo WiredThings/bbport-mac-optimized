@@ -463,3 +463,30 @@
 "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play." = "Checkpoints contain game saves plus restore metadata. Restoring always switches to offline play.";
 "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files." = "Restoring switches to offline play and backs up current saves. Restore whole saves, not individual character files.";
 "About Blood Echoes" = "About Blood Echoes";
+
+// Current saves and separate history
+"Save view" = "Save view";
+"Current saves" = "Current saves";
+"Save history" = "Save history";
+"Current game saves" = "Current game saves";
+"Current quick checkpoints" = "Current quick checkpoints";
+"Files: %@" = "Files: %@";
+"Modified" = "Modified";
+"Open folder" = "Open folder";
+"Back up" = "Back up";
+"No game saves yet." = "No game saves yet.";
+"No active checkpoint." = "No active checkpoint.";
+"Archive backups" = "Archive backups";
+"No archived backups." = "No archived backups.";
+"Previous checkpoints and pre-restore backups" = "Previous checkpoints and pre-restore backups";
+"No checkpoint history." = "No checkpoint history.";
+"Before quickload" = "Before quickload";
+"Back up all saves" = "Back up all saves";
+"Restoring backs up current saves and switches to offline play." = "Restoring backs up current saves and switches to offline play.";
+"Close the game to back up, export or restore saves." = "Close the game to back up, export or restore saves.";
+"Game save backup" = "Game save backup";
+"Quick checkpoint backup" = "Quick checkpoint backup";
+"Choose an export folder outside saves and backups." = "Choose an export folder outside saves and backups.";
+"Saves changed. Refresh and try again." = "Saves changed. Refresh and try again.";
+"Exported to %@" = "Exported to %@";
+"Save folder not found. Refresh and try again." = "Save folder not found. Refresh and try again.";

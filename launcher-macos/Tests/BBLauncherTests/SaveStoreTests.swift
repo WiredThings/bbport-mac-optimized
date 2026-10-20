@@ -184,4 +184,178 @@ final class SaveStoreTests: XCTestCase {
             XCTAssertEqual(try JSONDecoder().decode(Bool.self, from: Data(contentsOf: store.directory.appendingPathComponent("mode.json"))), false)
         }
     }
+
+    func testCurrentMetadataAndHistoryAreReadOnlyAndDistinct() throws {
+        try fixture { store, _ in
+            try store.seedCheckpoint()
+            let old = try XCTUnwrap(try store.checkpoints().first)
+            try store.seedCheckpoint()
+            let pre = store.user.appendingPathComponent("quicksaves/CUSA00207/before-load-" + String(repeating: "a", count: 32))
+            try FileManager.default.copyItem(at: store.checkpointFolder(old), to: pre)
+            let before = try SaveStore.inventory(store.user).files
+            let live = try XCTUnwrap(try store.currentGameSave())
+            XCTAssertEqual(live.folder, store.user.appendingPathComponent("savedata"))
+            XCTAssertEqual(live.files, 2); XCTAssertEqual(live.bytes, 16); XCTAssertNotNil(live.modified)
+            let checkpoints = try store.checkpoints()
+            XCTAssertEqual(checkpoints.count, 3)
+            XCTAssertEqual(checkpoints.filter(\.current).count, 1)
+            XCTAssertEqual(checkpoints.filter { !$0.current }.count, 2)
+            XCTAssertEqual(checkpoints.filter(\.beforeRestore).count, 1)
+            XCTAssertTrue(checkpoints.allSatisfy { $0.bytes == 16 })
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory.path))
+        }
+    }
+
+    func testEmptyReadDoesNotCreateFoldersOrDiscoverSiblingQA() throws {
+        try fixture { store, root in
+            let missing = root.appendingPathComponent("empty-user")
+            let empty = SaveStore(user: missing, directory: root.appendingPathComponent("empty-backups"))
+            XCTAssertNil(try empty.currentGameSave()); XCTAssertTrue(try empty.checkpoints().isEmpty)
+            XCTAssertTrue(try empty.backups().isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: empty.directory.path))
+            let qa = root.appendingPathComponent("qa/user")
+            try FileManager.default.createDirectory(at: qa, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: store.user.appendingPathComponent("savedata"), to: qa.appendingPathComponent("savedata"))
+            XCTAssertNil(try empty.currentGameSave())
+        }
+    }
+
+    func testCurrentBackupKindsAndSelectedCheckpointDoNotChangeActiveSaves() throws {
+        try fixture { store, _ in
+            try store.seedCheckpoint()
+            let old = try XCTUnwrap(try store.checkpoints().first)
+            try store.seedCheckpoint()
+            try store.locked { }
+            let before = try SaveStore.inventory(store.user).files
+            try store.locked { try store.backupCurrentGameSave() }
+            try store.locked { try store.backupCheckpoint(try XCTUnwrap(try store.checkpoints().first { $0.id == old.id })) }
+            let backups = try store.backups()
+            XCTAssertEqual(backups.count, 2)
+            let normal = try XCTUnwrap(backups.first { $0.kinds == ["savedata"] })
+            XCTAssertEqual(try SaveStore.inventory(store.verify(normal).appendingPathComponent("savedata")).files,
+                           try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files)
+            let quick = try XCTUnwrap(backups.first { $0.kinds == ["quicksaves"] })
+            let payload = try store.verify(quick)
+            let exported = SaveStore(user: payload, directory: payload.appendingPathComponent("unused"))
+            XCTAssertEqual(try exported.checkpoints().count, 1)
+            XCTAssertEqual(try exported.checkpoints().first?.id, old.id)
+            XCTAssertEqual(try exported.checkpoints().first?.current, true)
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+        }
+    }
+
+    func testExportsAreCompleteUniqueAndDoNotCreateBackupsOrReplaceFiles() throws {
+        try fixture { store, root in
+            let metadata = store.user.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005.sce_sys")
+            try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+            try Data("icon".utf8).write(to: metadata.appendingPathComponent("icon0.png"))
+            try store.locked { }
+            let before = try SaveStore.inventory(store.user).files
+            let exports = root.appendingPathComponent("exports")
+            try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+            let a = try store.locked { try store.exportCurrentGameSave(to: exports) }
+            let b = try store.locked { try store.exportCurrentGameSave(to: exports) }
+            XCTAssertNotEqual(a, b)
+            XCTAssertEqual(try SaveStore.inventory(a.appendingPathComponent("savedata")).files,
+                           try SaveStore.inventory(store.user.appendingPathComponent("savedata")).files)
+            XCTAssertEqual(try SaveStore.inventory(a).files, try SaveStore.inventory(b).files)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: a.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005.sce_sys/icon0.png").path))
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory.path))
+            XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: exports.path).contains { $0.hasPrefix(".") })
+        }
+    }
+
+    func testPreRestoreExportUsesCompatibleCheckpointAndKeepsLivePointer() throws {
+        try fixture { store, root in
+            try store.seedCheckpoint()
+            let original = try XCTUnwrap(try store.checkpoints().first)
+            let pre = store.user.appendingPathComponent("quicksaves/CUSA00207/before-load-" + String(repeating: "b", count: 32))
+            try FileManager.default.copyItem(at: store.checkpointFolder(original), to: pre)
+            let checkpoint = try XCTUnwrap(try store.checkpoints().first { $0.beforeRestore })
+            try store.locked { }
+            let before = try SaveStore.inventory(store.user).files
+            let exports = root.appendingPathComponent("exports")
+            try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+            let target = try store.locked { try store.exportCheckpoint(checkpoint, to: exports) }
+            let exported = SaveStore(user: target, directory: target.appendingPathComponent("unused"))
+            XCTAssertEqual(try exported.checkpoints().count, 1)
+            XCTAssertEqual(try exported.checkpoints().first?.id, "save-" + String(repeating: "b", count: 32))
+            XCTAssertEqual(try exported.checkpoints().first?.current, true)
+            let repo = URL(fileURLWithPath: #filePath).deletingPathExtension().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["python3", repo.appendingPathComponent("tools/macos/quicksave.py").path, "check", target.path, "CUSA00207"]
+            try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus, 0)
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+        }
+    }
+
+    func testStaleCurrentCheckpointAndCorruptedDataCannotBeExportedOrArchived() throws {
+        try fixture { store, root in
+            try store.seedCheckpoint()
+            let stale = try XCTUnwrap(try store.checkpoints().first)
+            try store.seedCheckpoint()
+            let exports = root.appendingPathComponent("exports")
+            try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+            XCTAssertThrowsError(try store.exportCheckpoint(stale, to: exports))
+            XCTAssertThrowsError(try store.backupCheckpoint(stale))
+            let active = try XCTUnwrap(try store.checkpoints().first { $0.current })
+            try Data("corrupt".utf8).write(to: store.checkpointFolder(active).appendingPathComponent("data/SPRJ0005/userdata0000"))
+            let before = try SaveStore.inventory(store.user).files
+            XCTAssertThrowsError(try store.exportCheckpoint(active, to: exports))
+            XCTAssertThrowsError(try store.backupCheckpoint(active))
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: exports.path).isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory.path))
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+        }
+    }
+
+    func testExportDestinationsCannotPolluteLiveSavesOrArchivesThroughSymlinks() throws {
+        try fixture { store, root in
+            try store.locked { }
+            try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            let alias = root.appendingPathComponent("alias")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: store.user)
+            let before = try SaveStore.inventory(store.user).files
+            for parent in [store.user, store.user.appendingPathComponent("savedata"), store.directory, alias] {
+                XCTAssertThrowsError(try store.locked { try store.exportCurrentGameSave(to: parent) })
+            }
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).isEmpty)
+        }
+    }
+
+    func testMetadataRejectsSymlinkAndOversizedManifestWithoutWriting() throws {
+        try fixture { store, root in
+            try store.seedCheckpoint()
+            let checkpoint = try XCTUnwrap(try store.checkpoints().first)
+            let file = try store.checkpointFolder(checkpoint).appendingPathComponent("manifest.json")
+            try Data(repeating: 32, count: 1024 * 1024 + 1).write(to: file)
+            let before = try SaveStore.inventory(store.user).files
+            XCTAssertThrowsError(try store.checkpoints())
+            XCTAssertEqual(try SaveStore.inventory(store.user).files, before)
+            try FileManager.default.removeItem(at: file)
+            let outside = root.appendingPathComponent("outside.json")
+            try Data("{}".utf8).write(to: outside)
+            try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+            XCTAssertThrowsError(try store.checkpoints())
+            try FileManager.default.createSymbolicLink(at: store.user.appendingPathComponent("savedata/link"), withDestinationURL: root)
+            XCTAssertThrowsError(try store.currentGameSave())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory.path))
+        }
+    }
+
+    func testUnpublishedCheckpointDoesNotHideTheActiveCheckpoint() throws {
+        try fixture { store, _ in
+            try store.seedCheckpoint()
+            let active = try XCTUnwrap(try store.checkpoints().first)
+            let unfinished = store.user.appendingPathComponent("quicksaves/CUSA00207/save-" + String(repeating: "c", count: 32))
+            try FileManager.default.createDirectory(at: unfinished, withIntermediateDirectories: true)
+            XCTAssertEqual(try store.checkpoints().map(\.id), [active.id])
+            XCTAssertEqual(try store.checkpoints().first?.current, true)
+        }
+    }
+
 }
