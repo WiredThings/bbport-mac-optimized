@@ -5,7 +5,7 @@
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current public build is **0.2.45**. This branch contains the **0.2.46 candidate**, with save retention implemented and iCloud upload/UI acceptance pending the host account and screen unlock. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
+The current build is **0.2.46**, with bounded save history and optional iCloud Drive syncing of latest normal saves. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
 
 Version 0.2.36 defaults new configurations to the game's original model detail and warns
 about forced low LOD, which can hide walls or floors. If an existing configuration has

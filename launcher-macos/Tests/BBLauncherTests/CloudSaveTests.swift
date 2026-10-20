@@ -215,6 +215,25 @@ final class CloudSaveTests: XCTestCase {
             XCTAssertTrue(uploaded, "iCloud did not confirm all synthetic files uploaded within the bounded window")
             XCTAssertTrue(try sync(store, root).conflicts.isEmpty)
             XCTAssertEqual(try contents(store), before)
+            // Exercise replacement of this device's already uploaded package,
+            // not just the first publication. The live save remains a fixture.
+            try progress("synthetic progress after play", store)
+            let updated = try contents(store)
+            XCTAssertNotEqual(updated, before)
+            _ = try sync(store, root)
+            let replacementDeadline = Date().addingTimeInterval(25)
+            repeat {
+                uploaded = try uploadFiles.allSatisfy { file in
+                    var fresh = file; fresh.removeAllCachedResourceValues()
+                    return try fresh.resourceValues(forKeys: [.ubiquitousItemIsUploadedKey]).ubiquitousItemIsUploaded == true
+                }
+                if !uploaded { Thread.sleep(forTimeInterval: 0.5) }
+            } while !uploaded && Date() < replacementDeadline
+            XCTAssertTrue(uploaded, "iCloud did not confirm the replacement package uploaded")
+            XCTAssertEqual(try SaveStore.normalInventory(package.appendingPathComponent("savedata")).files, updated)
+            XCTAssertTrue(try sync(store, root).conflicts.isEmpty)
+            XCTAssertEqual(try contents(store), updated)
+            XCTAssertEqual(try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "bbechoessave" }.count, 1)
         }
     }
 
