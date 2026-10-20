@@ -367,6 +367,9 @@ struct QuicksaveSection: View {
             Toggle(L10n.key("Enable quicksave / quickload"), isOn: $model.prefs.quicksave)
             Button(L10n.key("Save Manager…")) { openWindow(id: "saves") }
             if !model.saveStatus.isEmpty { Text(model.saveStatus).font(.caption).textSelection(.enabled) }
+            if model.prefs.cloudSaves && !model.cloudSaveStatus.isEmpty {
+                Text(model.cloudSaveStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         } header: {
             Text(L10n.key("Save & load"))
         } footer: {

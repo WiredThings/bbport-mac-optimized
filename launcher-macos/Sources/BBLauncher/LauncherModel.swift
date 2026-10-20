@@ -51,6 +51,9 @@ final class LauncherModel: ObservableObject {
     @Published var currentGameSave: SaveSummary?
     @Published var saveRefreshing = false
     @Published var saveReadError = ""
+    @Published var saveCleanupStatus = ""
+    @Published var cloudSaveStatus = ""
+    @Published var cloudSaveConflicts: [CloudSaveVersion] = []
     var saveRefreshID = UUID()
 
     @Published var prefs: LauncherPrefs {
@@ -120,7 +123,9 @@ final class LauncherModel: ObservableObject {
         synchronizeOfflineRestore()
         let store = saveStore, online = prefs.online
         let legacy = dataURL.appendingPathComponent("online-user")
-        runSaveOperation { try store.prepareMode(online: online, legacy: legacy) }
+        runSaveOperation({ try store.prepareMode(online: online, legacy: legacy) }) { [weak self] in
+            if self?.prefs.cloudSaves == true { self?.synchronizeCloudSaves() }
+        }
     }
 
     // MARK: - Paths
@@ -633,6 +638,13 @@ final class LauncherModel: ObservableObject {
 
     private func startGame() {
         guard !isRunning, !saveBusy else { return }
+        if prefs.cloudSaves {
+            synchronizeCloudSaves { [weak self] in self?.prepareGameSaves() }
+        } else { prepareGameSaves() }
+    }
+
+    private func prepareGameSaves() {
+        guard !isRunning, !saveBusy else { return }
         synchronizeOfflineRestore()
         let store = saveStore, online = prefs.online
         let legacy = dataURL.appendingPathComponent("online-user")
@@ -772,6 +784,8 @@ final class LauncherModel: ObservableObject {
         appendLines(["", bySignal ? "— the game was stopped (signal \(status)) —" : "— the game exited (code \(status)) —"])
         // Pick up changes made in the in-game menu (it saves bbport.ini).
         reloadIni()
+        if prefs.cloudSaves { synchronizeCloudSaves() }
+        else { cleanSaveHistory() }
         return true
     }
 

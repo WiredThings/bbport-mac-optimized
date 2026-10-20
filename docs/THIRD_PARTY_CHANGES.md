@@ -216,3 +216,7 @@ Local runtime fix: replace writable-mount-only autoload cancellation with the si
 ## Complete Save Manager (0.2.45)
 
 Local SwiftUI/SaveStore work separates live game saves and active checkpoints from archive history, older checkpoints and pre-F3 backups. Adds metadata-only background refresh, individual backup and verified export, complete normal-save wrappers, helper-compatible checkpoint exports, unique atomic publication and destination checks. Viewing/exporting does not change active pointers or formal saves. Existing lock, offline restore, network and F3 policies are retained. No new third-party patch or game resource is bundled.
+
+### 0.2.46 — bounded save history and optional iCloud Drive
+
+Original launcher work adds 3/3/5 automatic history retention, explicit pinning, content-based automatic archive deduplication, and coordinated normal-save syncing through a user-selected iCloud Drive folder. Per-device latest packages and vector clocks preserve concurrent offline progress; restore uses existing verified backup/offline/F3 rules. No third-party mod, runtime host or renderer binary is changed. See [SAVE_SYNC.md](SAVE_SYNC.md) and the localized user guides.

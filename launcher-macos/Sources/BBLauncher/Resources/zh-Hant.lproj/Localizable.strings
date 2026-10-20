@@ -490,3 +490,34 @@
 "Saves changed. Refresh and try again." = "存檔已變更，請重新整理後再試。";
 "Exported to %@" = "已匯出至 %@";
 "Save folder not found. Refresh and try again." = "存檔資料夾不存在，請重新整理後再試。";
+
+/* Bounded save history and optional iCloud Drive sync. */
+"Keep" = "保留";
+"Clean up now" = "立即清理";
+"Keep 3 old checkpoints, 3 pre-quickload copies and 5 automatic archives. Manual and kept backups stay." = "保留最近 3 份舊檢查點、3 份恢復前副本和 5 份自動封存。手動備份和標記保留的項目不清理。";
+"Reclaimed %@ of old automatic saves" = "已清理 %@ 的舊自動存檔";
+"iCloud Drive save sync" = "iCloud Drive 存檔同步";
+"Sync normal saves" = "同步正常存檔";
+"Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac." = "啟動遊戲前、退出遊戲後同步正常存檔。快速存檔和歷史備份只留在本機。";
+"Choose iCloud folder…" = "選擇 iCloud 資料夾⋯";
+"Choose a folder in iCloud Drive" = "請選擇 iCloud Drive 中的資料夾";
+"Sync now" = "立即同步";
+"Checking iCloud saves…" = "正在檢查 iCloud 存檔⋯";
+"Different save progress found. Choose which progress to continue." = "發現不同的存檔進度，請選擇要繼續的進度。";
+"Both progress versions are preserved. Choose one to continue; the other devices are not overwritten." = "兩份進度均已保留。選擇後不會直接覆寫其他裝置的副本。";
+"Use this progress" = "使用此進度";
+"This Mac (current saves)" = "本機目前進度";
+"Saved to iCloud Drive. macOS handles uploading." = "已寫入 iCloud Drive，上傳由 macOS 完成。";
+"Save copies match." = "存檔副本一致。";
+"iCloud Drive is not ready. Try again later." = "iCloud Drive 尚未就緒，請稍後重試。";
+"iCloud Drive has an unresolved file conflict. Both saves were preserved." = "iCloud Drive 有未解決的檔案衝突，兩份存檔均已保留。";
+"iCloud save is downloading. Try again after it finishes." = "iCloud 存檔正在下載，完成後請重試。";
+"Choose an iCloud folder outside local saves and backups." = "請選擇本機存檔和備份目錄以外的 iCloud 資料夾。";
+"The selected sync folder is not a Blood Echoes save folder." = "選擇的同步目錄不是 Blood Echoes 存檔資料夾。";
+"Invalid iCloud save package." = "iCloud 存檔套件無效。";
+"Invalid iCloud save state." = "iCloud 同步記錄無效。";
+"iCloud save is incomplete or changed. Local saves were preserved." = "iCloud 存檔不完整或已變更，本機存檔未改動。";
+"Too many iCloud save devices. Local saves were preserved." = "iCloud 存檔裝置數量過多，本機存檔未改動。";
+"Could not update iCloud saves. The previous copy was preserved." = "無法更新 iCloud 存檔，原有副本已保留。";
+"Before iCloud restore" = "iCloud 恢復前備份";
+"iCloud conflict backup" = "iCloud 衝突進度備份";

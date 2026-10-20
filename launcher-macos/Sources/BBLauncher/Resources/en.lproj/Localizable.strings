@@ -490,3 +490,34 @@
 "Saves changed. Refresh and try again." = "Saves changed. Refresh and try again.";
 "Exported to %@" = "Exported to %@";
 "Save folder not found. Refresh and try again." = "Save folder not found. Refresh and try again.";
+
+/* Bounded save history and optional iCloud Drive sync. */
+"Keep" = "Keep";
+"Clean up now" = "Clean up now";
+"Keep 3 old checkpoints, 3 pre-quickload copies and 5 automatic archives. Manual and kept backups stay." = "Keep 3 old checkpoints, 3 pre-quickload copies and 5 automatic archives. Manual and kept backups stay.";
+"Reclaimed %@ of old automatic saves" = "Removed %@ of old automatic saves (logical size)";
+"iCloud Drive save sync" = "iCloud Drive save sync";
+"Sync normal saves" = "Sync normal saves";
+"Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac." = "Only normal saves sync, before play and after the game exits. Quick checkpoints and backups stay on this Mac.";
+"Choose iCloud folder…" = "Choose iCloud folder…";
+"Choose a folder in iCloud Drive" = "Choose a folder in iCloud Drive";
+"Sync now" = "Sync now";
+"Checking iCloud saves…" = "Checking iCloud saves…";
+"Different save progress found. Choose which progress to continue." = "Different save progress found. Choose which progress to continue.";
+"Both progress versions are preserved. Choose one to continue; the other devices are not overwritten." = "Both progress versions are preserved. Choose one to continue; the other devices are not overwritten.";
+"Use this progress" = "Use this progress";
+"This Mac (current saves)" = "This Mac (current saves)";
+"Saved to iCloud Drive. macOS handles uploading." = "Saved to iCloud Drive. macOS handles uploading.";
+"Save copies match." = "Save copies match.";
+"iCloud Drive is not ready. Try again later." = "iCloud Drive is not ready. Try again later.";
+"iCloud Drive has an unresolved file conflict. Both saves were preserved." = "iCloud Drive has an unresolved file conflict. Both saves were preserved.";
+"iCloud save is downloading. Try again after it finishes." = "iCloud save is downloading. Try again after it finishes.";
+"Choose an iCloud folder outside local saves and backups." = "Choose an iCloud folder outside local saves and backups.";
+"The selected sync folder is not a Blood Echoes save folder." = "The selected sync folder is not a Blood Echoes save folder.";
+"Invalid iCloud save package." = "Invalid iCloud save package.";
+"Invalid iCloud save state." = "Invalid iCloud save state.";
+"iCloud save is incomplete or changed. Local saves were preserved." = "iCloud save is incomplete or changed. Local saves were preserved.";
+"Too many iCloud save devices. Local saves were preserved." = "Too many iCloud save devices. Local saves were preserved.";
+"Could not update iCloud saves. The previous copy was preserved." = "Could not update iCloud saves. The previous copy was preserved.";
+"Before iCloud restore" = "Before iCloud restore";
+"iCloud conflict backup" = "iCloud conflict backup";

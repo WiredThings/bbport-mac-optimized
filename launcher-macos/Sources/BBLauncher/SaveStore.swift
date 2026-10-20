@@ -10,6 +10,7 @@ struct SaveBackup: Codable, Identifiable, Equatable, Sendable {
     let kinds: [String]
     let files: [String: String]
     let bytes: Int64
+    var kept: Bool? = nil
 }
 
 struct QuickCheckpoint: Identifiable, Sendable {
@@ -18,6 +19,7 @@ struct QuickCheckpoint: Identifiable, Sendable {
     let created: Date
     let current: Bool
     let bytes: Int64
+    var kept = false
     var beforeRestore: Bool { id.hasPrefix("before-load-") }
     var identity: String { title + "/" + id }
 }
@@ -213,7 +215,11 @@ struct SaveStore: Sendable {
         guard fm.fileExists(atPath: directory.path) else { return [] }
         return try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { UUID(uuidString: $0.lastPathComponent) != nil }
-            .compactMap { try? JSONDecoder().decode(SaveBackup.self, from: Data(contentsOf: $0.appendingPathComponent("backup.json"))) }
+            .compactMap { folder -> SaveBackup? in
+                guard var record = try? JSONDecoder().decode(SaveBackup.self, from: Data(contentsOf: folder.appendingPathComponent("backup.json"))) else { return nil }
+                record.kept = fm.fileExists(atPath: folder.appendingPathComponent(".keep").path)
+                return record
+            }
             .sorted { $0.created > $1.created }
     }
 
@@ -221,6 +227,15 @@ struct SaveStore: Sendable {
     func backup(label: String, source: URL? = nil, kinds: [String] = ["savedata"]) throws -> SaveBackup {
         let source = source ?? user
         guard kinds.allSatisfy({ ["savedata", "quicksaves"].contains($0) }) else { throw fail("Invalid save backup.") }
+        if Self.automaticBackupLabels.contains(label),
+           let previous = try backups().first(where: { $0.label == label && Set($0.kinds) == Set(kinds) }),
+           let payload = try? verify(previous),
+           try backupContentKey(source, kinds: kinds) == backupContentKey(payload, kinds: kinds) {
+            let refreshed = SaveBackup(id: previous.id, label: previous.label, created: Date(), kinds: previous.kinds, files: previous.files, bytes: previous.bytes, kept: previous.kept)
+            try JSONEncoder().encode(refreshed).write(to: try backupFolder(previous).appendingPathComponent("backup.json"), options: .atomic)
+            if previous.files.keys.contains(where: { $0.hasSuffix("/.keep") }) { try setKept(true, backup: refreshed) }
+            return refreshed
+        }
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let id = UUID().uuidString
         let stage = directory.appendingPathComponent(".backup-" + id)
@@ -239,6 +254,9 @@ struct SaveStore: Sendable {
         let inventory = try Self.inventory(payload)
         let record = SaveBackup(id: id, label: label, created: Date(), kinds: used, files: inventory.files, bytes: inventory.bytes)
         try JSONEncoder().encode(record).write(to: stage.appendingPathComponent("backup.json"), options: .atomic)
+        if inventory.files.keys.contains(where: { $0.hasSuffix("/.keep") }) {
+            try Data("Blood Echoes keep v1\n".utf8).write(to: stage.appendingPathComponent(".keep"), options: .atomic)
+        }
         try fm.moveItem(at: stage, to: directory.appendingPathComponent(id))
         return record
     }
@@ -256,6 +274,34 @@ struct SaveStore: Sendable {
     private func install(_ source: URL, kind: String) throws {
         guard ["savedata", "quicksaves"].contains(kind) else { throw fail("Invalid save backup.") }
         try atomicInstall(source, live: user.appendingPathComponent(kind))
+    }
+
+    /// Cloud imports follow the same whole-save, offline-restore contract as UI
+    /// restores. Conflict copies are manual/protected history, not auto retention.
+    func restoreCloudNormal(_ source: URL, conflict: Bool) throws {
+        _ = try Self.normalInventory(source)
+        if try currentGameSave() != nil {
+            _ = try backup(label: conflict ? "iCloud conflict backup" : "Before iCloud restore", kinds: ["savedata", "quicksaves"])
+        }
+        try markOfflineRestore()
+        try install(source, kind: "savedata")
+        try replaceCheckpointsWithCurrent()
+    }
+
+    static func normalInventory(_ source: URL) throws -> (files: [String: String], bytes: Int64) {
+        let value = try inventory(source)
+        let titles = Set(value.files.keys.compactMap { path -> String? in
+            let parts = path.split(separator: "/")
+            return parts.count > 3 && parts[0] == "1" && String(parts[1]).range(of: "^CUSA[0-9]{5}$", options: .regularExpression) != nil ? String(parts[1]) : nil
+        })
+        guard !titles.isEmpty, try titles.allSatisfy({ title in
+            try ["userdata0000", "userdata0010"].allSatisfy {
+                let path = "1/" + title + "/SPRJ0005/" + $0
+                guard value.files[path] != nil else { return false }
+                return (try source.appendingPathComponent(path).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0
+            }
+        }) else { throw OnlineError(message: L10n.key("Save files are incomplete or unsupported.")) }
+        return value
     }
 
     private func atomicInstall(_ source: URL, live: URL) throws {
@@ -299,7 +345,7 @@ struct SaveStore: Sendable {
                 result.append(QuickCheckpoint(id: folder.lastPathComponent, title: title.lastPathComponent,
                                               created: Date(timeIntervalSince1970: created),
                                               current: folder.lastPathComponent.hasPrefix("save-") && pointer == folder.lastPathComponent,
-                                              bytes: data.bytes))
+                                              bytes: data.bytes, kept: fm.fileExists(atPath: folder.appendingPathComponent(".keep").path)))
             }
         }
         return result.sorted { $0.created > $1.created }
@@ -320,7 +366,7 @@ struct SaveStore: Sendable {
         try JSONSerialization.data(withJSONObject: ["version": 1]).write(to: offlineRestoreMarker, options: .atomic)
     }
 
-    private func verifiedCheckpoint(_ checkpoint: QuickCheckpoint) throws -> URL {
+    func verifiedCheckpoint(_ checkpoint: QuickCheckpoint) throws -> URL {
         guard try checkpoints().contains(where: { $0.id == checkpoint.id && $0.title == checkpoint.title && (!checkpoint.current || $0.current) }) else { throw fail("Saves changed. Refresh and try again.") }
         let folder = try checkpointFolder(checkpoint)
         let manifest = try readSaveJSON(folder.appendingPathComponent("manifest.json"))
@@ -397,7 +443,7 @@ struct SaveStore: Sendable {
     }
 
     /// Preserve the existing helper's crash-recovery contract before clearing any pointers.
-    private func recoverInterruptedQuickload() throws {
+    func recoverInterruptedQuickload() throws {
         let quick = user.appendingPathComponent("quicksaves")
         guard fm.fileExists(atPath: quick.path) else { return }
         guard try quick.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw fail("Invalid save backup.") }

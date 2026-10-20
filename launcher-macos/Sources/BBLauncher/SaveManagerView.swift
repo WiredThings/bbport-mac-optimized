@@ -13,20 +13,45 @@ extension LauncherModel {
         guard !isRunning, !saveBusy else { return }
         saveRefreshID = UUID(); saveRefreshing = false
         saveBusy = true; saveStatus = L10n.key("Working with saves…")
+        let store = saveStore
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result { try operation() }
+            // Retention failures never turn a committed backup/restore into a
+            // reported failure or cancel a game launch. Preserve and show them.
+            let cleanup: Result<SaveCleanup, Error>?
+            if case .success = result { cleanup = Result { try store.locked { try store.pruneHistory() } } }
+            else { cleanup = nil }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.saveBusy = false
                 switch result {
                 case .success:
                     self.saveStatus = L10n.key("Saves verified")
+                    if let cleanup {
+                        switch cleanup {
+                        case .success(let value):
+                            self.saveCleanupStatus = value.items == 0 ? "" : L10n.format("Reclaimed %@ of old automatic saves", ByteCountFormatter.string(fromByteCount: value.bytes, countStyle: .file))
+                        case .failure(let error): self.saveCleanupStatus = error.localizedDescription
+                        }
+                    }
                     self.refreshSaveBackups()
                     then?()
                 case .failure(let error): self.saveStatus = error.localizedDescription
                 }
             }
         }
+    }
+
+    func cleanSaveHistory() { runSaveOperation({}) }
+
+    func keepCheckpoint(_ checkpoint: QuickCheckpoint, _ keep: Bool) {
+        let store = saveStore
+        runSaveOperation { try store.locked { try store.setKept(keep, checkpoint: checkpoint) } }
+    }
+
+    func keepBackup(_ backup: SaveBackup, _ keep: Bool) {
+        let store = saveStore
+        runSaveOperation { try store.locked { try store.setKept(keep, backup: backup) } }
     }
 
     func refreshSaveBackups() {
@@ -230,11 +255,18 @@ struct SaveManagerView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading).padding(8)
                         }
+                        CloudSaveSettings().environmentObject(model)
                     }
                 }
             } else {
                 Text(L10n.key("Restoring backs up current saves and switches to offline play."))
                     .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text(L10n.key("Keep 3 old checkpoints, 3 pre-quickload copies and 5 automatic archives. Manual and kept backups stay."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(L10n.key("Clean up now")) { model.cleanSaveHistory() }.disabled(!canChange)
+                }
                 List {
                     Section(L10n.key("Archive backups")) {
                         if model.saveBackups.isEmpty { Text(L10n.key("No archived backups.")).foregroundStyle(.secondary) }
@@ -255,6 +287,9 @@ struct SaveManagerView: View {
                                             Button(L10n.key(kind == "savedata" ? "Game saves" : "Quick checkpoints")) { model.restoreBackup(backup, kind: kind) }
                                         }
                                     }.disabled(!canChange).fixedSize()
+                                    Spacer()
+                                    Toggle(L10n.key("Keep"), isOn: Binding(get: { backup.kept == true }, set: { model.keepBackup(backup, $0) }))
+                                        .toggleStyle(.checkbox).disabled(!canChange)
                                 }
                             }.padding(.vertical, 6)
                         }
@@ -277,6 +312,7 @@ struct SaveManagerView: View {
             Text(model.saveReadError.isEmpty ? model.saveStatus : model.saveReadError)
                 .font(.caption).foregroundStyle(model.saveReadError.isEmpty ? Color.secondary : Color.red)
                 .textSelection(.enabled).lineLimit(2)
+            if !model.saveCleanupStatus.isEmpty { Text(model.saveCleanupStatus).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         }
         .padding(20).frame(minWidth: 740, minHeight: 540)
         .onAppear { model.refreshSaveBackups() }
@@ -311,6 +347,9 @@ struct SaveManagerView: View {
                 Button(L10n.key("Back up")) { model.backupQuickCheckpoint(checkpoint) }.disabled(!canChange)
                 Button(L10n.key("Export…")) { model.exportQuickCheckpoint(checkpoint) }.disabled(!canChange)
                 Button(L10n.key("Restore…")) { model.restoreQuickCheckpoint(checkpoint) }.disabled(!canChange)
+                Spacer()
+                Toggle(L10n.key("Keep"), isOn: Binding(get: { checkpoint.kept }, set: { model.keepCheckpoint(checkpoint, $0) }))
+                    .toggleStyle(.checkbox).disabled(!canChange)
             }
         }
     }

@@ -167,6 +167,8 @@ struct LauncherPrefs: Equatable {
     /// Branch for Update; empty keeps the current one.
     var branch = ""
     var userFolder = ""
+    var cloudSaves = false
+    var cloudSaveFolder = ""
     var modsFolder = ""
     var modsEnabled = true
     var patchesFolder = ""
@@ -218,6 +220,8 @@ struct LauncherPrefs: Equatable {
         static let repoOverride = "repoOverride"
         static let branch = "branch"
         static let userFolder = "userFolder"
+        static let cloudSaves = "cloudSaves"
+        static let cloudSaveFolder = "cloudSaveFolder"
         static let modsFolder = "modsFolder"
         static let modsEnabled = "modsEnabled"
         static let patchesFolder = "patchesFolder"
@@ -265,6 +269,8 @@ struct LauncherPrefs: Equatable {
         p.repoOverride = text(Key.repoOverride, p.repoOverride)
         p.branch = text(Key.branch, p.branch)
         p.userFolder = text(Key.userFolder, p.userFolder)
+        p.cloudSaves = flag(Key.cloudSaves, p.cloudSaves)
+        p.cloudSaveFolder = text(Key.cloudSaveFolder, p.cloudSaveFolder)
         p.modsFolder = text(Key.modsFolder, p.modsFolder)
         p.modsEnabled = flag(Key.modsEnabled, p.modsEnabled)
         p.patchesFolder = text(Key.patchesFolder, p.patchesFolder)
@@ -356,6 +362,8 @@ struct LauncherPrefs: Equatable {
         defaults.set(repoOverride, forKey: Key.repoOverride)
         defaults.set(branch, forKey: Key.branch)
         defaults.set(userFolder, forKey: Key.userFolder)
+        defaults.set(cloudSaves, forKey: Key.cloudSaves)
+        defaults.set(cloudSaveFolder, forKey: Key.cloudSaveFolder)
         defaults.set(modsFolder, forKey: Key.modsFolder)
         defaults.set(modsEnabled, forKey: Key.modsEnabled)
         defaults.set(patchesFolder, forKey: Key.patchesFolder)
