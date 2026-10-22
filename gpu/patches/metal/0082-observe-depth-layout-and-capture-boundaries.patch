@@ -1,0 +1,150 @@
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -351,7 +351,11 @@
+ void FrameCapture::FrameBoundary(u64 frame) {
+     if(!NativeMode())return;
+     const auto current=state.load(std::memory_order_relaxed);
+-    if(current!=Idle && native_boundary_drain)native_boundary_drain(native_boundary_owner);
++    if(current!=Idle && native_boundary_drain) {
++        if(current==Recording) Native(std::format("{{\"op\":\"capture_drain_begin\",\"boundary_frame\":{}}}",frame));
++        native_boundary_drain(native_boundary_owner);
++        if(current==Recording) Native(std::format("{{\"op\":\"capture_drain_end\",\"boundary_frame\":{}}}",frame));
++    }
+     if(current==Recording){
+         RecordCommandReadCounts();
+         state.store(Idle,std::memory_order_release);
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pass_continuation.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pass_continuation.h
+@@ -10,6 +10,29 @@
+ // attachment root, including parent views of the exact subresource.
+ bool TexturesExcludeAttachments(const VideoCore::RenderState&, std::span<void* const>);
+ bool Enabled();
++
++// Diagnostic structural classification only. A match does not authorize continuing:
++// resource feedback, previous texture bindings, barriers and query state are separate.
++inline bool DepthStencilLayoutOnly(const VideoCore::RenderState& old,
++                                   const VideoCore::RenderState& next) {
++    const auto known = [](vk::ImageLayout layout) {
++        return layout == vk::ImageLayout::eDepthStencilAttachmentOptimal ||
++               layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
++               layout == vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal ||
++               layout == vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal;
++    };
++    const auto& a = old.depth_stencil_attachment;
++    const auto& b = next.depth_stencil_attachment;
++    if (!a.image_view || !a.has_depth || !a.has_stencil ||
++        a.depth_clear || a.stencil_clear || b.depth_clear || b.stencil_clear ||
++        a.image_layout == b.image_layout || !known(a.image_layout) || !known(b.image_layout))
++        return false;
++    for (const auto& color : old.color_attachments) if (color.is_clear) return false;
++    for (const auto& color : next.color_attachments) if (color.is_clear) return false;
++    auto normalized = next;
++    normalized.depth_stencil_attachment.image_layout = a.image_layout;
++    return old == normalized;
++}
+ 
+ inline bool HasClears(const VideoCore::RenderState& state) {
+     for (const auto& attachment : state.color_attachments) {
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1078,6 +1078,15 @@
+                 "{{\"op\":\"render_pass_state_split\",\"queue\":{},\"observation\":{},\"changes\":{},\"old_to_load_matches\":{},\"old_colors\":{},\"new_colors\":{},\"width\":{},\"height\":{},\"layers\":{},\"samples\":{}}}",
+                 uintptr_t(&scheduler),observation,changes,WithoutClears(*old)==state,old->num_color_attachments,
+                 state.num_color_attachments,state.width,state.height,state.num_layers,r.sample_count));
++            if (changes == 64 && PassContinuation::DepthStencilLayoutOnly(*old, state)) {
++                const bool excludes = PassContinuation::TexturesExcludeAttachments(state,
++                    std::span<void* const>(impl->textures.data(), impl->num_textures));
++                VideoCore::FrameCapture::Native(std::format(
++                    "{{\"op\":\"depth_layout_candidate\",\"queue\":{},\"observation\":{},\"old_layout\":{},\"new_layout\":{},\"bound_only\":{},\"current_textures_exclude\":{},\"blockers\":{}}}",
++                    uintptr_t(&scheduler), observation, unsigned(old->depth_stencil_attachment.image_layout),
++                    unsigned(state.depth_stencil_attachment.image_layout), bound_only, excludes,
++                    scheduler.ContinuationBlockers()));
++            }
+             if(!(changes&15)) {
+                 const auto slot_state=[&](int slot,const RenderAttachment& a,const RenderAttachment& b) {
+                     if(a.image_layout==b.image_layout && a.is_clear==b.is_clear && a.clear_value==b.clear_value)return;
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -106,6 +106,10 @@
+     /// The open compute encoder, or a new one (dispatches of one encoder run in order). `label`
+     /// names a new encoder with BB_PASS_LABELS=1.
+     void ComputeEncoder(const char* label = nullptr, bool bound_only = false);
++    // Recording-thread diagnostic snapshot; no joins, fence changes or resource accesses.
++    // Bits: inactive1, no-state2, recorded-barrier4, pending-fence8, hoist16,
++    // render-tail32, pending-clear64, folded-clear128. Zero is NOT merge permission.
++    u32 ContinuationBlockers() const noexcept;
+     bool CanInlineBufferUpdate() const noexcept;
+     bool InlineBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes);
+     /// The open blit encoder, or a new one.
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -454,6 +454,14 @@
+     commands.BeginRecording();
+     commands.TrackConsumedClear(state, guest && bound_only);
+     commands_active = true;
++}
++
++u32 Scheduler::ContinuationBlockers() const noexcept {
++    return (!commands_active ? 1u : 0u) | (!OpenRenderState() ? 2u : 0u) |
++        (commands.HasBarrier() ? 4u : 0u) | (need_fence_wait ? 8u : 0u) |
++        ((hoisting || hoisted) ? 16u : 0u) |
++        ((render_tail_pending || running_render_tail) ? 32u : 0u) |
++        (impl->pending_clears ? 64u : 0u) | (impl->folded_clears ? 128u : 0u);
+ }
+ 
+ bool Scheduler::ContinueConsumedClear(const VideoCore::RenderState& next) {
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -63,6 +63,12 @@
+  FrameCapture::NativeWriteOrigin(1,192,FrameCapture::WriteOrigin::ConstantRam,998);
+  auto read=[&](unsigned frame){for(auto& e:std::filesystem::directory_iterator(root))if(e.path().extension()==".txt"){std::ifstream f(e.path());auto text=std::string(std::istreambuf_iterator<char>(f),{});if(text.find("\"frame\":"+std::to_string(frame)+",")!=std::string::npos)return text;}return std::string{};};
+  assert(drains==2);auto text=read(10);assert(text.find("\"op\":\"close\"")!=std::string::npos);assert(text.find("\"frame\":10")!=std::string::npos);assert(text.find("\"truncated\":false")!=std::string::npos);assert(text.find("\\u000a")!=std::string::npos);assert(text.find("\"queue\":123")!=std::string::npos);
++ const auto drain_begin=text.find("\"op\":\"capture_drain_begin\"");
++ const auto close=text.find("\"op\":\"close\"");
++ const auto drain_end=text.find("\"op\":\"capture_drain_end\"");
++ assert(drain_begin!=std::string::npos && drain_begin<close && close<drain_end);
++ assert(text.find("\"boundary_frame\":11",drain_begin)!=std::string::npos);
++ assert(text.find("\"op\":\"capture_drain_begin\"",drain_end)==std::string::npos);
+  assert(text.find("\"same_payload\":true,\"same_generation\":true")!=std::string::npos);
+  assert(text.find("\"version\":1,\"logical_stage\":7,\"shader\":0,\"write\":true,\"unknown\":false,\"source\":\"occlusion_snapshot\"")!=std::string::npos);
+  assert(text.find("\"packet\":\"dump_const_ram\",\"constant_offset\":768")!=std::string::npos);
+--- a/tests/test_mtl_pass_continuation.cpp
++++ b/tests/test_mtl_pass_continuation.cpp
+@@ -62,6 +62,37 @@
+     check(!ConsumedClearBecomesLoad(remembered, shadow), "later identical clear cannot continue");
+     auto invalid = old; invalid.color_attachments[0].is_clear = 2;
+     check(!ConsumedClearBecomesLoad(invalid, next), "unknown colour flags");
++    // The diagnostic must classify only the one requested depth/stencil layout field.
++    constexpr std::array layouts{vk::ImageLayout::eDepthStencilAttachmentOptimal,
++        vk::ImageLayout::eDepthStencilReadOnlyOptimal,
++        vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal,
++        vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal};
++    auto loaded = next;
++    for (auto from : layouts) for (auto to : layouts) {
++        auto a = loaded, b = loaded;
++        a.depth_stencil_attachment.image_layout = from;
++        b.depth_stencil_attachment.image_layout = to;
++        check(DepthStencilLayoutOnly(a, b) == (from != to), "all depth/stencil layout pairs");
++    }
++    auto a = loaded, b = loaded;
++    b.depth_stencil_attachment.image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
++    check(DepthStencilLayoutOnly(a, b), "diagnostic layout candidate");
++    for (unsigned byte = 0; byte < sizeof(RenderState); ++byte) {
++        const auto start = offsetof(RenderState, depth_stencil_attachment) +
++                           offsetof(VideoCore::RenderAttachment, image_layout);
++        if (byte >= start && byte < start + sizeof(vk::ImageLayout)) continue;
++        auto changed = b;
++        reinterpret_cast<unsigned char*>(&changed)[byte] ^= 1;
++        check(!DepthStencilLayoutOnly(a, changed), "any other changed state byte rejects");
++    }
++    for (auto unknown : {vk::ImageLayout::eGeneral, vk::ImageLayout::eDepthAttachmentOptimal,
++                        vk::ImageLayout::eUndefined}) {
++        auto changed = b; changed.depth_stencil_attachment.image_layout = unknown;
++        check(!DepthStencilLayoutOnly(a, changed), "unknown/partial plane layouts reject");
++    }
++    a.depth_stencil_attachment.has_stencil = false;
++    b.depth_stencil_attachment.has_stencil = false;
++    check(!DepthStencilLayoutOnly(a, b), "single-plane needs separate proof");
+     std::printf("Pass continuation state policy: %u checks, %u failures\n", checks, failures);
+     return failures ? 1 : 0;
+ }

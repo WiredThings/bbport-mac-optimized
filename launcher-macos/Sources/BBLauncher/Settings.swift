@@ -333,7 +333,7 @@ struct LauncherPrefs: Equatable {
         }
         // New controls also import an existing developer choice, even if the original
         // optimization dictionary already exists. A saved checkbox remains authoritative.
-        let laterControls: Set<String> = ["BB_TEXTURE_INVALID_RECLAIM", "BB_MTL_CONTINUE_CLEARS",
+        let laterControls: Set<String> = ["BB_TEXTURE_INVALID_RECLAIM", "BB_MTL_CONTINUE_CLEARS", "BB_MTL_DEPTH_LAYOUT",
             "BB_MTL_NATIVE_CLEAR_BATCH", "BB_MTL_MERGE_OVERLAY", "BB_MTL_FILL_UPDATES",
             "BB_LAYER_USE_CACHE", "BB_MTL_COPY_PAIR", "BB_MTL_RENDER_UPDATES"]
         for token in p.extraEnv.split(whereSeparator: { $0.isWhitespace }) {

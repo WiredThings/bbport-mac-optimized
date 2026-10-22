@@ -541,3 +541,6 @@
 
 "Preserve heap release history" = "Preserve heap release history";
 "Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit." = "Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit.";
+
+"Continue passes across depth/stencil layout changes" = "Continue passes across depth/stencil layout changes";
+"Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed." = "Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed.";

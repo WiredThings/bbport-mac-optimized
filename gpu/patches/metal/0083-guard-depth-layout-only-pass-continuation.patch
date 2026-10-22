@@ -1,0 +1,380 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -122,7 +122,8 @@
+         d.AddResident(buffer);
+     }
+     impl->drop_count = Impl::Drops();
+-    scheduler.SetVisibilityQuery([this](const void* descriptor) { return impl->Begin(descriptor); });
++    scheduler.SetVisibilityQuery([this](const void* descriptor) { return impl->Begin(descriptor); },
++        Scheduler::VisibilityMergePolicy::NativeDensity);
+     std::printf("Metal occlusion: counting visibility results, GPU-ordered snapshots, max-of-3 history; 224 KiB fixed buffers\n");
+ }
+ 
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pass_continuation.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pass_continuation.h
+@@ -2,6 +2,7 @@
+ #pragma once
+ 
+ #include <span>
++#include <cstdlib>
+ #include "video_core/render_state.h"
+ 
+ namespace Metal::PassContinuation {
+@@ -10,6 +11,15 @@
+ // attachment root, including parent views of the exact subresource.
+ bool TexturesExcludeAttachments(const VideoCore::RenderState&, std::span<void* const>);
+ bool Enabled();
++// Matches the native-density resolver: at/above PS4 dimensions its scale is1.
++// Never infer fractional fixed-point rounding equivalence from nonzero counts.
++inline bool QueryDensityIsAdditive(std::uint64_t width, std::uint64_t height) {
++    return width && height && width <= UINT64_MAX / height && width * height >= 1920ull * 1080;
++}
++inline bool DepthLayoutEnabled() {
++    static const bool enabled = [] { const char* flag = std::getenv("BB_MTL_DEPTH_LAYOUT"); return flag && flag[0] == '1'; }();
++    return enabled;
++}
+ 
+ // Diagnostic structural classification only. A match does not authorize continuing:
+ // resource feedback, previous texture bindings, barriers and query state are separate.
+@@ -32,6 +42,29 @@
+     auto normalized = next;
+     normalized.depth_stencil_attachment.image_layout = a.image_layout;
+     return old == normalized;
++}
++
++inline unsigned DepthStencilWriteMask(vk::ImageLayout layout) {
++    switch (layout) {
++    case vk::ImageLayout::eDepthStencilReadOnlyOptimal: return 0;
++    case vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal: return 1;
++    case vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal: return 2;
++    case vk::ImageLayout::eDepthStencilAttachmentOptimal: return 3;
++    default: return 4; // unknown, never admitted
++    }
++}
++inline bool DepthLayoutMayPromote(vk::ImageLayout layout) {
++    return DepthStencilWriteMask(layout) < 3;
++}
++inline bool DepthLayoutWritePromotion(const VideoCore::RenderState& old,
++                                     const VideoCore::RenderState& next) {
++    if (!DepthStencilLayoutOnly(old, next)) return false;
++    const unsigned a=DepthStencilWriteMask(old.depth_stencil_attachment.image_layout);
++    const unsigned b=DepthStencilWriteMask(next.depth_stencil_attachment.image_layout);
++    // Never merge write->readonly. A later draw in the readonly phase could start
++    // sampling the attachment, after the present draw's texture check has passed.
++    // Preserve the store/load boundary before every such possible reading phase.
++    return a<4 && b<4 && a!=b && !(a & ~b);
+ }
+ 
+ inline bool HasClears(const VideoCore::RenderState& state) {
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1042,6 +1042,13 @@
+         FitsOpenDepthPass(*open, state, pipeline.Render())) {
+         if(!bound_only)scheduler.RequireGuestRender();
+         return *open;
++    }
++    if (PassContinuation::DepthLayoutEnabled() && bound_only) {
++        if (const auto* open = scheduler.OpenRenderState(); open &&
++            PassContinuation::DepthStencilLayoutOnly(*open, state) &&
++            PassContinuation::TexturesExcludeAttachments(state,
++                std::span<void* const>(impl->textures.data(), impl->num_textures)) &&
++            scheduler.ContinueDepthLayout(state)) return state;
+     }
+     if (PassContinuation::Enabled() && bound_only) {
+         if (const auto* open = scheduler.OpenRenderState(); open &&
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
+@@ -76,6 +76,7 @@
+     void TrackConsumedClear(const VideoCore::RenderState&, bool bound_only);
+     void InvalidateConsumedClear() noexcept;
+     bool CanContinueConsumedClear() const noexcept;
++    bool CanContinueDepthLayout() const noexcept;
+     bool FragmentGuardEnabled() const noexcept;
+     void FragmentBuffer(void* native,u64 offset,u64 size);
+     void FragmentUnknown(unsigned reason);
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
+@@ -468,6 +468,7 @@
+     std::unique_ptr<FragmentAccessGuard> fragment_guard;
+     bool has_barrier = false;
+     bool consumed_clear_safe = false;
++    bool depth_layout_safe = false;
+     std::array<void*, 9> clear_roots{};
+     unsigned clear_root_count = 0;
+     const bool coalesce_barriers = [] {
+@@ -736,11 +737,21 @@
+     return impl->has_barrier;
+ }
+ void RenderList::TrackConsumedClear(const VideoCore::RenderState& state, bool bound_only) {
+-    impl->consumed_clear_safe = PassContinuation::Enabled() && bound_only &&
+-        PassContinuation::HasClears(state) &&
+-        PassContinuation::AttachmentRoots(state, impl->clear_roots, impl->clear_root_count);
+-}
+-void RenderList::InvalidateConsumedClear() noexcept { impl->consumed_clear_safe = false; }
++    const bool clears = PassContinuation::HasClears(state);
++    impl->consumed_clear_safe = PassContinuation::Enabled() && bound_only && clears;
++    const auto& ds = state.depth_stencil_attachment;
++    impl->depth_layout_safe = PassContinuation::DepthLayoutEnabled() && bound_only && !clears &&
++        ds.image_view && ds.has_depth && ds.has_stencil &&
++        PassContinuation::DepthLayoutMayPromote(ds.image_layout);
++    if ((impl->consumed_clear_safe || impl->depth_layout_safe) &&
++        !PassContinuation::AttachmentRoots(state, impl->clear_roots, impl->clear_root_count)) {
++        impl->consumed_clear_safe = impl->depth_layout_safe = false;
++    }
++}
++void RenderList::InvalidateConsumedClear() noexcept {
++    impl->consumed_clear_safe = impl->depth_layout_safe = false;
++}
++bool RenderList::CanContinueDepthLayout() const noexcept { return impl->depth_layout_safe; }
+ bool RenderList::CanContinueConsumedClear() const noexcept { return impl->consumed_clear_safe; }
+ bool RenderList::FragmentGuardEnabled() const noexcept {return bool(impl->fragment_guard);}
+ void RenderList::FragmentBuffer(void* native,u64 offset,u64 size) {
+@@ -880,14 +891,20 @@
+ }
+ 
+ void RenderList::SetTexture(Stage stage, void* texture, u32 index) {
+-    if (impl->consumed_clear_safe && !PassContinuation::Excludes(impl->clear_roots, impl->clear_root_count, texture))
+-        impl->consumed_clear_safe = false;
+     bool hit = false;
+     if (index < kMaxTextures) {
+         void*& slot = impl->stages[static_cast<size_t>(stage)].textures[index];
+         hit = slot == texture;
+         slot = texture;
+     }
++    // The existing binding filter resets for every pass; attachment roots remain
++    // exact across both continuations. An unchanged binding already passed this
++    // root check. Keep out-of-range and changed bindings conservative, and never
++    // restore validity after feedback even if that texture is later unbound.
++    if ((!hit || !PassContinuation::DepthLayoutEnabled()) &&
++        (impl->consumed_clear_safe || impl->depth_layout_safe) &&
++        !PassContinuation::Excludes(impl->clear_roots, impl->clear_root_count, texture))
++        impl->consumed_clear_safe = impl->depth_layout_safe = false;
+     impl->IssueUnless(hit, CmdTexture{texture, index, stage});
+ }
+ 
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -77,7 +77,9 @@
+     // A physical guest render pass (also on the replay thread) may count its samples.
+     // Host copies, resolves and postprocessing are excluded. Replacing the hook joins replay.
+     using VisibilityQuery = std::function<std::pair<void*, u64>(const void*)>;
+-    void SetVisibilityQuery(VisibilityQuery query);
++    enum class VisibilityMergePolicy { Forbidden, Additive, NativeDensity };
++    void SetVisibilityQuery(VisibilityQuery query,
++                            VisibilityMergePolicy policy = VisibilityMergePolicy::Forbidden);
+ 
+     // Recording-thread host work after the current guest encoder, before the next encoder,
+     // barrier, hoist, query snapshot or submission. Never invoked on the replay thread.
+@@ -110,6 +112,9 @@
+     // Bits: inactive1, no-state2, recorded-barrier4, pending-fence8, hoist16,
+     // render-tail32, pending-clear64, folded-clear128. Zero is NOT merge permission.
+     u32 ContinuationBlockers() const noexcept;
++    // Opt-in. Same private attachment roots and no pending work; caller excludes
++    // current sampled textures. Query snapshots already close/join this scheduler.
++    bool ContinueDepthLayout(const VideoCore::RenderState& next);
+     bool CanInlineBufferUpdate() const noexcept;
+     bool InlineBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes);
+     /// The open blit encoder, or a new one.
+@@ -301,6 +306,7 @@
+     std::string held_label;       ///< BB_PASS_LABELS: the held pass's encoder label
+     VideoCore::SubmitFunc on_submit;
+     VisibilityQuery visibility_query;
++    VisibilityMergePolicy visibility_merge_policy = VisibilityMergePolicy::Forbidden;
+     std::function<void()> render_tail;
+     bool render_tail_pending = false, running_render_tail = false;
+     bool in_submit_callback = false; ///< the callback may record or flush again
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -292,9 +292,10 @@
+     render_tail = std::move(callback);
+ }
+ 
+-void Scheduler::SetVisibilityQuery(VisibilityQuery query) {
++void Scheduler::SetVisibilityQuery(VisibilityQuery query, VisibilityMergePolicy policy) {
+     EndEncoder(); // joins replay before the callback or its buffers can change
+     visibility_query = std::move(query);
++    visibility_merge_policy = policy;
+ }
+ 
+ void Scheduler::BeginEncoder(EncoderKind kind, const void* pass_descriptor, bool guest, bool bound_only) {
+@@ -462,6 +463,31 @@
+         ((hoisting || hoisted) ? 16u : 0u) |
+         ((render_tail_pending || running_render_tail) ? 32u : 0u) |
+         (impl->pending_clears ? 64u : 0u) | (impl->folded_clears ? 128u : 0u);
++}
++
++bool Scheduler::ContinueDepthLayout(const VideoCore::RenderState& next) {
++    if (!PassContinuation::DepthLayoutEnabled() || ContinuationBlockers() ||
++        !commands.CanContinueDepthLayout() ||
++        !PassContinuation::DepthLayoutWritePromotion(*render_state, next)) return false;
++    if (visibility_query) {
++        if (visibility_merge_policy == VisibilityMergePolicy::Forbidden) return false;
++        if (visibility_merge_policy == VisibilityMergePolicy::NativeDensity) {
++            auto texture = (__bridge id<MTLTexture>)reinterpret_cast<void*>(next.depth_stencil_attachment.image_view);
++            // At reduced dimensions the resolver rounds up EACH pass's scaled count.
++            // ceil(a*s)+ceil(b*s) need not equal ceil((a+b)*s). Retain the split there.
++            if (texture.pixelFormat != MTLPixelFormatDepth32Float_Stencil8 ||
++                !PassContinuation::QueryDensityIsAdditive(texture.width, texture.height)) return false;
++        }
++    }
++    // Metal's physical attachment descriptor has no Vulkan image-layout field.
++    // Keep the original encoder, depth/stencil contents, pending commands and query
++    // counter. Only the logical memo changes; fixed-function states still bind normally.
++    render_state = next;
++    if (!PassContinuation::DepthLayoutMayPromote(next.depth_stencil_attachment.image_layout))
++        commands.InvalidateConsumedClear();
++    if (VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format("{{\"op\":\"depth_layout_continued\",\"queue\":{}}}", uintptr_t(this)));
++    return true;
+ }
+ 
+ bool Scheduler::ContinueConsumedClear(const VideoCore::RenderState& next) {
+--- a/tests/test_mtl_pass_continuation.cpp
++++ b/tests/test_mtl_pass_continuation.cpp
+@@ -73,6 +73,9 @@
+         a.depth_stencil_attachment.image_layout = from;
+         b.depth_stencil_attachment.image_layout = to;
+         check(DepthStencilLayoutOnly(a, b) == (from != to), "all depth/stencil layout pairs");
++        const auto mask=[](vk::ImageLayout l) {return l==vk::ImageLayout::eDepthStencilReadOnlyOptimal?0u:l==vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal?1u:l==vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal?2u:3u;};
++        check(DepthLayoutWritePromotion(a,b)==(mask(from)!=mask(to)&&!(mask(from)&~mask(to))), "exact readonly-to-write promotion matrix");
++
+     }
+     auto a = loaded, b = loaded;
+     b.depth_stencil_attachment.image_layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+@@ -93,6 +96,13 @@
+     a.depth_stencil_attachment.has_stencil = false;
+     b.depth_stencil_attachment.has_stencil = false;
+     check(!DepthStencilLayoutOnly(a, b), "single-plane needs separate proof");
++    check(QueryDensityIsAdditive(1920,1080), "native query density additive");
++    check(QueryDensityIsAdditive(3840,2160), "larger query density additive");
++    check(!QueryDensityIsAdditive(1280,720), "fractional density must keep per-pass rounding");
++    check(!QueryDensityIsAdditive(0,1080), "empty query target rejects");
++    check(!QueryDensityIsAdditive(UINT64_MAX,1080), "query dimensions cannot overflow");
++    const auto scaled = [](std::uint64_t n) { return (n * 147456 + 65535) >> 16; };
++    check(scaled(1)+scaled(1) != scaled(2), "720p per-pass ceil counterexample");
+     std::printf("Pass continuation state policy: %u checks, %u failures\n", checks, failures);
+     return failures ? 1 : 0;
+ }
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -1087,9 +1087,120 @@
+     puts("consumed clear: depth continuity, identical fresh clear, alias feedback, shader metadata, tail, hoist, barrier and layout exclusions passed");
+ }
+ 
++
++static void TestDepthLayoutContinuation(Metal::Device& device) {
++    const bool enabled=Metal::PassContinuation::DepthLayoutEnabled();
++    auto gpu=device.GetImpl().device;
++    auto make=[&](MTLPixelFormat format) {
++        auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:4 height:4 mipmapped:NO];
++        d.storageMode=MTLStorageModePrivate;
++        d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead|MTLTextureUsagePixelFormatView;
++        return [gpu newTextureWithDescriptor:d];
++    };
++    auto color=make(MTLPixelFormatRGBA8Unorm), depth=make(MTLPixelFormatDepth32Float_Stencil8);
++    CHECK(color && depth);
++    VideoCore::RenderState state{};state.width=state.height=4;state.num_layers=1;state.num_color_attachments=1;
++    state.color_attachments[0].image_view=(uintptr_t)(__bridge void*)color;
++    state.color_attachments[0].image_layout=vk::ImageLayout::eColorAttachmentOptimal;
++    state.depth_stencil_attachment.image_view=(uintptr_t)(__bridge void*)depth;
++    state.depth_stencil_attachment.image_layout=vk::ImageLayout::eDepthStencilAttachmentOptimal;
++    state.depth_stencil_attachment.has_depth=state.depth_stencil_attachment.has_stencil=true;
++    auto next=state;next.depth_stencil_attachment.image_layout=vk::ImageLayout::eDepthStencilReadOnlyOptimal;
++    auto descriptor=[&](bool clear) {
++        auto p=[MTLRenderPassDescriptor renderPassDescriptor];
++        p.colorAttachments[0].texture=color;p.depthAttachment.texture=p.stencilAttachment.texture=depth;
++        p.colorAttachments[0].loadAction=p.depthAttachment.loadAction=p.stencilAttachment.loadAction=clear?MTLLoadActionClear:MTLLoadActionLoad;
++        p.colorAttachments[0].storeAction=p.depthAttachment.storeAction=p.stencilAttachment.storeAction=MTLStoreActionStore;
++        p.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,1);p.depthAttachment.clearDepth=1;p.stencilAttachment.clearStencil=0;
++        return p;
++    };
++    NSError* error=nil;
++    auto lib=[gpu newLibraryWithSource:@R"(
++#include <metal_stdlib>
++using namespace metal;
++struct V {float4 p [[position]];};
++vertex V vs(uint id [[vertex_id]], constant float& z [[buffer(0)]]) {
++ float2 p=float2((id<<1u)&2u,id&2u);return {float4(p*2-1,z,1)};
++}
++fragment float4 fs(constant float4& c [[buffer(0)]]) {return c;}
++)" options:nil error:&error];CHECK(lib);
++    auto pd=[MTLRenderPipelineDescriptor new];pd.vertexFunction=[lib newFunctionWithName:@"vs"];pd.fragmentFunction=[lib newFunctionWithName:@"fs"];
++    pd.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++    pd.depthAttachmentPixelFormat=pd.stencilAttachmentPixelFormat=MTLPixelFormatDepth32Float_Stencil8;
++    auto pso=[gpu newRenderPipelineStateWithDescriptor:pd error:&error];CHECK(pso);
++    auto dd=[MTLDepthStencilDescriptor new];dd.depthCompareFunction=MTLCompareFunctionLess;dd.depthWriteEnabled=YES;
++    dd.frontFaceStencil.stencilCompareFunction=dd.backFaceStencil.stencilCompareFunction=MTLCompareFunctionAlways;
++    dd.frontFaceStencil.depthStencilPassOperation=dd.backFaceStencil.depthStencilPassOperation=MTLStencilOperationReplace;
++    auto write=[gpu newDepthStencilStateWithDescriptor:dd];CHECK(write);
++    dd.depthWriteEnabled=NO;
++    dd.frontFaceStencil.stencilCompareFunction=dd.backFaceStencil.stencilCompareFunction=MTLCompareFunctionEqual;
++    dd.frontFaceStencil.depthStencilPassOperation=dd.backFaceStencil.depthStencilPassOperation=MTLStencilOperationKeep;
++    auto read=[gpu newDepthStencilStateWithDescriptor:dd];CHECK(read);
++    auto pixels=[gpu newBufferWithLength:1024 options:MTLResourceStorageModeShared];
++    auto queries=[gpu newBufferWithLength:32 options:MTLResourceStorageModeShared];
++    // Keep all GPU objects alive until the scheduler and its deferred operations are gone.
++    std::vector<id> retained{color,depth,lib,pso,write,read,pixels,queries};
++    Scheduler q{device,"depth layout pixel and visibility equivalence"};
++    auto p=descriptor(true);q.HostRenderEncoder((__bridge void*)p);q.Finish();
++    unsigned count=0;std::memset(queries.contents,0,32);
++    q.SetVisibilityQuery([&](const void*) -> std::pair<void*,u64> {CHECK(count<4);return {(__bridge void*)queries,(count++)*8};},Scheduler::VisibilityMergePolicy::Additive);
++    auto draw=[&](float z,std::array<float,4> c,bool writes,unsigned stencil=7) {
++        auto& list=q.Commands();list.SetRenderPipelineState((__bridge void*)pso);
++        list.SetDepthStencilState((__bridge void*)(writes?write:read));list.SetStencilReference(stencil,stencil);
++        Metal::RenderList::Viewport v{0,0,4,4,0,1};list.SetViewports(&v,1);
++        list.SetBytes(Metal::RenderList::Stage::Vertex,&z,sizeof(z),0);
++        list.SetBytes(Metal::RenderList::Stage::Fragment,c.data(),sizeof(c),0);
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++    };
++    p=descriptor(false);q.RenderEncoder((__bridge void*)p,state,true,true);draw(.5f,{1,0,0,1},true);
++    const auto change=[&](const auto& target) {
++        const bool allowed=Metal::PassContinuation::DepthLayoutWritePromotion(*q.OpenRenderState(),target);
++        bool merged=q.ContinueDepthLayout(target);CHECK(merged==(enabled&&allowed));
++        if(!merged){auto load=descriptor(false);q.RenderEncoder((__bridge void*)load,target,true,true);}
++        CHECK(q.IsRenderingWith(target));
++    };
++    change(next);draw(.25f,{0,0,1,1},false); // reads depth, writes no depth/stencil
++    change(state);draw(.75f,{0,1,0,1},true); // must fail depth
++    change(next);draw(.4f,{1,1,0,1},false); // succeeds only if readonly .25 did not change depth
++    draw(.1f,{1,0,1,1},false,3); // must fail stencil and retain yellow
++    q.BlitEncoder();[q.GetImpl().blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(4,4,1) toBuffer:pixels destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:1024];
++    q.Finish();CHECK(!q.HasFailed());CHECK(count==(enabled?3u:4u));
++    u64 total=0;for(unsigned i=0;i<count;++i)total+=static_cast<const u64*>(queries.contents)[i];CHECK(total==48);
++    auto bytes=static_cast<const unsigned char*>(pixels.contents);
++    for(unsigned y=0;y<4;++y)for(unsigned x=0;x<4;++x){auto c=bytes+y*256+x*4;CHECK(c[0]==255&&c[1]==255&&c[2]==0&&c[3]==255);}
++    q.SetVisibilityQuery({});
++    for(unsigned mode=0;mode<11;++mode) {
++        if(mode>=9) q.SetVisibilityQuery([&](const void*) -> std::pair<void*,u64> {
++            return {(__bridge void*)queries,0};
++        }, mode==9?Scheduler::VisibilityMergePolicy::Forbidden:Scheduler::VisibilityMergePolicy::NativeDensity);
++        auto load=descriptor(false);q.RenderEncoder((__bridge void*)load,next,true,mode!=1);
++        if(mode==2)q.RequireGuestRender();
++        if(mode==3)q.Commands().SetTexture(Metal::RenderList::Stage::Fragment,(__bridge void*)depth,0);
++        if(mode==4)q.MemoryBarrier();
++        if(mode==5)q.RequestRenderTail();
++        if(mode==6) {
++            q.Commands().SetTexture(Metal::RenderList::Stage::Fragment,(__bridge void*)depth,0);
++            q.Commands().SetTexture(Metal::RenderList::Stage::Fragment,nullptr,0);
++        }
++        if(mode==7) {
++            auto view=[color newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];CHECK(view);
++            retained.push_back(view);
++            q.Commands().SetTexture(Metal::RenderList::Stage::Vertex,(__bridge void*)view,0);
++            q.Commands().SetTexture(Metal::RenderList::Stage::Vertex,nullptr,0);
++        }
++        if(mode==8)q.EndWithBarrier();
++
++        CHECK(q.ContinueDepthLayout(state)==(enabled&&mode==0));
++        q.Finish();CHECK(!q.HasFailed());
++        q.SetVisibilityQuery({});
++    }
++    puts("depth-layout pixels, depth/stencil decisions, visibility sum and shader/feedback/barrier/tail guards passed");
++}
++
+ int main() {
+     @autoreleasepool {
+         Metal::Device device;
++        if(std::getenv("BB_TEST_DEPTH_LAYOUT_ONLY")){TestDepthLayoutContinuation(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_CONSUMED_CLEAR_ONLY")){TestConsumedClearContinuation(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_CLEAR_BLEND_ONLY")){TestClearFoldBlending(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_CLEAR_FOLD_ONLY")){TestClearFolding(device);return failures?1:0;}

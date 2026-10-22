@@ -3,10 +3,10 @@ import XCTest
 
 final class MetalOptimizationTests: XCTestCase {
     func testDefaultsMatchAcceptedProfileAndExperimentsStayOff() {
-        XCTAssertEqual(MetalOptimizations.all.count, 33)
-        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 33)
+        XCTAssertEqual(MetalOptimizations.all.count, 34)
+        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 34)
         XCTAssertEqual(MetalOptimizations.adopted.count, 21)
-        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 12)
+        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 13)
         let prefs = LauncherPrefs()
         var game = GameSettings(); game.upscaler = "metalfx"
         let env = OptimizedProfile(prefs: prefs, game: game).environment

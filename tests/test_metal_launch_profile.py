@@ -37,11 +37,13 @@ class MetalLaunchProfileTests(unittest.TestCase):
         for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS'):self.assertEqual(env[key],'1')
         self.assertEqual(env['BB_MTL_RELEASE_WARM_ARCHIVE'],'1')
         self.assertEqual(env['BB_MTL_PERSIST_WARM_ARCHIVE'],'0')
+        self.assertEqual(env['BB_MTL_DEPTH_LAYOUT'],'0')
         self.assertEqual(env['BB_TEXTURE_INVALID_RECLAIM'],'1')
         for key in ('BB_TEXTURE_AUDIT_DIR','BB_DEV_WORLD_WARPER_DIR','BB_PAD_FILE','BB_PAD_FILE_ONLY','BB_BENCHMARK_MUTE','BB_FRAME_LOG_ONLY','BB_MTL_COPY_AUDIT','BB_MTL_COMPILE_AUDIT','BB_CAPTURE_NATIVE','MTL_CAPTURE_ENABLED'):
             self.assertNotIn(key,env)
     def test_benchmark_can_disable_all_defaults_and_keeps_isolated_controls(self):
-        env=self.launch(True,{key:'0' for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS','BB_MTL_RELEASE_WARM_ARCHIVE','BB_TEXTURE_INVALID_RECLAIM')})
+        env=self.launch(True,{**{key:'0' for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS','BB_MTL_RELEASE_WARM_ARCHIVE','BB_TEXTURE_INVALID_RECLAIM')},'BB_MTL_DEPTH_LAYOUT':'1'})
+        self.assertEqual(env['BB_MTL_DEPTH_LAYOUT'],'1')
         for key in (*c.CANDIDATES,'BB_MTL_FOLD_CLEARS'):self.assertEqual(env[key],'0')
         self.assertEqual(env['BB_MTL_RELEASE_WARM_ARCHIVE'],'0')
         self.assertEqual(env['BB_TEXTURE_INVALID_RECLAIM'],'0')

@@ -15,7 +15,7 @@ from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loa
 from game_app import create_game_app
 from build_identity import source_revision
 
-VERSION = '0.2.48'
+VERSION = '0.2.49'
 UPSTREAM = '11992198df6306dacf6ec37de57ee920db1acc11'
 
 
@@ -61,7 +61,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40', '0.2.41', '0.2.42', '0.2.43', '0.2.44', '0.2.45', '0.2.46', '0.2.47', '0.2.48'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40', '0.2.41', '0.2.42', '0.2.43', '0.2.44', '0.2.45', '0.2.46', '0.2.47', '0.2.48', '0.2.49'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -158,7 +158,8 @@ def main():
     copy(ROOT / 'docs/release/METAL-GATHER-REUSE.md', engine / 'METAL-GATHER-REUSE.md')
     copy(ROOT / 'docs/release/METAL-CROSS-CHUNK-READS.md', engine / 'METAL-CROSS-CHUNK-READS.md')
     copy(ROOT / 'docs/release/METAL-OPTIMIZATION-CONTROLS.md', engine / 'METAL-OPTIMIZATION-CONTROLS.md')
-    copy(ROOT / 'docs/release/0.2.48.md', engine / 'RELEASE-NOTES.md')
+    copy(ROOT / 'docs/release/METAL-DEPTH-LAYOUT.md', engine / 'METAL-DEPTH-LAYOUT.md')
+    copy(ROOT / 'docs/release/0.2.49.md', engine / 'RELEASE-NOTES.md')
     copy(ROOT / 'docs/release/METAL-SMALL-TRANSFERS.md', engine / 'METAL-SMALL-TRANSFERS.md')
     copy(ROOT / 'tools/macos/analyze_metal_gpu.py', engine / 'tools/macos/analyze_metal_gpu.py')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
@@ -252,9 +253,11 @@ def main():
                     consumed_clear_pass_continuation_default=True,
                     restored_experiments_default=False,
                     heap_release_history_priority_default=False,
-                    launcher_optimization_controls=33,
+                    depth_stencil_layout_continuation_default=False,
+                    depth_stencil_layout_continuation_scope="read-only-to-write promotions; feedback, query-density and synchronization guards",
+                    launcher_optimization_controls=34,
                     launcher_optimization_default_on=21,
-                    launcher_optimization_default_off=12,
+                    launcher_optimization_default_off=13,
                     offline_library_experiment_removed=True,
                     compile_audit_default=False,compile_audit_enable='BB_MTL_COMPILE_AUDIT=1 (private diagnostic benchmark only)',
                     combined_metal_profile_default={key:'1' for key in (
@@ -274,7 +277,7 @@ def main():
                     prior_profile_gameplay_validation=prior_gameplay_validation,
                     app_icon='Hunter\'s Mark game UI artwork, rounded/padded, fixed across launcher startup',
                     game_dock_icon='Normalized bundled Bloodborne cover as default; matching rounded/padded user game cover at runtime',
-                    update_scope='Speculative vertex safety, descriptor-free metadata, removal of unused static-backend vertex arrays, query-write invalidation and consumed-clear continuation; experimental controls default OFF; quality/cache capacity unchanged')
+                    update_scope='Guarded depth/stencil pass continuation experiment default OFF, native boundary diagnostics and launcher control; existing optimizations retained; quality/cache capacity unchanged')
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
     notices.write_text(notices.read_text().replace('No Sony/FromSoftware game files, game artwork, or user saves are included.', 'No game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.') + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +

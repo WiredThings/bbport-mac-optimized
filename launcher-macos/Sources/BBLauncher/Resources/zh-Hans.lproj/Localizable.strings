@@ -541,3 +541,6 @@
 
 "Preserve heap release history" = "保留堆释放记录";
 "Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit." = "优先保留堆释放记录，容量不变；M4 测试未确认性能或净内存收益。";
+
+"Continue passes across depth/stencil layout changes" = "延续深度／模板布局切换通道";
+"Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed." = "仅合并兼容的只读转写入通道；保留反馈、遮挡和同步检查，实测收益尚未确认。";

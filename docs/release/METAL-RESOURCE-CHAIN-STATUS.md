@@ -475,3 +475,38 @@ OFF45.487/45.996FPS，ON45.713/45.357FPS，均值45.742→45.535（-0.452%），
 所有自有游戏/渲染进程已结束，退出后压力1、swap7639.88MiB。formal168-after.json核对renderer、偏好、15个正常存档及游戏INI与formal147一致；未清理/替换正式缓存，未安装应用、提交/推送或发布Release。测试授权截止2026-10-22 17:00，本轮不再启动游戏。已证明CPU无效工作减少，完整CPU/GPU别名/读取覆盖及原始35次192B写入的可省略性仍未成立，不将整个根目标标记完成。
 
 最终证据：validation153/clean164-167-comparison.json、long158159-comparison.json、static-long-suite158.json、profile168-result.json、stage-summary.json；状态见root-followup-status.json。
+
+
+## 2026-10-22: depth/stencil-only pass continuation (0.2.49)
+
+0082 separates capture boundary drains from requested-state observations. 0083 adds a default-OFF
+experiment for identical attachments across read-only-to-write plane promotions only. Previous
+and current texture feedback, unknown indirect access, barriers/fences/hoists/tails and pending
+clears keep their original fallback. Write-to-read-only always retains its boundary; reduced-density
+visibility queries do too because per-pass scaled counts round independently.
+
+355 CPU policy checks passed; actual M4 Metal API Validation passed exact pixel/query tests in
+held/direct encoding, candidate OFF/ON, unknown access, feedback later unbound, parent views,
+barriers, tails, snapshots and query-policy fallbacks. Existing consumed-clear tests pass OFF/ON.
+One diagnostic frame confirmed 3 actual continuations; its image spotcheck was separate from FPS
+scoring. General buffer-use recording still reaches its 1024-entry bound: it does not prove absent
+reads or full alias coverage.
+
+Same-binary ABBA+BAAB, 8 runs, 30s warmup/45s score, fixed camera, unchanged 1080p configuration:
+OFF 45.8093 FPS, ON 45.8136 FPS (+0.0095%); mean run-median footprints 5745.04/5772.42 MiB.
+The two order-specific results disagree; no FPS gain established. Warning pressure stayed allowed,
+score-window swap did not grow, and all eight finished with cleanup. No screenshot/readback/native
+capture/GPU stage profiling ran during scoring; external recording state remains unverified.
+Only the separate 173 diagnostic consumed the newly authorized one-run 30s swap-rate exception;
+all eight comparisons and the following lifecycle regression used the default 6s rate window.
+
+The final library with the candidate ON also completed two isolated native SetHp death/respawn
+cycles with validated HP-zero/loading/world-down/stable-positive-HP and before/after mapping
+inventories. No new texture-format/Metal failure appeared. These are not enemy-combat/online tests;
+the fixed view had MetalFX/object motion inactive. Motion-query unit compatibility is not full
+active gameplay coverage. Formal saves, preferences, INI and caches remain untouched.
+
+The launcher exposes this as its 34th control (21 ON/13 OFF total), not a proven improvement. All
+35 small uploads and synchronization remain: the complete original read/alias proof is unresolved.
+See [policy, tests and measurement limits](METAL-DEPTH-LAYOUT.md). Private evidence: depth-layout173
+suite-ABBA/suite-BAAB/eight-run reports and depth-layout174/run174 lifecycle result; not public payloads.

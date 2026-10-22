@@ -169,7 +169,7 @@ Unlocked uses a variable-timestep patch; 60/90 use fixed-timestep patches.
 
 ## Metal optimization controls
 
-**Advanced → Metal optimizations** exposes 33 controls: **21 ON by default**, **12 optional
+**Advanced → Metal optimizations** exposes 34 controls: **21 ON by default**, **13 optional
 experiments OFF**. Saved explicit values override defaults. Hover for technical details.
 
 - **Verified**: adopted after the documented checks/measurements.
@@ -183,6 +183,8 @@ The original five experiments remain. Six restored alternatives add native clear
 overlay merging, native fill, residency memoization, identical physical copy-store merging and
 in-pass small writes, all OFF. Heap-release history priority is a separate default-OFF experiment. Earlier M4 tests were neutral or slower; notes retain that
 evidence without asserting universal futility. See [evidence and dependencies](release/METAL-OPTIMIZATION-CONTROLS.md).
+Depth/stencil layout continuation (0.2.49) is experimental OFF. It merges only guarded read-only-to-write transitions; feedback, visibility-count and synchronization uncertainty retain the original path. The current M4 comparison does not establish an FPS gain.
+
 Available in 0.2.48. Binary pipeline persistence remains optional. The latter ignores archive files
 when OFF, without deleting them. Idle startup-archive release remains a separate optimization
 that keeps active pipelines. The retired offline-library experiment is absent.

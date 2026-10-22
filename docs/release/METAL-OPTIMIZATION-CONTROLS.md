@@ -1,6 +1,6 @@
 # Metal optimization controls
 
-The 0.2.48 launcher exposes 33 runtime controls under **Advanced → Metal optimizations**, in English,
+The 0.2.49 launcher exposes 34 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. The displayed badges are **Verified**,
 **Experimental**, **Adopted bundle**, and **Higher memory use**; stored/source keys may retain
 older badge wording for localization compatibility. Existing object-motion and occlusion controls stay
@@ -8,7 +8,7 @@ in their current sections. No resolution, effects, save state or cache capacity 
 
 ## Defaults and evidence
 
-The 20 previously adopted controls retain their ON defaults; consumed-clear continuation adds one default-ON control. Six restored alternatives and the heap-history candidate add default-OFF experimental controls (21 ON / 12 OFF total). Included in 0.2.48. A missing preference uses
+The 20 previously adopted controls retain their ON defaults; consumed-clear continuation adds one default-ON control. Six restored alternatives and the heap-history candidate add default-OFF experimental controls (21 ON / 13 OFF total). The depth-layout experiment adds one OFF control in 0.2.49. A missing preference uses
 the current runtime default; existing explicit preferences remain authoritative.
 
 - The two-level address table, direct scene-copy clear and idle/startup object reclamation
@@ -170,3 +170,12 @@ resource roles, GPU completion, mapping/alias checks or release authorization. N
 reproduce the original history displacement and retain reuse/overlap rejection; five actual
 runtime/Metal cases pass. Paired map travel and clean ABBA are pending, so no memory or FPS
 benefit is claimed. The installed application has not been replaced.
+
+## Guarded depth/stencil layout continuation (0.2.49)
+
+`BB_MTL_DEPTH_LAYOUT` is experimental OFF, independent of consumed-clear continuation. It only
+merges identical attachments across known read-only-to-write plane promotions, with no pending
+barriers, fences, hoisted work, clears or render tails. Prior and current attachment feedback
+exclude continuation. Unknown visibility callbacks and reduced-density production query targets
+retain the original path. No resource allocation or cache budget is added. Native pixel/query
+tests pass, but the M4 A/B does not establish a benefit; see [evidence](METAL-DEPTH-LAYOUT.md).

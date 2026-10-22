@@ -41,6 +41,7 @@ if [[ $renderer == metal ]]; then
     # Owner accepts neutral/noisy isolated FPS; retain full-surface/hoist-safe fallback.
     export BB_MTL_FOLD_CLEARS=${BB_MTL_FOLD_CLEARS:-1}
     export BB_MTL_CONTINUE_CLEARS=${BB_MTL_CONTINUE_CLEARS:-1}
+    export BB_MTL_DEPTH_LAYOUT=${BB_MTL_DEPTH_LAYOUT:-0}
     # Correctness-tested alternatives remain available without becoming recommendations.
     export BB_MTL_NATIVE_CLEAR_BATCH=${BB_MTL_NATIVE_CLEAR_BATCH:-0}
     export BB_MTL_MERGE_OVERLAY=${BB_MTL_MERGE_OVERLAY:-0}
