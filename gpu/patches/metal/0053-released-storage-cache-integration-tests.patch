@@ -1,0 +1,171 @@
+--- a/tests/test_texture_cache_views.mm
++++ b/tests/test_texture_cache_views.mm
+@@ -7,6 +7,9 @@
+ #include <string_view>
+ #include <sys/mman.h>
+ #include <cstring>
++#include <chrono>
++#include <thread>
++#include "bbport_resource_lifetime.h"
+ #include "video_core/buffer_cache/buffer_cache.h"
+ #include "video_core/page_manager.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+@@ -76,10 +79,143 @@
+     return desc;
+ }
+ 
++// Use the actual cache, page tracking, memo, view slots and deferred destruction.
++// No game files, launcher preferences or disk caches participate in this test.
++static void TestReleasedStorageCache(Fixture& f, bool enabled) {
++    namespace Life=BbResourceLifetime;
++    auto& lifetime=Life::Get();
++    auto desc=Desc(test_base+0x100000,64,AmdGpu::ImageType::Color2D,64);
++    desc.type=TextureCache::BindingType::Storage;
++    desc.view_info.is_storage=true;
++    const auto size=desc.info.guest_size;
++    std::memset((void*)desc.info.guest_address,0x5a,size);
++    const auto allocation=lifetime.Allocate(Life::Domain::Heap,desc.info.guest_address,size+64);
++    assert(allocation);
++    const auto image_id=f.textures.FindImage(desc);
++    TextureCache::ViewMemo memo;
++    const auto& view=f.textures.FindTexture(image_id,desc,&memo);
++    auto* image=f.textures.TryGetImage(image_id,0);
++    assert(image);
++    image->usage.storage=1; // RasterizerCore records this role when binding a writable T#.
++    assert(image && image->IsTracked() && image->usage.storage);
++    const auto uid=image->image_uid;
++    const auto generation=f.textures.RegistryGeneration();
++    __weak id<MTLTexture> weak_base=(__bridge id<MTLTexture>)image->backing->image.native;
++    __attribute__((objc_precise_lifetime)) id<MTLTexture> held_view=(__bridge id<MTLTexture>)view.native;
++    vk::ClearValue clear{};clear.color.float32[0]=1;clear.color.float32[3]=1;
++    f.runtime.ClearImage(image,{.base={0,0},.extent={1,1}},clear);
++    image->tick_accessed_last=f.runtime.CurrentTick();
++    image->gpu_write_tick=f.runtime.CurrentTick();
++    assert(lifetime.Release(allocation));
++    Life::SetReclaimReady(true);
++    const auto unchanged_cpu=[&] {
++        const auto* bytes=(const unsigned char*)desc.info.guest_address;
++        for (u64 i=0;i<size;++i) assert(bytes[i]==0x5a);
++    };
++    const auto verify_pixels=[&](void* native, bool red) {
++        @autoreleasepool {
++            id<MTLDevice> device=f.device.GetImpl().device;
++            id<MTLCommandQueue> queue=[device newCommandQueue];
++            id<MTLBuffer> bytes=[device newBufferWithLength:64*64*4 options:MTLResourceStorageModeShared];
++            id<MTLCommandBuffer> command=[queue commandBuffer];
++            id<MTLBlitCommandEncoder> blit=[command blitCommandEncoder];
++            [blit copyFromTexture:(__bridge id<MTLTexture>)native sourceSlice:0 sourceLevel:0
++                sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(64,64,1)
++                toBuffer:bytes destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:64*256];
++            [blit endEncoding];[command commit];[command waitUntilCompleted];
++            assert(command.status==MTLCommandBufferStatusCompleted);
++            const auto* pixels=(const unsigned char*)bytes.contents;
++            for (unsigned i=0;i<64*64*4;++i)
++                assert(pixels[i]==(red ? (i%4==0 || i%4==3 ? 255 : 0) : 0x33));
++        }
++    };
++    const auto collect_for=[&](int milliseconds) {
++        const auto until=std::chrono::steady_clock::now()+std::chrono::milliseconds(milliseconds);
++        do {
++            f.textures.RunGarbageCollector();
++            std::this_thread::sleep_for(std::chrono::milliseconds(100));
++        } while(std::chrono::steady_clock::now()<until);
++    };
++    const auto drain_deferred=[&] {
++        // Cache slot deletion can itself queue native view/backing destruction.
++        // This test-only wait also lets completed handlers retire the Metal buffers.
++        for (unsigned i=0;i<3;++i) {
++            f.runtime.Finish();
++            std::this_thread::sleep_for(std::chrono::milliseconds(10));
++            f.runtime.RefreshTicks();f.runtime.PopPendingOperations();
++        }
++    };
++    // An old free and cold LRU cannot authorize deletion while the write tick is open.
++    collect_for(3300);
++    assert(f.textures.TryGetImage(image_id,uid)==image);
++    assert(f.textures.RegistryGeneration()==generation && weak_base!=nil);
++    unchanged_cpu();
++    // Even after GPU completion a partial live allocation in the other domain blocks it.
++    const auto overlap=lifetime.Allocate(Life::Domain::Range,desc.info.guest_address+128,32);
++    assert(overlap);
++    f.runtime.Finish();f.runtime.RefreshTicks();
++    assert(image->CanReleaseFreedStorageBacking());
++    verify_pixels(image->backing->image.native,true);
++    collect_for(1200);
++    assert(f.textures.TryGetImage(image_id,uid)==image && image->IsTracked());
++    assert(f.textures.RegistryGeneration()==generation);
++    unchanged_cpu();
++    assert(lifetime.Release(overlap));
++    collect_for(2300);
++    unchanged_cpu();
++    if (!enabled) {
++        assert(f.textures.TryGetImage(image_id,uid)==image && image->IsTracked());
++        assert(f.textures.RegistryGeneration()==generation);
++        assert(lifetime.Read().reclaimed_images==0);
++        held_view=nil;Life::SetReclaimReady(false);
++        std::puts("Released storage OFF: actual cache retains the GPU-written resource");
++        return;
++    }
++    assert(f.textures.RegistryGeneration()>generation);
++    // Slot destruction is deferred; the registry generation invalidates caller memos now.
++    if (auto* pending=f.textures.TryGetImage(image_id,uid)) {
++        assert(!pending->IsTracked() && False(pending->flags&ImageFlagBits::Registered));
++    }
++    memo={};
++    drain_deferred();
++    assert(f.textures.TryGetImage(image_id,uid)==nullptr);
++    // FindTexture queued this linear storage image for readback. FreeImage must
++    // remove that pending ID, so draining the queue cannot write into freed payloads.
++    f.textures.ProcessDownloadImages();
++    unchanged_cpu();
++    assert(lifetime.Read().reclaimed_images==1 && weak_base!=nil);
++    held_view=nil;
++    drain_deferred();
++    assert(weak_base==nil);
++    unchanged_cpu();
++    // The exact address may now be reused. Neither the old image slot nor its view memo
++    // may return the destroyed backing; unchanged descriptors still hit the new cache entry.
++    const auto replacement=lifetime.Allocate(Life::Domain::Heap,desc.info.guest_address,size+64);
++    assert(replacement && replacement!=allocation);
++    std::memset((void*)desc.info.guest_address,0x33,size);
++    const auto new_id=f.textures.FindImage(desc);
++    auto& new_view=f.textures.FindTexture(new_id,desc,&memo);
++    auto* new_image=f.textures.TryGetImage(new_id,0);
++    assert(new_image && new_image->image_uid!=uid && new_image->IsTracked());
++    assert(new_view.native && f.textures.FindImage(desc)==new_id);
++    f.runtime.Finish();f.runtime.RefreshTicks();
++    verify_pixels(new_image->backing->image.native,false);
++    assert(lifetime.Release(replacement));
++    Life::SetReclaimReady(false);
++    std::puts("Released storage ON: cache untracks, unregisters and destroys native views/backing; address reuse gets a fresh UID; no writeback");
++}
++
+ int main(int argc, char** argv) {
+     const bool baseline=argc>1 && std::string_view(argv[1])=="baseline";
+     const bool abort_view=argc>1 && std::string_view(argv[1])=="abort-view";
+     setenv("BB_GUEST_IN_PLACE","0",1);
++    const bool released_on=argc>1 && std::string_view(argv[1])=="released-storage";
++    const bool released_off=argc>1 && std::string_view(argv[1])=="released-storage-off";
++    if (released_on || released_off) {
++        setenv("BB_GPU_LIFETIME","1",1);
++        setenv("BB_TEXTURE_RELEASED_STORAGE",released_on ? "1" : "0",1);
++        setenv("BB_READBACK_LINEAR","1",1);
++    }
+     void* backing=MAP_FAILED;
+     for (uintptr_t address=0x800000000ull;address<0x10000000000ull;address+=0x100000000ull) {
+         backing=mmap((void*)address,0x800000,PROT_READ|PROT_WRITE,
+@@ -87,6 +223,14 @@
+         if (backing!=MAP_FAILED) {test_base=(uintptr_t)backing;break;}
+     }
+     assert(backing!=MAP_FAILED);
++    if (released_on || released_off) {
++        @autoreleasepool {
++            Fixture f;
++            TestReleasedStorageCache(f,released_on);
++        }
++        munmap(backing,0x800000);
++        return 0;
++    }
+     @autoreleasepool {
+         Fixture f;
+         if (argc>1 && std::string_view(argv[1])=="invalid-view") {

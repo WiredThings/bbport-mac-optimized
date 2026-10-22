@@ -1,0 +1,26 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -52,6 +52,10 @@
+         return;
+     }
+     impl.profile->FenceWait();
++    if (VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format(
++            "{{\"op\":\"fence_wait\",\"owner\":{},\"kind\":{},\"slot\":{},\"fragment\":false}}",
++            (uintptr_t)&impl, unsigned(kind), slot));
+     id<MTLFence> fence = impl.fences[slot];
+     switch (kind) {
+     case EncoderKind::Render:
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -465,7 +465,7 @@
+         -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/bbport_platform.h)
+     target_include_directories(mtl-scheduler-test PRIVATE shim shadps4)
+     target_link_libraries(mtl-scheduler-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers
+-        magic_enum::magic_enum PkgConfig::XXHASH "-framework Metal" "-framework Foundation")
++        magic_enum::magic_enum PkgConfig::XXHASH "-framework Metal" "-framework Foundation" "-framework QuartzCore")
+ endif()
+ 
+ if (APPLE)

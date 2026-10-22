@@ -1,0 +1,154 @@
+--- a/gpu/shadps4/video_core/amdgpu/liverpool.cpp
++++ b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+@@ -1341,6 +1341,14 @@
+     if (trace) std::printf("SyncForCpuRead: done\n");
+ }
+ 
++static void CaptureCpRead(VAddr address,u64 bytes,const char* source) {
++    if(!VideoCore::FrameCapture::NativeRecording())return;
++    // Packet-level observation only. A wait can poll repeatedly; this deliberately
++    // does not instrument the spin loop or claim its exact load count/last version.
++    VideoCore::FrameCapture::NativeBufferUse(0,0,0,bytes,address,7,0,false,source);
++    VideoCore::FrameCapture::NativeCpuAccess(address,bytes,false);
++}
++
+ bool Liverpool::PredicationSkips(const PM4Header* header) {
+     if (!predication.active || header->type3.predicate.Value() == PM4Predicate::PredDisable) {
+         return false;
+@@ -2167,6 +2175,8 @@
+                         ++g_dcb_stats.wait_outcome[0];
+                     }
+                     BbTimeline::Note(BbTimeline::VoLabelWaitBegin);
++                    if(wait_reg_mem->mem_space.Value()==PM4CmdWaitRegMem::MemSpace::Memory)
++                        CaptureCpRead(wait_reg_mem->Address<VAddr>(),4,"cp_vo_wait");
+                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
+                     BbTimeline::Note(BbTimeline::VoLabelWaitEnd);
+                     break;
+@@ -2185,6 +2195,8 @@
+                 }
+                 // Else the value may come from a fence that thread has yet to write: let it
+                 // catch up before yielding to other queues.
++                if(wait_reg_mem->mem_space.Value()==PM4CmdWaitRegMem::MemSpace::Memory)
++                    CaptureCpRead(wait_reg_mem->Address<VAddr>(),4,"cp_graphics_wait");
+                 const bool met = wait_reg_mem->Test(regs.reg_array);
+                 const auto wait_start = std::chrono::steady_clock::now();
+                 if (!met) {
+@@ -2261,6 +2273,7 @@
+                 if (cond_exec->command.Value() != 0) {
+                     LOG_WARNING(Render, "IT_COND_EXEC used a reserved command");
+                 }
++                CaptureCpRead(reinterpret_cast<VAddr>(cond_exec->Address()),1,"cp_cond_exec");
+                 bool skip = *cond_exec->Address() == false;
+                 // bbport: the condition as the command processor reads it when it gets here: a
+                 // fence the recording thread has yet to write (in stream order), else once the
+@@ -2602,6 +2615,8 @@
+         case PM4ItOpcode::WaitRegMem: {
+             const auto* wait_reg_mem = reinterpret_cast<const PM4CmdWaitRegMem*>(header);
+             ASSERT(wait_reg_mem->engine.Value() == PM4CmdWaitRegMem::Engine::Me);
++            if(wait_reg_mem->mem_space.Value()==PM4CmdWaitRegMem::MemSpace::Memory)
++                CaptureCpRead(wait_reg_mem->Address<VAddr>(),4,"cp_compute_wait");
+             while (!wait_reg_mem->Test(regs.reg_array)) {
+                 // BB_HONEST_LABELS: the value may come from a fence waiting for work not
+                 // submitted yet; this thread would spin on it forever.
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1491,6 +1491,10 @@
+             [&](const CompiledShader& shader) {
+                 impl->BindStage(Impl::StageKind::Compute, shader, push_data);
+             });
++        if(VideoCore::FrameCapture::NativeRecording())
++            VideoCore::FrameCapture::NativeBufferUse(uintptr_t(buffers.args),
++                uintptr_t(buffers.args->buffer.native),guest.args_offset,is_indexed?20:16,
++                indirect.args+u64(i)*indirect.stride,7,0,false,"indirect_geometry_args");
+     }
+     if (hoist) {
+         scheduler.EndHoist();
+@@ -1965,6 +1969,10 @@
+         // layout of MTLDrawPrimitivesIndirectArguments / MTLDrawIndexedPrimitivesIndirectArguments.
+         for (u32 i = 0; i < indirect.max_count; ++i) {
+             const NSUInteger offset = buffers.args_offset + u64(i) * indirect.stride;
++            if(VideoCore::FrameCapture::NativeRecording())
++                VideoCore::FrameCapture::NativeBufferUse(uintptr_t(buffers.args),
++                    uintptr_t(buffers.args->buffer.native),offset,is_indexed?20:16,
++                    indirect.args+u64(i)*indirect.stride,7,0,false,"indirect_draw_args");
+             if (is_indexed) {
+                 const VkToMtl::IndexInfo index_info = VkToMtl::IndexType(index_bind.type);
+                 list.DrawIndexedPrimitivesIndirect(
+@@ -2059,6 +2067,9 @@
+                               threadsPerThreadgroup:MTLSizeMake(compute.threads_per_group[0],
+                                                                 compute.threads_per_group[1],
+                                                                 compute.threads_per_group[2])];
++        if(VideoCore::FrameCapture::NativeRecording())
++            VideoCore::FrameCapture::NativeBufferUse(uintptr_t(args),uintptr_t(args->buffer.native),
++                args_offset,12,address,7,0,false,"indirect_dispatch_args");
+         impl->recorded_dispatches.fetch_add(1, std::memory_order_relaxed);
+         MaybePrintStats();
+     }
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -92,8 +92,15 @@
+  FrameCapture::NativeBufferUse(0,0,0,192,4096,5,555,false,"seed_before_write");
+  FrameCapture::NativeCpuAccess(4096,192,false);
+  payload.fill(0);FrameCapture::NativeCommandWrite(4096,payload.data(),192,100,200,128,10);
++ FrameCapture::NativeBufferUse(100,200,128,12,4096,7,0,false,"indirect_dispatch_args");
++ FrameCapture::NativeBufferUse(0,0,0,4,4096,7,0,false,"cp_graphics_wait");
++ FrameCapture::NativeCpuAccess(4096,4,false);
+  FrameCapture::FrameBoundary(41);assert(drains==8);text=read(40);unsetenv("BB_WATCH");
+  assert(text.find("\"version\":0,\"logical_stage\":5,\"shader\":555")!=std::string::npos);
++ assert(text.find("\"version\":1,\"logical_stage\":7,\"shader\":0,\"write\":false,\"unknown\":false,\"source\":\"indirect_dispatch_args\"")!=std::string::npos);
++ assert(text.find("\"version\":1,\"logical_stage\":7,\"shader\":0,\"write\":false,\"unknown\":false,\"source\":\"cp_graphics_wait\"")!=std::string::npos);
++ assert(text.find("\"cp_graphics_wait\":1")!=std::string::npos);
++ assert(text.find("\"indirect_dispatch_args\":1")!=std::string::npos);
+  assert(text.find("\"version\":1,\"previous\":false,\"same_payload\":false,\"same_generation\":false,\"zero_words\":48,\"float_one_words\":0")!=std::string::npos);
+  assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==4);
+  // One trigger must capture three consecutive encoding frames, not three later
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -68,12 +68,16 @@
+         bool active=false, has_payload=false;
+         std::array<unsigned char,192> payload{}; };
+     std::array<Watch,8> watches{};
++    std::array<u64,7> command_read_sources{};
+     u64 sequence=0, uses=0;
+     bool overflow=false;
+     static bool Overlap(u64 a,u64 size,u64 b,u64 bytes) {
+         return size && bytes && (a<=b ? b-a<size : a-b<bytes);
+     }
+ };
++constexpr std::array<const char*,7> command_read_names={"cp_vo_wait","cp_graphics_wait",
++    "cp_compute_wait","cp_cond_exec","indirect_geometry_args","indirect_draw_args",
++    "indirect_dispatch_args"};
+ std::mutex dependency_mutex;
+ std::unique_ptr<DependencyAudit> dependency_audit;
+ void ResetDependencyAudit(bool allocate) {
+@@ -91,6 +95,13 @@
+         }
+     }
+ }
++void RecordCommandReadCounts() {
++    std::scoped_lock lock{dependency_mutex};
++    if(!dependency_audit)return;
++    const auto& n=dependency_audit->command_read_sources;
++    FrameCapture::Native(std::format("{{\"op\":\"command_read_source_counts\",\"cp_vo_wait\":{},\"cp_graphics_wait\":{},\"cp_compute_wait\":{},\"cp_cond_exec\":{},\"indirect_geometry_args\":{},\"indirect_draw_args\":{},\"indirect_dispatch_args\":{}}}",
++        n[0],n[1],n[2],n[3],n[4],n[5],n[6]));
++}
+ 
+ void* native_boundary_owner=nullptr;
+ void (*native_boundary_drain)(void*)=nullptr;
+@@ -265,6 +276,8 @@
+     std::scoped_lock lock{dependency_mutex};
+     if(!NativeRecording() || !dependency_audit)return;
+     auto& a=*dependency_audit;const auto seq=++a.sequence;
++    if(!write)for(size_t i=0;i<command_read_names.size();++i)
++        if(std::string_view(source)==command_read_names[i]){++a.command_read_sources[i];break;}
+     // Record the precise caller stage before shared-core AllGraphics aggregation. This is
+     // a logical stage, not proof of how geometry/tessellation was lowered in Metal.
+     if(++a.uses<=1024)
+@@ -299,6 +312,7 @@
+     const auto current=state.load(std::memory_order_relaxed);
+     if(current!=Idle && native_boundary_drain)native_boundary_drain(native_boundary_owner);
+     if(current==Recording){
++        RecordCommandReadCounts();
+         state.store(Idle,std::memory_order_release);
+         Write(last_presented.load(std::memory_order_relaxed));
+         ResetDependencyAudit(false);

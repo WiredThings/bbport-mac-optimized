@@ -1,0 +1,472 @@
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -298,6 +298,11 @@
+ endif()
+ 
+ # Explicit test targets; neither launches the game nor needs a Vulkan device.
++add_executable(copy-ring-scope-test EXCLUDE_FROM_ALL ../tests/test_copy_ring_scope.cpp)
++target_compile_options(copy-ring-scope-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(copy-ring-scope-test PRIVATE shim shadps4)
++target_link_libraries(copy-ring-scope-test PRIVATE fmt::fmt)
++
+ add_executable(mtl-memory-budget-test EXCLUDE_FROM_ALL ../tests/test_mtl_memory_budget.cpp)
+ if(APPLE)
+     add_executable(mtl-copy-watch-test EXCLUDE_FROM_ALL ../tests/test_mtl_copy_watch.mm)
+diff --git a/gpu/shadps4/video_core/rasterizer_core.cpp b/gpu/shadps4/video_core/rasterizer_core.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core.cpp
+@@ -1,9 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+ 
++#include <array>
+ #include <chrono>
+ #include <dlfcn.h>
+ #include <map>
++#include <numeric>
+ #include <unordered_set>
+ #include <xxhash.h>
+ #include "video_core/ui_composition.h"
+@@ -16,6 +18,9 @@
+ #include "bbport_free_check.h"
+ #include "bbport_guest_memory.h"
+ #include "video_core/frame_capture.h"
++#include "video_core/constant_ring.h"
++#include "bblayer_gpu_memory.h"
++#include "video_core/buffer_cache/copy_ring_scope.h"
+ #include "common/hash.h"
+ #include "common/debug.h"
+ #include "core/debug_state.h"
+@@ -2003,6 +2008,44 @@
+ }
+ 
+ namespace {
++// Read-only mapping admission probe. Recording-thread only; fixed metadata, no resources,
++// GPU reads, mapping changes or lifetime decisions. Repeated identical states are suppressed;
++// changes of physical source/offset, mirror state or contiguous prefix remain distinct.
++void CapturePagedMapping(const Shader::Info& stage, VAddr address, u64 size, bool written) {
++    auto& layer = BbLayer::GpuMemory::Get();
++    const auto resolved = layer.Resolve(address, size);
++    const auto prefix = layer.ResolvePrefix(address, size);
++    const auto* whole = resolved.span.source;
++    const auto* start = prefix ? prefix->source : nullptr;
++    using Key = std::array<u64, 14>;
++    const Key key{stage.pgm_hash, u64(stage.sw_stage), address, size, u64(written),
++        u64(resolved.kind), whole ? whole->handle : 0, resolved.span.offset,
++        prefix ? prefix->size : 0, start ? start->handle : 0,
++        prefix ? prefix->offset : 0, start ? start->base : 0,
++        start ? start->size : 0, whole ? whole->size : 0};
++    static std::array<Key, 256> states;
++    static u64 sequence = 0;
++    static size_t count = 0;
++    static bool overflow = false;
++    const u64 now = FrameCapture::NativeCaptureSequence();
++    if (now != sequence) { sequence = now; count = 0; overflow = false; }
++    if (std::find(states.begin(), states.begin() + count, key) != states.begin() + count)
++        return;
++    if (count == states.size()) {
++        if (!overflow) FrameCapture::Native("{\"op\":\"paged_mapping_overflow\"}");
++        overflow = true;
++        return;
++    }
++    states[count++] = key;
++    FrameCapture::Native(std::format(
++        "{{\"op\":\"paged_mapping\",\"shader\":{},\"stage\":{},\"address\":{},\"bytes\":{},"
++        "\"write\":{},\"kind\":{},\"whole_native\":{},\"whole_offset\":{},"
++        "\"prefix_bytes\":{},\"prefix_native\":{},\"prefix_offset\":{},"
++        "\"source_physical\":{},\"source_bytes\":{},\"whole_source_bytes\":{}}}",
++        key[0], key[1], key[2], key[3], written, key[5], key[6], key[7],
++        key[8], key[9], key[10], key[11], key[12], key[13]));
++}
++
+ // bbport: BB_TRACE_SHADER=hash[,hash...] (diagnostics) — the buffers those shaders bind: address,
+ // size, written or read, where the data is (in place: the game's memory over PCIe on a discrete
+ // GPU; VRAM; partly), how often; printed every 5 s.
+@@ -2057,10 +2100,75 @@
+ 
+ void RasterizerCore::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
+                                  Shader::Backend::Bindings& binding,
+-                                 Shader::PushData& push_data, u32& write_index) {
++                                 Shader::PushData& push_data, u32& write_index,
++                                 bool direct_dispatch) {
+     BB_SECTION(BindBuffers);
+     if(FrameCapture::NativeRecording() && stage.uses_dma)FrameCapture::NativeBufferUse(
+         0,0,0,0,0,u32(stage.sw_stage),stage.pgm_hash,false,"bda_unbounded");
++    static const bool capture_ring_scope = [] {
++        const char* env = std::getenv("BB_CAPTURE_COPY_SCOPE");
++        return env && env[0] == '1';
++    }();
++    std::optional<CopyRingScope> copy_scope;
++    const bool known_copy = direct_dispatch && stage.sw_stage == Shader::SwStage::Compute &&
++                            Game::BufferCopyShader() == 0xfefebf9full && stage.pgm_hash == Game::BufferCopyShader();
++    if (capture_ring_scope && FrameCapture::NativeRecording() && known_copy && stage.buffers.size() >= 3 &&
++        !stage.uses_dma && stage.images.empty() && constant_ring) {
++        bool supported = true;
++        std::array<AmdGpu::Buffer, 3> sharps;
++        for (u32 i = 0; i < stage.buffers.size(); ++i) {
++            const auto& desc = stage.buffers[i];
++            if (i < 3) {
++                supported &= !desc.IsSpecial() && desc.is_formatted &&
++                             desc.is_written == (i == 2);
++                sharps[i] = prepared ? prepared->buffer_sharps[i] : desc.GetSharp(stage);
++                // A copied source/destination would have different storage than its guest
++                // descriptor. Only the control binding may use the constant ring here.
++                if (i && FindRingBinding(stage, i)) supported = false;
++            } else {
++                supported &= desc.buffer_type == Shader::BufferType::BdaPagetable;
++            }
++        }
++        supported &= Shader::IsPagedBuffer(BufferCache::LayerPagedActive(), sharps[1]) ||
++                     Shader::IsPagedBuffer(BufferCache::LayerPagedActive(), sharps[2]);
++        const RingBinding* ctl = FindRingBinding(stage, 0);
++        const auto& grid = CsRegs();
++        if (supported && ctl && ctl->address == sharps[0].base_address && ctl->size &&
++            ctl->offset < ConstantRing::Capacity &&
++            ctl->size <= ConstantRing::Capacity - ctl->offset) {
++            copy_scope = BuildCopyRingScope({constant_ring->Data(ctl->offset), ctl->size}, sharps,
++                {grid.dim_x, grid.dim_y, grid.dim_z, grid.start_x, grid.start_y, grid.start_z,
++                 grid.num_thread_x.full, grid.num_thread_y.full, grid.num_thread_z.full,
++                 bool(grid.num_thread_x.partial || grid.num_thread_y.partial || grid.num_thread_z.partial)});
++        }
++        if (FrameCapture::NativeRecording()) {
++            FrameCapture::Native(std::format(
++                "{{\"op\":\"copy_ring_scope\",\"shader\":{},\"valid\":{},\"ring\":{},"
++                "\"src_address\":{},\"src_size\":{},\"dst_address\":{},\"dst_size\":{},"
++                "\"src_descriptor_bytes\":{},\"dst_descriptor_bytes\":{},\"threads\":{},\"groups\":{},"
++                "\"supported\":{},\"layout_mask\":{},\"ctl_size\":{},\"ctl_stride\":{},\"src_stride\":{},\"dst_stride\":{},"
++                "\"ctl_format\":{},\"src_format\":{},\"dst_format\":{},\"ctl_number\":{},\"src_number\":{},\"dst_number\":{},"
++                "\"partial\":{},\"grid_y\":{},\"grid_z\":{},\"src_intervals\":{},\"dst_intervals\":{},"
++                "\"src_covered_bytes\":{},\"dst_covered_bytes\":{}}}",
++                stage.pgm_hash, bool(copy_scope), bool(ctl),
++                copy_scope ? copy_scope->source.address : 0, copy_scope ? copy_scope->source.size : 0,
++                copy_scope ? copy_scope->destination.address : 0, copy_scope ? copy_scope->destination.size : 0,
++                sharps[1].GetSize(), sharps[2].GetSize(), grid.num_thread_x.full, grid.dim_x,
++                supported, unsigned(CopyRingLayout(sharps[0], true)) |
++                    (unsigned(CopyRingLayout(sharps[1], false)) << 1) |
++                    (unsigned(CopyRingLayout(sharps[2], false)) << 2),
++                ctl ? ctl->size : 0, sharps[0].GetStride(), sharps[1].GetStride(), sharps[2].GetStride(),
++                u32(sharps[0].GetDataFmt()), u32(sharps[1].GetDataFmt()), u32(sharps[2].GetDataFmt()),
++                u32(sharps[0].GetNumberFmt()), u32(sharps[1].GetNumberFmt()), u32(sharps[2].GetNumberFmt()),
++                unsigned(grid.num_thread_x.partial || grid.num_thread_y.partial || grid.num_thread_z.partial),
++                grid.dim_y, grid.dim_z, copy_scope ? copy_scope->sources.size() : 0,
++                copy_scope ? copy_scope->destinations.size() : 0,
++                copy_scope ? std::accumulate(copy_scope->sources.begin(), copy_scope->sources.end(), u64{0},
++                    [](u64 bytes, auto range) { return bytes + range.size; }) : 0,
++                copy_scope ? std::accumulate(copy_scope->destinations.begin(), copy_scope->destinations.end(), u64{0},
++                    [](u64 bytes, auto range) { return bytes + range.size; }) : 0));
++        }
++    }
+     const u64 alignment = backend.Limits().storage_min_alignment;
+     boost::container::static_vector<BufferBinding, Shader::NUM_BUFFERS> infos;
+     for (u32 buffer_index = 0; buffer_index < stage.buffers.size(); ++buffer_index) {
+@@ -2163,6 +2271,8 @@
+                 // buffer of the game's memory: barriers before it, and after it if it writes.
+                 const auto [record, record_offset] = buffer_cache.LayerPagedRecord(
+                     vsharp.base_address, vsharp.GetSize(), desc.is_written);
++                if (capture_ring_scope && FrameCapture::NativeRecording())
++                    CapturePagedMapping(stage, vsharp.base_address, vsharp.GetSize(), desc.is_written);
+                 // BB_LAYER_PAGED_STATS=1: paged bindings per shader, every 5 s.
+                 static const bool paged_stats = std::getenv("BB_LAYER_PAGED_STATS") != nullptr;
+                 if (paged_stats) {
+@@ -2325,7 +2435,7 @@
+ }
+ } // namespace
+ 
+-bool RasterizerCore::BindResources(const PipelineBase* pipeline) {
++bool RasterizerCore::BindResources(const PipelineBase* pipeline, bool direct_dispatch) {
+     BB_SECTION(BindResources);
+     NoteResStats(pipeline);
+     {
+@@ -2420,7 +2530,7 @@
+             }
+             stage->PushUd(binding, push_data);
+             const PreparedStage* prepared = FindPreparedStage(*stage);
+-            BindBuffers(*stage, prepared, binding, push_data, write_index);
++            BindBuffers(*stage, prepared, binding, push_data, write_index, direct_dispatch);
+             BindTextures(*stage, prepared, binding, write_index, needs_barrier);
+             uses_dma |= stage->uses_dma;
+         }
+@@ -2463,7 +2573,8 @@
+         bind_helper.Fork(&RunTextureTask, this);
+         for (u32 i = 0; i < task.count; ++i) {
+             auto& stage = buffer_stages[i];
+-            BindBuffers(*stage.info, stage.prepared, stage.binding, push_data, stage.write_index);
++            BindBuffers(*stage.info, stage.prepared, stage.binding, push_data, stage.write_index,
++                        direct_dispatch);
+         }
+         if (draw_inputs.pending && !BbToggle::Disabled(BbToggle::EarlyDrawInputs)) {
+             ResolveVertexBuffers(draw_inputs.pipeline, draw_inputs.prepared);
+diff --git a/gpu/shadps4/video_core/rasterizer_core.h b/gpu/shadps4/video_core/rasterizer_core.h
+--- a/gpu/shadps4/video_core/rasterizer_core.h
++++ b/gpu/shadps4/video_core/rasterizer_core.h
+@@ -435,7 +435,7 @@
+     /// Selects and binds the resources of the pipeline's stages (buffers here, samplers in
+     /// BindSamplers, textures in BindTextures): false when a substitution (HLE)
+     /// replaced the shader and nothing is left to record.
+-    bool BindResources(const VideoCore::PipelineBase* pipeline);
++    bool BindResources(const VideoCore::PipelineBase* pipeline, bool direct_dispatch = false);
+     /// A stage's buffer binding as the backend writes it: a null `buffer` is a null descriptor.
+     struct BufferBinding {
+         const VideoCore::Buffer* buffer;
+@@ -454,7 +454,7 @@
+     /// through the buffer cache), the push data offsets and the barriers; BindBufferSet writes them.
+     void BindBuffers(const Shader::Info& stage, const Vulkan::PreparedStage* prepared,
+                      Shader::Backend::Bindings& binding, Shader::PushData& push_data,
+-                     u32& write_index);
++                     u32& write_index, bool direct_dispatch = false);
+ 
+     /// Decides whether the dispatch can be recorded before the held render pass (it touches
+     /// nothing the pass's draws touched) and, if so, records it (RecordHoistedDispatch); false:
+diff --git a/gpu/shadps4/video_core/rasterizer_core_pipe.cpp b/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
+@@ -1030,7 +1030,7 @@
+     // copy list read on the CPU (vk_shader_hle.cpp) kept them in place too.
+     buffer_cache.force_writes_in_place =
+         Game::BufferCopyShader() != 0 && cs.pgm_hash == Game::BufferCopyShader();
+-    const bool bound = BindResources(pipeline);
++    const bool bound = BindResources(pipeline, true);
+     buffer_cache.force_writes_in_place = false;
+     if (!bound) {
+         return;
+diff --git a/gpu/shadps4/video_core/buffer_cache/copy_ring_scope.h b/gpu/shadps4/video_core/buffer_cache/copy_ring_scope.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shadps4/video_core/buffer_cache/copy_ring_scope.h
+@@ -0,0 +1,124 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++#include <algorithm>
++#include <array>
++#include <cstring>
++#include <optional>
++#include <span>
++#include <vector>
++#include "video_core/amdgpu/resource.h"
++
++namespace VideoCore {
++// Intervals for residency-use bookkeeping, not execution commands. Original GPU copies,
++// write clocks, descriptor bounds, page publication, image invalidation and barriers stay intact.
++struct CopyRingRange {
++    VAddr address = 0;
++    u64 size = 0;
++};
++inline bool CopyRingBookkeepingValid(CopyRingRange declared, std::span<const CopyRingRange> ranges) {
++    const u64 limit = u64{1} << 40;
++    if (ranges.empty() || declared.address >= limit || declared.size > limit - declared.address) {
++        return false;
++    }
++    VAddr previous_end = declared.address;
++    for (const auto& range : ranges) {
++        if (!range.size || range.address < previous_end || range.address < declared.address ||
++            range.address - declared.address > declared.size ||
++            range.size > declared.size - (range.address - declared.address)) return false;
++        previous_end = range.address + range.size;
++    }
++    return true;
++}
++inline void MergeCopyRingRanges(std::vector<CopyRingRange>& ranges) {
++    std::sort(ranges.begin(), ranges.end(), [](auto a, auto b) { return a.address < b.address; });
++    size_t count = 0;
++    for (const auto range : ranges) {
++        if (count && range.address <= ranges[count-1].address + ranges[count-1].size) {
++            auto& last = ranges[count-1];
++            last.size = std::max(last.address + last.size, range.address + range.size) - last.address;
++        } else ranges[count++] = range;
++    }
++    ranges.resize(count);
++}
++// The input is validated, sorted and disjoint. Emit each touched page/group once,
++// without retaining another bitmap or changing the existing accounting granularity.
++template <typename F>
++inline void ForEachCopyRingPageRange(std::span<const CopyRingRange> ranges, u32 shift, F&& emit) {
++    const u64 mask = (u64{1} << shift) - 1;
++    VAddr low = 0, high = 0;
++    for (auto range : ranges) {
++        const VAddr a = range.address & ~mask;
++        const VAddr b = (range.address + range.size + mask) & ~mask;
++        if (high && a > high) { emit(low, high - low); low = a; }
++        else if (!high) low = a;
++        high = std::max(high, b);
++    }
++    if (high) emit(low, high - low);
++}
++struct CopyRingScope {
++    CopyRingRange source, destination;
++    std::vector<CopyRingRange> sources, destinations;
++};
++struct CopyRingGrid {
++    u32 x, y, z, start_x, start_y, start_z;
++    u32 threads_x, threads_y, threads_z;
++    bool partial;
++};
++inline bool CopyRingLayout(const AmdGpu::Buffer& b, bool control) {
++    using namespace AmdGpu;
++    const auto format = control ? DataFormat::Format32_32_32 : DataFormat::Format32;
++    const u64 size = u64(b.stride) * b.num_records;
++    return b.Valid() && b.base_address && !(b.base_address & 3) &&
++           !b.swizzle_enable && !b.add_tid_enable && b.GetDataFmt() == format &&
++           (b.GetNumberFmt() == NumberFormat::Float || b.GetNumberFmt() == NumberFormat::Uint ||
++            b.GetNumberFmt() == NumberFormat::Sint) && TryMapNumberConversion(NumberFormat(b.num_format), DataFormat(b.data_format)) ==
++                std::optional{NumberConversion::None} &&
++           b.dst_sel_x == u32(CompSwizzle::Red) &&
++           (!control || (b.dst_sel_y == u32(CompSwizzle::Green) &&
++                         b.dst_sel_z == u32(CompSwizzle::Blue))) &&
++           b.stride == (control ? 12 : 4) && size && size <= 0xffffffffull &&
++           size == b.GetSize() && size <= (u64{1} << 40) - b.base_address;
++}
++inline std::optional<CopyRingScope> BuildCopyRingScope(
++    std::span<const u8> snapshot, const std::array<AmdGpu::Buffer, 3>& buffers,
++    const CopyRingGrid& grid) {
++    if (!grid.x || grid.x > 4096 || grid.y != 1 || grid.z != 1 || grid.start_x ||
++        grid.start_y || grid.start_z || !grid.threads_x || grid.threads_x > 1024 ||
++        grid.threads_y != 1 || grid.threads_z != 1 || grid.partial ||
++        !CopyRingLayout(buffers[0], true) || !CopyRingLayout(buffers[1], false) ||
++        !CopyRingLayout(buffers[2], false) || u64(grid.x) * 12 > snapshot.size() ||
++        snapshot.size() > buffers[0].GetSize()) {
++        return std::nullopt;
++    }
++    CopyRingScope result;
++    result.sources.reserve(grid.x);
++    result.destinations.reserve(grid.x);
++    u64 low_src = ~u64{0}, low_dst = ~u64{0}, high_src = 0, high_dst = 0;
++    for (u32 i = 0; i < grid.x; ++i) {
++        std::array<u32, 3> entry;
++        std::memcpy(entry.data(), snapshot.data() + u64(i) * 12, 12);
++        // Include every index permitted by the control, even beyond the current
++        // thread count. This is conservative if pipeline thread sizing differs.
++        const u64 count = u64(entry[2]) + 1;
++        const u64 src_end = u64(entry[1]) + count, dst_end = u64(entry[0]) + count;
++        // Generated paged offsets are 32-bit byte offsets. Reject wrap rather than
++        // narrowing around an address which the actual shader could wrap past.
++        if (src_end > (u64{1} << 30) || dst_end > (u64{1} << 30) ||
++            src_end * 4 > buffers[1].GetSize() || dst_end * 4 > buffers[2].GetSize()) {
++            return std::nullopt;
++        }
++        result.sources.push_back({buffers[1].base_address + u64(entry[1]) * 4, count * 4});
++        result.destinations.push_back({buffers[2].base_address + u64(entry[0]) * 4, count * 4});
++        low_src = std::min(low_src, u64(entry[1]) * 4);
++        low_dst = std::min(low_dst, u64(entry[0]) * 4);
++        high_src = std::max(high_src, src_end * 4);
++        high_dst = std::max(high_dst, dst_end * 4);
++    }
++    result.source = {buffers[1].base_address + low_src, high_src - low_src};
++    result.destination = {buffers[2].base_address + low_dst, high_dst - low_dst};
++    MergeCopyRingRanges(result.sources);
++    MergeCopyRingRanges(result.destinations);
++    return result;
++}
++} // namespace VideoCore
+diff --git a/tests/test_copy_ring_scope.cpp b/tests/test_copy_ring_scope.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_copy_ring_scope.cpp
+@@ -0,0 +1,106 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Synthetic descriptors and control bytes only. No game/save/cache access.
++#include "video_core/buffer_cache/copy_ring_scope.h"
++#include <cassert>
++#include <cstdio>
++#include <random>
++#include <vector>
++using namespace VideoCore;
++static AmdGpu::Buffer Buffer(u64 base, bool ctl) {
++    AmdGpu::Buffer b{};
++    b.base_address = base; b.stride = ctl ? 12 : 4;
++    b.num_records = ctl ? 4096 : (1u << 27);
++    b.data_format = u32(ctl ? AmdGpu::DataFormat::Format32_32_32 : AmdGpu::DataFormat::Format32);
++    b.num_format = u32(AmdGpu::NumberFormat::Float);
++    b.dst_sel_x = u32(AmdGpu::CompSwizzle::Red);
++    b.dst_sel_y = u32(AmdGpu::CompSwizzle::Green);
++    b.dst_sel_z = u32(AmdGpu::CompSwizzle::Blue);
++    return b;
++}
++int main() {
++    const std::array<AmdGpu::Buffer,3> buffers={Buffer(0x100000,true),Buffer(0x100000000,false),Buffer(0x200000000,false)};
++    const CopyRingGrid grid{2,1,1,0,0,0,64,1,1,false};
++    std::array<u32,6> ctl={100,200,3,1024,2048,63};
++    const auto bytes=[&]{return std::span<const u8>(reinterpret_cast<const u8*>(ctl.data()),sizeof(ctl));};
++    auto plan=BuildCopyRingScope(bytes(),buffers,grid);assert(plan);
++    assert(plan->source.address==buffers[1].base_address+800 && plan->source.size==(2048+64)*4-800);
++    assert(plan->destination.address==buffers[2].base_address+400 && plan->destination.size==(1024+64)*4-400);
++    // Planner consumes the immutable snapshot, not later mutations of the guest controls.
++    auto guest=ctl;guest[0]=70000;
++    assert(BuildCopyRingScope(bytes(),buffers,grid)->destination.address==plan->destination.address);
++    assert(!BuildCopyRingScope(bytes().first(23),buffers,grid));
++    for(unsigned field=0;field<10;++field){auto g=grid;
++        switch(field){case 0:g.x=0;break;case 1:g.x=4097;break;case 2:g.y=2;break;
++        case 3:g.z=2;break;case 4:g.start_x=1;break;case 5:g.start_y=1;break;
++        case 6:g.start_z=1;break;case 7:g.threads_x=0;break;case 8:g.threads_y=2;break;case 9:g.partial=true;break;}
++        assert(!BuildCopyRingScope(bytes(),buffers,g));
++    }
++    for(unsigned slot=0;slot<3;++slot)for(unsigned field=0;field<9;++field){auto b=buffers;
++        switch(field){case 0:b[slot].base_address=0;break;case 1:b[slot].base_address=3;break;
++        case 2:b[slot].swizzle_enable=1;break;case 3:b[slot].add_tid_enable=1;break;
++        case 4:b[slot].stride=16;break;case 5:b[slot].num_records=0;break;
++        case 6:b[slot].data_format=u32(AmdGpu::DataFormat::Format16);break;
++        case 7:b[slot].dst_sel_x=u32(AmdGpu::CompSwizzle::One);break;
++        case 8:b[slot].num_format=u32(AmdGpu::NumberFormat::Unorm);break;}
++        assert(!BuildCopyRingScope(bytes(),b,grid));
++    }
++    // The format lowering uses raw F32 loads for all three 32-bit number formats;
++    // integer control words are bit patterns, without numeric conversion.
++    for (auto a : {AmdGpu::NumberFormat::Float,AmdGpu::NumberFormat::Uint,AmdGpu::NumberFormat::Sint})
++    for (auto b : {AmdGpu::NumberFormat::Float,AmdGpu::NumberFormat::Uint,AmdGpu::NumberFormat::Sint})
++    for (auto c : {AmdGpu::NumberFormat::Float,AmdGpu::NumberFormat::Uint,AmdGpu::NumberFormat::Sint}) {
++        auto bs=buffers;bs[0].num_format=u32(a);bs[1].num_format=u32(b);bs[2].num_format=u32(c);
++        auto p=BuildCopyRingScope(bytes(),bs,grid);assert(p);
++        assert(p->source.address==plan->source.address && p->source.size==plan->source.size);
++        assert(p->destination.address==plan->destination.address && p->destination.size==plan->destination.size);
++    }
++    auto bad=buffers;bad[0].num_records=1;assert(!BuildCopyRingScope(bytes(),bad,grid));
++    bad=buffers;bad[1].num_records=1;assert(!BuildCopyRingScope(bytes(),bad,grid));
++    bad=buffers;bad[2].num_records=1;assert(!BuildCopyRingScope(bytes(),bad,grid));
++    auto wrap=ctl;ctl[5]=0xffffffff;assert(!BuildCopyRingScope(bytes(),buffers,grid));ctl=wrap;
++    ctl[0]=0xffffffff;assert(!BuildCopyRingScope(bytes(),buffers,grid));ctl=wrap;
++    bad=buffers;bad[1].num_records=0xffffffff;assert(!BuildCopyRingScope(bytes(),bad,grid));
++    bad=buffers;bad[1].base_address=(u64{1}<<40)-4;assert(!BuildCopyRingScope(bytes(),bad,grid));
++    // An independent lane enumeration checks conservative coverage, including sparse,
++    // overlapping, reversed, long-end and end-zero records. No shader operations are replaced.
++    const CopyRingRange declared{100,100};
++    for (auto scope : {CopyRingRange{100,100}, CopyRingRange{120,4}, CopyRingRange{196,4}})
++        assert(CopyRingBookkeepingValid(declared,{&scope,1}));
++    for (auto scope : {CopyRingRange{99,1}, CopyRingRange{100,101}, CopyRingRange{200,1},
++                       CopyRingRange{120,0}, CopyRingRange{~u64{0},8}})
++        assert(!CopyRingBookkeepingValid(declared,{&scope,1}));
++    assert(!CopyRingBookkeepingValid(declared,{}));
++    std::array<CopyRingRange,2> unsorted={CopyRingRange{150,4},CopyRingRange{120,4}};
++    assert(!CopyRingBookkeepingValid(declared,unsorted));
++    std::vector<CopyRingRange> union_ranges={{0x30004,4},{0x10004,8},{0x10008,8},{0x10010,4},{0x30000,4}};
++    MergeCopyRingRanges(union_ranges);assert(union_ranges.size()==2);
++    assert(union_ranges[0].address==0x10004 && union_ranges[0].size==16);
++    std::vector<CopyRingRange> pages;
++    ForEachCopyRingPageRange(union_ranges,16,[&](u64 a,u64 n){pages.push_back({a,n});});
++    assert(pages.size()==2 && pages[0].address==0x10000 && pages[0].size==65536 && pages[1].address==0x30000);
++    pages.clear();ForEachCopyRingPageRange(union_ranges,21,[&](u64 a,u64 n){pages.push_back({a,n});});
++    assert(pages.size()==1 && pages[0].address==0 && pages[0].size==(1u<<21));
++    const auto contains=[](const auto& ranges,u64 address) {
++        const auto end=std::upper_bound(ranges.begin(),ranges.end(),address,
++            [](u64 at,const auto& range){return at<range.address;});
++        if(end==ranges.begin())return false;
++        const auto& r=*std::prev(end);return address>=r.address && address+4<=r.address+r.size;
++    };
++    std::mt19937 random(0x632021);u64 loads=0,stores=0;
++    for(unsigned run=0;run<10000;++run){
++        auto g=grid;g.x=1+random()%32;g.threads_x=1+random()%1024;
++        std::vector<u32> controls(g.x*3);
++        for(u32 i=0;i<g.x;++i){controls[i*3]=random()%100000;controls[i*3+1]=random()%100000;controls[i*3+2]=random()%2048;}
++        auto p=BuildCopyRingScope({reinterpret_cast<const u8*>(controls.data()),controls.size()*4},buffers,g);assert(p);
++        assert(CopyRingBookkeepingValid({buffers[1].base_address,buffers[1].GetSize()},p->sources));
++        assert(CopyRingBookkeepingValid({buffers[2].base_address,buffers[2].GetSize()},p->destinations));
++        for(u32 group=0;group<g.x;++group)for(u32 lane=0;lane<g.threads_x;++lane){
++            if(lane>controls[group*3+2])continue;
++            const u64 src=buffers[1].base_address+u64(controls[group*3+1]+lane)*4;
++            const u64 dst=buffers[2].base_address+u64(controls[group*3]+lane)*4;
++            assert(contains(p->sources,src));++loads;
++            assert(contains(p->destinations,dst));++stores;
++        }
++    }
++    std::printf("copy ring scope: 10000 layouts, %llu reads and %llu writes covered; invalid layouts fall back\n",(unsigned long long)loads,(unsigned long long)stores);
++}

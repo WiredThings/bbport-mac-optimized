@@ -1,0 +1,500 @@
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -896,3 +896,8 @@
+     target_link_options(image-1d-lowering-test PRIVATE -Wl,-export_dynamic)
+     target_link_libraries(image-1d-lowering-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+ endif()
++
++# State-policy test needs Vulkan vocabulary only; no GPU, game data or app instance.
++add_executable(mtl-pass-continuation-test EXCLUDE_FROM_ALL ../tests/test_mtl_pass_continuation.cpp)
++target_include_directories(mtl-pass-continuation-test PRIVATE shim shadps4)
++target_link_libraries(mtl-pass-continuation-test PRIVATE Vulkan::Headers)
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -41,6 +41,7 @@
+ #include "video_core/renderer_metal/mtl_scheduler.h"
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+ #include "video_core/renderer_metal/mtl_tessellation.h"
++#include "video_core/renderer_metal/mtl_pass_continuation.h"
+ #include "video_core/renderer_metal/mtl_scene_targets.h"
+ #include "video_core/renderer_metal/mtl_upscaler.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+@@ -1041,6 +1042,13 @@
+         FitsOpenDepthPass(*open, state, pipeline.Render())) {
+         if(!bound_only)scheduler.RequireGuestRender();
+         return *open;
++    }
++    if (PassContinuation::Enabled() && bound_only) {
++        if (const auto* open = scheduler.OpenRenderState(); open &&
++            PassContinuation::ConsumedClearBecomesLoad(*open, state) &&
++            PassContinuation::TexturesExcludeAttachments(state,
++                std::span<void* const>(impl->textures.data(), impl->num_textures)) &&
++            scheduler.ContinueConsumedClear(state)) return state;
+     }
+     // A pass re-opened after a tessellation draw's kernels is the loading variant of the same
+     // state (WithoutClears): the draws after it continue it instead of clearing again.
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -206,6 +206,8 @@
+     [[nodiscard]] bool WillBeginRendering(const VideoCore::RenderState& state) const override {
+         return !IsRenderingWith(state);
+     }
++    /// Continue a consumed-clear pass only after state and feedback checks by the caller.
++    bool ContinueConsumedClear(const VideoCore::RenderState& next);
+     /// Commands recorded from now on until EndHoist go before the held render pass.
+     void BeginHoist() noexcept override {
+         FlushRenderTail();
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -6,6 +6,7 @@
+ #include <cstdlib>
+ #include <format>
+ #include "video_core/frame_capture.h"
++#include "video_core/renderer_metal/mtl_pass_continuation.h"
+ 
+ #include "bbport_toggles.h"
+ #include "bbport_submit_timing.h"
+@@ -417,6 +418,7 @@
+         BeginEncoder(EncoderKind::Render, pass_descriptor, guest, bound_only);
+         render_state = state;
+         commands.BeginDirect((__bridge void*)impl->render);
++        commands.TrackConsumedClear(state, guest && bound_only);
+         commands_active = true;
+         return;
+     }
+@@ -440,10 +442,25 @@
+     hoisted = false;
+     held_label.clear();
+     commands.BeginRecording();
++    commands.TrackConsumedClear(state, guest && bound_only);
+     commands_active = true;
+ }
+ 
++bool Scheduler::ContinueConsumedClear(const VideoCore::RenderState& next) {
++    if (!PassContinuation::Enabled() || !commands_active || !OpenRenderState() ||
++        !commands.CanContinueConsumedClear() || commands.HasBarrier() || need_fence_wait || hoisting || hoisted ||
++        render_tail_pending || running_render_tail || impl->pending_clears || impl->folded_clears ||
++        !PassContinuation::ConsumedClearBecomesLoad(*render_state, next)) return false;
++    // Remember the same load state a separate loading encoder would have had.
++    render_state = next;
++    commands.InvalidateConsumedClear();
++    if (VideoCore::FrameCapture::NativeRecording())
++        VideoCore::FrameCapture::Native(std::format("{{\"op\":\"consumed_clear_continued\",\"queue\":{},\"width\":{},\"height\":{}}}", uintptr_t(this), next.width, next.height));
++    return true;
++}
++
+ void Scheduler::RequireGuestRender() {
++    commands.InvalidateConsumedClear();
+     if(!PreciseHostResidency())return;
+     if(holding) {held_bound_only=false;return;}
+     JoinReplay();
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
+@@ -6,6 +6,8 @@
+ 
+ #include "common/types.h"
+ #include "video_core/renderer_metal/mtl_fragment_guard.h"
++
++namespace VideoCore { struct RenderState; }
+ 
+ namespace Metal {
+ 
+@@ -71,6 +73,9 @@
+     /// earlier encoders when it begins the encoder for the replay).
+     [[nodiscard]] bool HasBarrier() const noexcept;
+     // Opt-in fragment-access diagnostics; no render command or dependency changes.
++    void TrackConsumedClear(const VideoCore::RenderState&, bool bound_only);
++    void InvalidateConsumedClear() noexcept;
++    bool CanContinueConsumedClear() const noexcept;
+     bool FragmentGuardEnabled() const noexcept;
+     void FragmentBuffer(void* native,u64 offset,u64 size);
+     void FragmentUnknown(unsigned reason);
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
+@@ -14,6 +14,7 @@
+ #include <utility>
+ 
+ #include "video_core/renderer_metal/mtl_render_list.h"
++#include "video_core/renderer_metal/mtl_pass_continuation.h"
+ 
+ namespace Metal {
+ 
+@@ -411,6 +412,47 @@
+ 
+ } // namespace
+ 
++namespace PassContinuation {
++bool Enabled() {
++    static const bool enabled = [] { const char* v = std::getenv("BB_MTL_CONTINUE_CLEARS"); return !v || v[0] != '0'; }();
++    return enabled;
++}
++static id<MTLTexture> TextureRoot(void* native) {
++    id<MTLTexture> texture = (__bridge id<MTLTexture>)native;
++    for (unsigned i = 0; texture && i < 8; ++i) {
++        if (texture.heap || texture.buffer) return nil;
++        if (!texture.parentTexture) return texture;
++        texture = texture.parentTexture;
++    }
++    return nil;
++}
++static bool AttachmentRoots(const VideoCore::RenderState& state, std::array<void*, 9>& roots, unsigned& count) {
++    count = 0;
++    const auto add = [&](u64 view) {
++        if (!view) return true;
++        auto texture = TextureRoot(reinterpret_cast<void*>(view));
++        if (!texture || texture.storageMode != MTLStorageModePrivate) return false;
++        roots[count++] = (__bridge void*)texture;
++        return true;
++    };
++    for (const auto& color : state.color_attachments) if (!add(color.image_view)) return false;
++    return add(state.depth_stencil_attachment.image_view) && count != 0;
++}
++static bool Excludes(const std::array<void*, 9>& roots, unsigned count, void* native) {
++    if (!native) return true;
++    auto root = TextureRoot(native);
++    if (!root) return false;
++    for (unsigned i = 0; i < count; ++i) if (roots[i] == (__bridge void*)root) return false;
++    return true;
++}
++bool TexturesExcludeAttachments(const VideoCore::RenderState& state, std::span<void* const> textures) {
++    std::array<void*, 9> roots{}; unsigned count = 0;
++    if (!AttachmentRoots(state, roots, count)) return false;
++    for (void* texture : textures) if (!Excludes(roots, count, texture)) return false;
++    return true;
++}
++} // namespace PassContinuation
++
+ struct RenderList::Impl {
+     enum class Mode : u8 { None, Direct, Recording };
+ 
+@@ -419,6 +461,9 @@
+     std::vector<u8> arena;
+     std::unique_ptr<FragmentAccessGuard> fragment_guard;
+     bool has_barrier = false;
++    bool consumed_clear_safe = false;
++    std::array<void*, 9> clear_roots{};
++    unsigned clear_root_count = 0;
+     const bool coalesce_barriers = [] {
+         const char* flag = std::getenv("BB_MTL_COALESCE_BARRIERS");
+         return flag && flag[0] == '1';
+@@ -621,6 +666,7 @@
+     impl->encoder = (__bridge id<MTLRenderCommandEncoder>)encoder;
+     impl->arena.clear();
+     impl->has_barrier = false;
++    impl->consumed_clear_safe = false;
+     impl->barrier_since_draw = false;
+     impl->barriers = {};
+     impl->ResetFilter();
+@@ -631,6 +677,7 @@
+     impl->encoder = nil;
+     impl->arena.clear();
+     impl->has_barrier = false;
++    impl->consumed_clear_safe = false;
+     impl->barrier_since_draw = false;
+     impl->barriers = {};
+     impl->ResetFilter();
+@@ -638,7 +685,9 @@
+ void RenderList::ContinueDirect(void* encoder) {
+     assert(impl->mode==Impl::Mode::Recording && impl->arena.empty());
+     auto guard=std::move(impl->fragment_guard);
++    const bool safe = impl->consumed_clear_safe;
+     BeginDirect(encoder);
++    impl->consumed_clear_safe = safe;
+     impl->fragment_guard=std::move(guard);
+ }
+ 
+@@ -677,6 +726,13 @@
+ bool RenderList::HasBarrier() const noexcept {
+     return impl->has_barrier;
+ }
++void RenderList::TrackConsumedClear(const VideoCore::RenderState& state, bool bound_only) {
++    impl->consumed_clear_safe = PassContinuation::Enabled() && bound_only &&
++        PassContinuation::HasClears(state) &&
++        PassContinuation::AttachmentRoots(state, impl->clear_roots, impl->clear_root_count);
++}
++void RenderList::InvalidateConsumedClear() noexcept { impl->consumed_clear_safe = false; }
++bool RenderList::CanContinueConsumedClear() const noexcept { return impl->consumed_clear_safe; }
+ bool RenderList::FragmentGuardEnabled() const noexcept {return bool(impl->fragment_guard);}
+ void RenderList::FragmentBuffer(void* native,u64 offset,u64 size) {
+     if(impl->fragment_guard)impl->fragment_guard->Buffer(reinterpret_cast<uintptr_t>(native),offset,size);
+@@ -815,6 +871,8 @@
+ }
+ 
+ void RenderList::SetTexture(Stage stage, void* texture, u32 index) {
++    if (impl->consumed_clear_safe && !PassContinuation::Excludes(impl->clear_roots, impl->clear_root_count, texture))
++        impl->consumed_clear_safe = false;
+     bool hit = false;
+     if (index < kMaxTextures) {
+         void*& slot = impl->stages[static_cast<size_t>(stage)].textures[index];
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pass_continuation.h
+@@ -0,0 +1,45 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++#include <span>
++#include "video_core/render_state.h"
++
++namespace Metal::PassContinuation {
++
++// Native texture views must have known, independent backing and exclude every
++// attachment root, including parent views of the exact subresource.
++bool TexturesExcludeAttachments(const VideoCore::RenderState&, std::span<void* const>);
++bool Enabled();
++
++inline bool HasClears(const VideoCore::RenderState& state) {
++    for (const auto& attachment : state.color_attachments) {
++        if (attachment.is_clear) return true;
++    }
++    return state.depth_stencil_attachment.depth_clear ||
++           state.depth_stencil_attachment.stencil_clear;
++}
++
++// Only state equivalence, NOT permission to keep a physical encoder open. Callers must
++// separately exclude feedback, intervening work, query boundaries and pending render tails.
++// Layouts are deliberately compared, including depth/stencil read/write-role changes.
++inline bool ConsumedClearBecomesLoad(const VideoCore::RenderState& old,
++                                    const VideoCore::RenderState& next) {
++    if (!HasClears(old) || HasClears(next)) return false;
++    auto load = old;
++    auto requested = next;
++    for (unsigned i = 0; i < load.color_attachments.size(); ++i) {
++        // Colour flags have no other meaning. Unknown encodings are not admitted.
++        if (load.color_attachments[i].is_clear > 1) return false;
++        load.color_attachments[i].is_clear = 0;
++        load.color_attachments[i].clear_value = {};
++        requested.color_attachments[i].clear_value = {};
++    }
++    auto& depth = load.depth_stencil_attachment;
++    depth.depth_clear = false;
++    depth.stencil_clear = false;
++    depth.clear_value = {};
++    requested.depth_stencil_attachment.clear_value = {};
++    return load == requested;
++}
++
++} // namespace Metal::PassContinuation
+--- /dev/null
++++ b/tests/test_mtl_pass_continuation.cpp
+@@ -0,0 +1,67 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include <cstdio>
++#include "video_core/renderer_metal/mtl_pass_continuation.h"
++
++int main() {
++    using namespace Metal::PassContinuation;
++    using VideoCore::RenderState;
++    unsigned checks = 0, failures = 0;
++    const auto check = [&](bool good, const char* name) {
++        ++checks;
++        if (!good) { ++failures; std::printf("FAIL %s\n", name); }
++    };
++    RenderState old{};
++    old.width = 1920; old.height = 1080; old.num_layers = 1;
++    old.num_color_attachments = 1;
++    auto& color = old.color_attachments[0];
++    color.image_view = 100; color.image_layout = vk::ImageLayout::eColorAttachmentOptimal;
++    color.is_clear = 1; color.clear_value = {0x3f000000, 0, 0, 0x3f800000};
++    auto& depth = old.depth_stencil_attachment;
++    depth.image_view = 200; depth.image_layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
++    depth.has_depth = true; depth.has_stencil = true; depth.depth_clear = true;
++    depth.clear_value = {0x3f800000, 0, 0, 0};
++    auto next = old;
++    next.color_attachments[0].is_clear = 0;
++    next.color_attachments[0].clear_value = {};
++    next.depth_stencil_attachment.depth_clear = false;
++    next.depth_stencil_attachment.clear_value = {};
++    check(ConsumedClearBecomesLoad(old, next), "MRT and nonzero depth clear consumed");
++    check(!ConsumedClearBecomesLoad(old, old), "a fresh identical clear must execute");
++    check(!ConsumedClearBecomesLoad(next, next), "ordinary loads are outside this optimization");
++    const auto rejects = [&](auto mutate, const char* name) {
++        auto changed = next; mutate(changed);
++        check(!ConsumedClearBecomesLoad(old, changed), name);
++    };
++    rejects([](auto& s) { ++s.width; }, "width");
++    rejects([](auto& s) { ++s.height; }, "height");
++    rejects([](auto& s) { ++s.num_layers; }, "layers");
++    rejects([](auto& s) { ++s.num_color_attachments; }, "colour count");
++    rejects([](auto& s) { ++s.color_attachments[0].image_view; }, "colour view");
++    rejects([](auto& s) { ++s.depth_stencil_attachment.image_view; }, "depth view");
++    rejects([](auto& s) { s.depth_stencil_attachment.has_depth = false; }, "depth presence");
++    rejects([](auto& s) { s.depth_stencil_attachment.has_stencil = false; }, "stencil presence");
++    rejects([](auto& s) { s.depth_stencil_attachment.image_layout = vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal; }, "depth/stencil access role");
++    rejects([](auto& s) { s.color_attachments[0].image_layout = vk::ImageLayout::eGeneral; }, "feedback layout");
++    rejects([](auto& s) { s.color_attachments[0].is_clear = 1; }, "fresh colour clear");
++    rejects([](auto& s) { s.depth_stencil_attachment.depth_clear = true; }, "fresh depth clear");
++    rejects([](auto& s) { s.depth_stencil_attachment.stencil_clear = true; }, "fresh stencil clear");
++    // Shadow-only 4096 pass seen in real captures: consumed 1.0 must match a load.
++    auto shadow = old;
++    shadow.width = shadow.height = 4096; shadow.num_color_attachments = 0;
++    shadow.color_attachments = {};
++    shadow.depth_stencil_attachment.has_stencil = false;
++    shadow.depth_stencil_attachment.image_layout = vk::ImageLayout::eDepthAttachmentOptimal;
++    auto shadow_load = shadow;
++    shadow_load.depth_stencil_attachment.depth_clear = false;
++    shadow_load.depth_stencil_attachment.clear_value = {};
++    check(ConsumedClearBecomesLoad(shadow, shadow_load), "shadow clear consumed");
++    // After continuing, remember the LOAD state. Otherwise an identical fresh clear could
++    // accidentally match the original remembered state and never execute.
++    auto remembered = shadow_load;
++    check(!(remembered == shadow), "later identical clear no longer matches remembered state");
++    check(!ConsumedClearBecomesLoad(remembered, shadow), "later identical clear cannot continue");
++    auto invalid = old; invalid.color_attachments[0].is_clear = 2;
++    check(!ConsumedClearBecomesLoad(invalid, next), "unknown colour flags");
++    std::printf("Pass continuation state policy: %u checks, %u failures\n", checks, failures);
++    return failures ? 1 : 0;
++}
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -21,6 +21,7 @@
+ #include <fstream>
+ #include <iterator>
+ #include "video_core/frame_capture.h"
++#include "video_core/renderer_metal/mtl_pass_continuation.h"
+ 
+ #include "video_core/renderer_metal/mtl_scheduler_impl.h"
+ 
+@@ -953,9 +954,143 @@
+     puts("clear folding: full-surface blended color matches separate clear/store/load at original pixel precision");
+ }
+ 
++
++static void TestConsumedClearContinuation(Metal::Device& device) {
++    using namespace Metal::PassContinuation;
++    auto gpu = device.GetImpl().device;
++    const auto make = [&](MTLPixelFormat format) {
++        auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:4 height:4 mipmapped:NO];
++        d.storageMode = MTLStorageModePrivate;
++        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
++        return [gpu newTextureWithDescriptor:d];
++    };
++    auto color = make(MTLPixelFormatRGBA8Unorm);
++    auto depth = make(MTLPixelFormatDepth32Float_Stencil8);
++    auto sampled = make(MTLPixelFormatRGBA8Unorm);
++    auto alias = [color newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
++    CHECK(color && depth && sampled && alias);
++    VideoCore::RenderState clear{};
++    clear.width=clear.height=4; clear.num_layers=1; clear.num_color_attachments=1;
++    clear.color_attachments[0].image_view=(uintptr_t)(__bridge void*)color;
++    clear.color_attachments[0].image_layout=vk::ImageLayout::eColorAttachmentOptimal;
++    clear.color_attachments[0].is_clear=1;
++    clear.depth_stencil_attachment.image_view=(uintptr_t)(__bridge void*)depth;
++    clear.depth_stencil_attachment.image_layout=vk::ImageLayout::eDepthAttachmentOptimal;
++    clear.depth_stencil_attachment.has_depth=true;
++    clear.depth_stencil_attachment.depth_clear=true;
++    clear.depth_stencil_attachment.has_stencil=true;
++    clear.depth_stencil_attachment.stencil_clear=true;
++    clear.depth_stencil_attachment.clear_value[1]=7;
++    clear.depth_stencil_attachment.clear_value[0]=0x3f800000;
++    auto load=clear;
++    load.color_attachments[0].is_clear=0;
++    load.depth_stencil_attachment.depth_clear=false;
++    load.depth_stencil_attachment.stencil_clear=false;
++    load.depth_stencil_attachment.clear_value={};
++    const auto descriptor = [&] {
++        auto p=[MTLRenderPassDescriptor renderPassDescriptor];
++        p.colorAttachments[0].texture=color;
++        p.colorAttachments[0].loadAction=MTLLoadActionClear;
++        p.colorAttachments[0].storeAction=MTLStoreActionStore;
++        p.depthAttachment.texture=depth;
++        p.depthAttachment.loadAction=MTLLoadActionClear;
++        p.depthAttachment.storeAction=MTLStoreActionStore;
++        p.depthAttachment.clearDepth=1;
++        p.stencilAttachment.texture=depth;
++        p.stencilAttachment.loadAction=MTLLoadActionClear;
++        p.stencilAttachment.storeAction=MTLStoreActionStore;
++        p.stencilAttachment.clearStencil=7;
++        return p;
++    };
++    void* unrelated=(__bridge void*)sampled;
++    void* feedback=(__bridge void*)alias;
++    CHECK(TexturesExcludeAttachments(load, std::span<void* const>(&unrelated,1)));
++    CHECK(!TexturesExcludeAttachments(load, std::span<void* const>(&feedback,1)));
++    std::vector<id> retained; // outlive scheduler completion handlers (unretained command buffers)
++    Scheduler q{device,"consumed clear test"};
++    // Exercise every scheduler exclusion with an actual held/direct encoder.
++    for (unsigned kind=0;kind<6;++kind) {
++        auto p=descriptor();
++        q.RenderEncoder((__bridge void*)p,clear,true,true);
++        CHECK(q.Commands().CanContinueConsumedClear());
++        if(kind==0) q.Commands().SetTexture(Metal::RenderList::Stage::Fragment,feedback,0);
++        if(kind==1) q.RequireGuestRender();
++        if(kind==2) q.RequestRenderTail();
++        if(kind==3) { q.BeginHoist(); q.ComputeEncoder(); }
++        if(kind==4) q.Commands().MemoryBarrier();
++        if(kind==5) load.depth_stencil_attachment.image_layout=vk::ImageLayout::eDepthReadOnlyOptimal;
++        const bool continued=q.ContinueConsumedClear(load);
++        if(continued) std::printf("unexpected continuation guard case %u\n",kind);
++        CHECK(!continued);
++        if(kind==3) q.EndHoist();
++        load.depth_stencil_attachment.image_layout=vk::ImageLayout::eDepthAttachmentOptimal;
++        q.Finish(); CHECK(!q.HasFailed());
++    }
++    NSError* error=nil;
++    auto lib=[gpu newLibraryWithSource:@R"(
++#include <metal_stdlib>
++using namespace metal;
++struct V {float4 p [[position]];};
++vertex V vs(uint id [[vertex_id]], constant float& z [[buffer(0)]]) {
++ float2 p=float2((id<<1u)&2u,id&2u);return {float4(p*2-1,z,1)};
++}
++fragment float4 fs(constant float4& c [[buffer(0)]]) {return c;}
++)" options:nil error:&error];
++    CHECK(lib); retained.push_back(lib);
++    auto pd=[MTLRenderPipelineDescriptor new];
++    pd.vertexFunction=[lib newFunctionWithName:@"vs"];pd.fragmentFunction=[lib newFunctionWithName:@"fs"];
++    pd.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;pd.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float_Stencil8;pd.stencilAttachmentPixelFormat=MTLPixelFormatDepth32Float_Stencil8;
++    auto pso=[gpu newRenderPipelineStateWithDescriptor:pd error:&error];CHECK(pso);
++    auto dd=[MTLDepthStencilDescriptor new];dd.depthCompareFunction=MTLCompareFunctionLess;dd.depthWriteEnabled=YES;
++    dd.frontFaceStencil.stencilCompareFunction=MTLCompareFunctionEqual;
++    dd.backFaceStencil.stencilCompareFunction=MTLCompareFunctionEqual;
++    auto ds=[gpu newDepthStencilStateWithDescriptor:dd];CHECK(ds);
++    auto out=[gpu newBufferWithLength:2048 options:MTLResourceStorageModeShared];
++    retained.push_back(pso); retained.push_back(ds); retained.push_back(out);
++    auto queries=[gpu newBufferWithLength:16 options:MTLResourceStorageModeShared];
++    retained.push_back(queries); std::memset(queries.contents,0,16);
++    unsigned query_count=0;
++    q.SetVisibilityQuery([&](const void*) -> std::pair<void*,u64> {
++        CHECK(query_count<2);return {(__bridge void*)queries,(query_count++)*8};
++    });
++    const auto draw = [&](float z, std::array<float,4> c) {
++        auto& list=q.Commands();
++        list.SetRenderPipelineState((__bridge void*)pso);list.SetDepthStencilState((__bridge void*)ds);
++        list.SetStencilReference(7,7);
++        Metal::RenderList::Viewport viewport{0,0,4,4,0,1};list.SetViewports(&viewport,1);
++        list.SetBytes(Metal::RenderList::Stage::Vertex,&z,sizeof(z),0);
++        list.SetBytes(Metal::RenderList::Stage::Fragment,c.data(),sizeof(c),0);
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++    };
++    auto p=descriptor();q.RenderEncoder((__bridge void*)p,clear,true,true);
++    draw(.5f,{1,0,0,1});
++    CHECK(q.ContinueConsumedClear(load));
++    CHECK(q.IsRenderingWith(load));CHECK(!q.IsRenderingWith(clear));
++    CHECK(!q.ContinueConsumedClear(clear));
++    draw(.75f,{0,1,0,1}); // must fail depth: preserve the first draw's depth
++    q.BlitEncoder();
++    [q.GetImpl().blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(4,4,1) toBuffer:out destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:1024];
++    p=descriptor();q.RenderEncoder((__bridge void*)p,clear,true,true); // fresh identical clear must execute
++    draw(.75f,{0,1,0,1});
++    q.BlitEncoder();
++    [q.GetImpl().blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(4,4,1) toBuffer:out destinationOffset:1024 destinationBytesPerRow:256 destinationBytesPerImage:1024];
++    q.Finish();CHECK(!q.HasFailed());
++    CHECK(query_count==2);
++    const auto* query_values=static_cast<const u64*>(queries.contents);
++    CHECK(query_values[0]==16 && query_values[1]==16);
++    const auto* bytes=static_cast<const unsigned char*>(out.contents);
++    for(unsigned y=0;y<4;++y)for(unsigned x=0;x<4;++x) {
++        auto a=bytes+y*256+x*4;auto b=bytes+1024+y*256+x*4;
++        CHECK(a[0]==255 && a[1]==0 && a[2]==0 && a[3]==255);
++        CHECK(b[0]==0 && b[1]==255 && b[2]==0 && b[3]==255);
++    }
++    puts("consumed clear: depth continuity, identical fresh clear, alias feedback, shader metadata, tail, hoist, barrier and layout exclusions passed");
++}
++
+ int main() {
+     @autoreleasepool {
+         Metal::Device device;
++        if(std::getenv("BB_TEST_CONSUMED_CLEAR_ONLY")){TestConsumedClearContinuation(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_CLEAR_BLEND_ONLY")){TestClearFoldBlending(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_CLEAR_FOLD_ONLY")){TestClearFolding(device);return failures?1:0;}
+         if(std::getenv("BB_TEST_COLOR_CLEAR_BATCH_ONLY")){TestColorClearBatch(device);return failures?1:0;}

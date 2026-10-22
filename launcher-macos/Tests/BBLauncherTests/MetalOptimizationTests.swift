@@ -3,10 +3,10 @@ import XCTest
 
 final class MetalOptimizationTests: XCTestCase {
     func testDefaultsMatchAcceptedProfileAndExperimentsStayOff() {
-        XCTAssertEqual(MetalOptimizations.all.count, 25)
-        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 25)
-        XCTAssertEqual(MetalOptimizations.adopted.count, 20)
-        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 5)
+        XCTAssertEqual(MetalOptimizations.all.count, 33)
+        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 33)
+        XCTAssertEqual(MetalOptimizations.adopted.count, 21)
+        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 12)
         let prefs = LauncherPrefs()
         var game = GameSettings(); game.upscaler = "metalfx"
         let env = OptimizedProfile(prefs: prefs, game: game).environment
@@ -24,6 +24,7 @@ final class MetalOptimizationTests: XCTestCase {
             var prefs = LauncherPrefs()
             prefs.metalOptimizations[option.id] = !option.defaultOn
             var game = GameSettings(); game.upscaler = "metalfx"
+            for parent in option.requires { prefs.metalOptimizations[parent] = true }
             let env = OptimizedProfile(prefs: prefs, game: game).environment
             XCTAssertEqual(env[option.id], option.defaultOn ? "0" : "1", option.id)
         }
@@ -141,6 +142,34 @@ final class MetalOptimizationTests: XCTestCase {
         env = OptimizedProfile(prefs: prefs, game: GameSettings()).applyingEnvironment(to: stale)
         XCTAssertEqual(env["BB_GPU_PROFILE"], "1")
         XCTAssertNil(env["BB_MTL_GPU_TIMING"])
+    }
+
+    func testNewExperimentsImportExplicitDeveloperChoicesWithoutOverwritingSavedControls() throws {
+        let name = "bbport.restored-options.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["BB_MTL_DIRECT_COPY": true, "BB_MTL_COPY_PAIR": false], forKey: "metalOptimizations")
+        defaults.set("BB_MTL_NATIVE_CLEAR_BATCH=1 BB_MTL_COPY_PAIR=1 BB_LAYER_USE_CACHE=1 BB_MTL_CONTINUE_CLEARS=0", forKey: "extraEnv")
+        let prefs = LauncherPrefs.load(from: defaults)
+        XCTAssertEqual(prefs.metalOptimizations["BB_MTL_NATIVE_CLEAR_BATCH"], true)
+        XCTAssertEqual(prefs.metalOptimizations["BB_MTL_COPY_PAIR"], false)
+        XCTAssertEqual(prefs.metalOptimizations["BB_LAYER_USE_CACHE"], true)
+        XCTAssertEqual(prefs.metalOptimizations["BB_MTL_CONTINUE_CLEARS"], false)
+    }
+
+    func testRestoredCandidatesDefaultOffAndUnsafeAlgorithmsAreNotOptions() {
+        for id in ["BB_MTL_NATIVE_CLEAR_BATCH", "BB_MTL_MERGE_OVERLAY", "BB_MTL_FILL_UPDATES",
+                   "BB_LAYER_USE_CACHE", "BB_MTL_COPY_PAIR", "BB_MTL_RENDER_UPDATES"] {
+            XCTAssertEqual(MetalOptimizations.defaults[id], false, id)
+        }
+        for id in ["BB_COPY_RING_SCOPE", "BB_TEXTURE_RELEASED_STORAGE", "BB_MTL_QUERY_WRITE_EPOCH"] {
+            XCTAssertFalse(MetalOptimizations.all.contains { $0.id == id }, id)
+        }
+        var prefs = LauncherPrefs()
+        prefs.metalOptimizations["BB_MTL_RENDER_UPDATES"] = true
+        XCTAssertEqual(MetalOptimizations.environment(prefs: prefs)["BB_MTL_RENDER_UPDATES"], "0")
+        prefs.metalOptimizations["BB_MTL_INLINE_UPDATES"] = true
+        XCTAssertEqual(MetalOptimizations.environment(prefs: prefs)["BB_MTL_RENDER_UPDATES"], "1")
     }
 
     func testEveryOptionHasEnglishAndChineseDescriptions() {

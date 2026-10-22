@@ -1,0 +1,161 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+@@ -24,6 +24,9 @@
+ // Native diagnostic inventory only. These are encoded-command observations, not
+ // per-texel coverage or permission to discard a backing. Views resolve to the base.
+ enum class Content { Upload, Clear, Copy, Draw, StorageBinding, Unknown, Count };
++bool ContentEnabled();
++struct ContentSnapshot { std::array<std::uint64_t,unsigned(Content::Count)> counts{}; std::uint64_t last_us=0; };
+ void NoteContent(const void* texture, Content event);
++ContentSnapshot ReadContent(const void* texture);
+ void Report(const void* device, bool force = false);
+ } // namespace Metal::MemoryStats
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+@@ -122,8 +122,21 @@
+     it->second.discarded = value;
+ }
+ Snapshot Read() { auto& l = Get(); std::scoped_lock lock{l.mutex}; return l.totals; }
++bool ContentEnabled() {
++    static const bool audit=[] {const auto* v=std::getenv("BB_TEXTURE_AUDIT_DIR");return v && *v;}();
++    return audit || FrameCapture::NativeMode();
++}
++ContentSnapshot ReadContent(const void* pointer) {
++    if(!ContentEnabled() || !pointer)return {};
++    id<MTLTexture> texture=(__bridge id<MTLTexture>)pointer;
++    for(unsigned depth=0;depth<8 && texture.parentTexture;++depth)texture=texture.parentTexture;
++    auto& l=Get();std::scoped_lock lock{l.mutex};
++    if(auto i=l.entries.find((__bridge const void*)texture);i!=l.entries.end())
++        return {i->second.content,i->second.content_us};
++    return {};
++}
+ void NoteContent(const void* pointer, Content event) {
+-    if(!FrameCapture::NativeMode() || !pointer || unsigned(event)>=unsigned(Content::Count))return;
++    if(!ContentEnabled() || !pointer || unsigned(event)>=unsigned(Content::Count))return;
+     // Native textures/views only; no pixels, command-buffer wait or retained history.
+     id<MTLTexture> texture=(__bridge id<MTLTexture>)pointer;
+     for(unsigned depth=0;depth<8 && texture.parentTexture;++depth)texture=texture.parentTexture;
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -49,7 +49,7 @@
+ 
+ namespace {
+ void NoteAttachmentContent(const RenderState& state, MemoryStats::Content kind, bool clears_only=false) {
+-    if(!VideoCore::FrameCapture::NativeMode())return;
++    if(!MemoryStats::ContentEnabled())return;
+     for(u32 i=0;i<std::min<u32>(state.num_color_attachments,state.color_attachments.size());++i) {
+         const auto& a=state.color_attachments[i];
+         if(a.image_view && (!clears_only || a.is_clear))MemoryStats::NoteContent(
+@@ -1803,9 +1803,9 @@
+ 
+ void Rasterizer::RecordDraw(const VideoCore::PipelineBase* pipeline, const RenderState& state,
+                             const DrawCall& draw, const DynamicDrawState& dynamic) {
+-    const u64 content_draws_before=VideoCore::FrameCapture::NativeMode()?impl->recorded_draws.load(std::memory_order_relaxed):0;
++    const u64 content_draws_before=MemoryStats::ContentEnabled()?impl->recorded_draws.load(std::memory_order_relaxed):0;
+     SCOPE_EXIT {
+-        if(VideoCore::FrameCapture::NativeMode() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
++        if(MemoryStats::ContentEnabled() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
+             NoteAttachmentContent(state,MemoryStats::Content::Draw);
+     };
+     @autoreleasepool {
+@@ -1925,9 +1925,9 @@
+                                     const IndirectDraw& indirect, const IndirectBuffers& buffers,
+                                     const DynamicDrawState& dynamic) {
+     scheduler.FlushRenderTail();
+-    const u64 content_draws_before=VideoCore::FrameCapture::NativeMode()?impl->recorded_draws.load(std::memory_order_relaxed):0;
++    const u64 content_draws_before=MemoryStats::ContentEnabled()?impl->recorded_draws.load(std::memory_order_relaxed):0;
+     SCOPE_EXIT {
+-        if(VideoCore::FrameCapture::NativeMode() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
++        if(MemoryStats::ContentEnabled() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
+             NoteAttachmentContent(state,MemoryStats::Content::Draw);
+     };
+     @autoreleasepool {
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -21,6 +21,9 @@
+ #include "video_core/texture_cache/host_compatibility.h"
+ #include "video_core/texture_cache/texture_cache.h"
+ #include "video_core/frame_capture.h"
++#ifdef __APPLE__
++#include "video_core/renderer_metal/mtl_memory_stats.h"
++#endif
+ #include "video_core/texture_cache/tile_manager.h"
+ 
+ namespace VideoCore {
+@@ -1623,16 +1626,22 @@
+     if (!output) return;
+     backend.BeforeImageAccess();
+     std::scoped_lock lock{mutex};
+-    std::fprintf(output, "uid,address,guest_bytes,host_bytes,retired_bytes,width,height,format,tile,flags,usage,binding,proxy,access_tick,write_tick,gpu_complete,lru_tick,current_tick,gc_tick,tag_generation,tag_domain,tag_state,current_owner,depth,samples\n");
++    std::fprintf(output, "uid,address,guest_bytes,host_bytes,retired_bytes,width,height,format,tile,flags,usage,binding,proxy,access_tick,write_tick,gpu_complete,lru_tick,current_tick,gc_tick,tag_generation,tag_domain,tag_state,current_owner,depth,samples,uploads,clears,copies,draws,storage_binds,unknown_writes,content_us\n");
+     u64 count = 0, capacity = 0, dirty_safe = 0;
+     for (const auto& [index, tag] : guest_image_owners) {
+         const auto& image = slot_images[ImageId{index}];
+         if (False(image.flags & ImageFlagBits::Registered)) continue;
+         u64 bytes = 0, retired = 0;
++        std::array<u64,6> content{};u64 content_us=0;
+         for (const auto& backing : image.backing_images) {
+             if (!backing.image.native && !backing.image.image) continue;
+             bytes += backing.image.size_bytes;
+             if (backing.retired) retired += backing.image.size_bytes;
++#ifdef __APPLE__
++            const auto observed=Metal::MemoryStats::ReadContent(backing.image.native);
++            for(unsigned i=0;i<content.size();++i)content[i]+=observed.counts[i];
++            content_us=std::max(content_us,observed.last_us);
++#endif
+         }
+         const u32 usage = image.usage.texture | image.usage.storage << 1 |
+             image.usage.render_target << 2 | image.usage.depth_target << 3 | image.usage.vo_surface << 4;
+@@ -1646,13 +1655,14 @@
+         if (image.CanReleaseInvalidBacking()) dirty_safe += bytes;
+         ++count; capacity += bytes;
+         const auto u = [](u64 n) { return static_cast<unsigned long long>(n); };
+-        std::fprintf(output, "%llu,%llu,%llu,%llu,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%u,%llu,%llu,%llu,%llu,%u,%u,%llu,%u,%u\n",
++        std::fprintf(output, "%llu,%llu,%llu,%llu,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%llu,%llu,%u,%llu,%llu,%llu,%llu,%u,%u,%llu,%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+             u(image.image_uid), u(image.guest_begin), u(image.info.guest_size), u(bytes), u(retired),
+             image.info.size.width, image.info.size.height, u32(image.info.pixel_format), u32(image.info.tile_mode),
+             u32(image.flags), usage, binding, unsigned(image.scene_proxy), u(image.tick_accessed_last),
+             u(image.gpu_write_tick), unsigned(complete), u(image.lru_touched_tick), u(backend.CurrentTick()),
+             u(gc_tick), u(tag.generation), unsigned(tag.domain), state, u(owner.generation),
+-            unsigned(image.info.props.is_depth || bool(image.depth_id)), image.info.num_samples);
++            unsigned(image.info.props.is_depth || bool(image.depth_id)), image.info.num_samples,
++            u(content[0]),u(content[1]),u(content[2]),u(content[3]),u(content[4]),u(content[5]),u(content_us));
+         if (count >= 16384) break;
+     }
+     const bool ok = !std::ferror(output);
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1954,7 +1954,7 @@
+ static void TestContentAudit(Fixture& f) {
+     using VideoCore::FrameCapture;
+     namespace Stats=Metal::MemoryStats;
+-    CHECK(FrameCapture::NativeMode());
++    CHECK(Stats::ContentEnabled());
+     char directory[]="/private/tmp/bb-content-test-XXXXXX";CHECK(mkdtemp(directory));
+     const std::filesystem::path root=directory,trigger=root/"trigger";
+     setenv("BB_CAPTURE_DIR",directory,1);setenv("BB_CAPTURE_TRIGGER",trigger.c_str(),1);
+@@ -1973,6 +1973,7 @@
+     auto readback=MakeBuffer(f.runtime,256,MemoryType::HostCached);
+     f.runtime.DownloadImage(target.image.get(),readback.get(),{&whole,1});Settle(f);
+     CHECK(std::memcmp(readback->mapped_data.data(),bytes.data(),bytes.size())==0);
++    if(FrameCapture::NativeMode()) {
+     std::ofstream(trigger)<<"1";FrameCapture::OnFlip(456);FrameCapture::FrameBoundary(201);
+     Stats::CaptureLifetimes();FrameCapture::FrameBoundary(202);
+     bool source_found=false,target_found=false;
+@@ -1985,7 +1986,15 @@
+                 target_found=line.find("\"copies\":1")!=std::string::npos;
+         }
+     }
+-    CHECK(source_found && target_found);view=nil;std::filesystem::remove_all(root);
++    CHECK(source_found && target_found);
++    }
++    const auto base_observed=Stats::ReadContent((__bridge const void*)native);
++    const auto view_observed=Stats::ReadContent((__bridge const void*)view);
++    CHECK(base_observed.counts==view_observed.counts && base_observed.last_us>0);
++    CHECK(base_observed.counts[unsigned(Stats::Content::Upload)]==1);
++    CHECK(base_observed.counts[unsigned(Stats::Content::Clear)]==1);
++    CHECK(base_observed.counts[unsigned(Stats::Content::StorageBinding)]==1);
++    view=nil;std::filesystem::remove_all(root);
+     puts("content audit: real upload/clear/copy, view-to-base aggregation, exact GPU bytes and bounded lifetime metadata passed");
+ }
+ 

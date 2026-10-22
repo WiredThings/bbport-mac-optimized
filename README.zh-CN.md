@@ -4,7 +4,7 @@
 
 这是 [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized) 的
 **WiredThings 分支**，提供独立 macOS 启动器、**直接 Metal 渲染**、**MetalFX 时域升频**，
-以及英文、简体中文、繁体中文启动器界面。当前版本是 **0.2.47**，包含历史存档回收及可选的 iCloud Drive 正常存档同步。“关于”中的版本括号显示对应源码的 Git 短提交号，macOS 内部仍保留数字构建号。历史版本标为 Pre-release，下载请认准 Latest。
+以及英文、简体中文、繁体中文启动器界面。当前版本是 **0.2.48**，包含顶点预处理安全修复、无用 CPU 工作清理及补齐的 Metal 实验开关；保留历史存档回收和可选的 iCloud Drive 正常存档同步。“关于”中的版本括号显示对应源码的 Git 短提交号，macOS 内部仍保留数字构建号。历史版本标为 Pre-release，下载请认准 Latest。
 
 0.2.36 起为新配置默认采用原版模型细节，并提示强制低 LOD 可能造成墙体或地板缺失。
 已有配置若遇到缺失场景，请将“模型细节”改为 **游戏默认（0）** 后重新启动。
@@ -93,7 +93,7 @@ mkdir "$GAME_MERGED" && \
 | 地址表 | 把固定 1 GiB GPU 平铺地址表改为两级页表，同步修改着色器寻址 |
 | 稳定性 | 后台预处理遇到异常资源格式时回到顺序渲染路径重新读取；断言发生时记录线程和调用栈 |
 | 渲染效率 | 采样器快速缓存；安全省略无用附件加载；直接清除场景副本；alpha 合并；兼容清除合批、复制／平铺、资源访问与同步细化 |
-| 前端 | 25 项 Metal 优化开关、依赖和证据标识；按后端显示适用选项；修正呈现／帧率标签；按 macOS 规格处理并署名图标 |
+| 前端 | 33 项 Metal 优化开关、依赖和证据标识；按后端显示适用选项；修正呈现／帧率标签；按 macOS 规格处理并署名图标 |
 | Vulkan 兼容 | 保留此前移植的着色器和命令内存修复，使用独立缓存；这些 Vulkan 专用改动不算作 Metal 加速 |
 
 独立启动器、超宽屏界面管理、补丁系统和快速存读档的基础来自上游。
@@ -130,10 +130,11 @@ Metal 引擎、原始游戏补丁、移植算法均保留原作者归属。
 
 - “分辨率”是输出尺寸；“高级设置 → 超分辨率 → 预设”决定 MetalFX 输入尺寸，
   启动器会显示实际场景渲染分辨率。MetalFX 为时域升频，“原生抗锯齿”以 1:1 渲染。
-- Metal 优化区默认 **20 项开启、5 项可选实验关闭**；已有的明确选择会保留。
+- 当前源码的 Metal 优化区共 33 项，默认 **21 项开启、12 项可选实验关闭**；已有的明确选择会保留。
   游戏物体速度图和实验性遮挡剔除分别有独立开关。
-- 五项可选实验是跨块快照复用、片元参数专用化、计算内核小参数写入、宽松浮点运算、二进制管线归档。
-  收益未确定，部分有实测内存成本，见[开关证据](docs/release/METAL-OPTIMIZATION-CONTROLS.md)。
+- 原有五项可选实验是跨块快照复用、片元参数专用化、计算内核小参数写入、宽松浮点运算、二进制管线归档。
+  新恢复的六项实验涵盖原生清除合批、浮层合并、原生填充、驻留记录复用、相同物理地址复制合并和通道内小参数写入，全部默认关闭。
+  正确性通过不等于有帧率收益；历史 M4 对照的收益不确定或偏慢。这些选项随 0.2.48 发布。部分有实测内存成本，见[开关证据](docs/release/METAL-OPTIMIZATION-CONTROLS.md)。
 - 本分支主要在 **基础款 M4 Mac mini：10 核 GPU、16 GB 内存**上验证。
   场景、渲染尺寸、特效和缓存状态都会影响帧率，**不保证全程 60 帧**。
   历史对照和内存取舍见[测量说明](docs/THIRD_PARTY_CHANGES.md#measurements-and-limits)。
@@ -143,7 +144,7 @@ Metal 引擎、原始游戏补丁、移植算法均保留原作者归属。
 
 ## 实验性联网接入
 
-0.2.47 启动器提供默认关闭的可选“联网”区，通过独立 bbnet 模块在 Metal 后端接入 The Hunter’s Dream。
+0.2.48 启动器提供默认关闭的可选“联网”区，通过独立 bbnet 模块在 Metal 后端接入 The Hunter’s Dream。
 隔离客户端已验证网站设备授权、游戏服务器公告和圣杯地牢“搜索 → 加入”；留言已完成游戏内
 写入、列表查看和删除，尚未由第二客户端确认送达。按铭文直接搜索、合作和入侵尚未验证。
 正式版联网、离线共用正常存档。进入联网前归档旧快速存档，并从当前正常存档建立新检查点。F2 在两种模式均可保存，F3 始终离线恢复，直到主动重新开启联网。存档管理区分当前正常存档、活动快速存档与历史备份，支持独立备份和校验导出；配对码可点击复制，联网服务固定为 The Hunter’s Dream。QA 存档只用于开发，永远不参与正式版迁移。自动历史按 3／3／5 保留，手动及标记保留的备份不清理。可选 iCloud Drive 只同步最新正常存档，冲突由用户选择；见[存档与同步说明](docs/USER_GUIDE.zh-CN.md#存档管理)。详见[联网说明](docs/ONLINE.md)。
@@ -172,7 +173,7 @@ softwareupdate --install-rosetta --agree-to-license
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.47-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.48-source1
 ```
 
 脚本依次初始化子模块、编译 x86-64 依赖和 arm64 Vulkan 驱动、安装固定版本的
@@ -185,17 +186,17 @@ SPIRV-Cross／xbyak，构建两种架构的 Vulkan 运行组件、Metal 渲染�
 
 产物位置：
 
-- `out/source-release-0.2.47-source1/Blood Echoes.app`
-- `dist/Blood-Echoes-0.2.47-source1.zip`：Metal + Vulkan 完整应用
-- `dist/blood-echoes-0.2.47-source1-source.tar.gz`：对应源码及依赖
+- `out/source-release-0.2.48-source1/Blood Echoes.app`
+- `dist/Blood-Echoes-0.2.48-source1.zip`：Metal + Vulkan 完整应用
+- `dist/blood-echoes-0.2.48-source1-source.tar.gz`：对应源码及依赖
 - `dist/source-build-verification.json`：最终打包、签名与动态链接检查结果
 - `dist/source-build-SHA256SUMS.txt`：最终 App ZIP 与源码包的校验和
 
 请使用干净克隆；打包器会拒绝未提交的项目文件。再次生成完整 App 时换一个版本后缀，
 避免覆盖已有暂存结果。依赖已由此流程准备好后，可运行
-`BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.47-source2`。
+`BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.48-source2`。
 保留 `.git`：GitHub 自动生成的源码 ZIP 不含子模块；Release 的源码检查包没有构建守卫所需的
-Git 元数据。`v0.2.47` 已包含此构建入口；`optimized` 分支还会继续接收后续修复。
+Git 元数据。`v0.2.48` 已包含此构建入口；`optimized` 分支还会继续接收后续修复。
 
 如果 SDK 与链接器不匹配，将 `SDKROOT` 改为当前编译器支持的已安装 SDK，避免旧链接器搭配新 SDK。
 分步指令、验证边界和排错见[详细构建指南](docs/release/BUILD-OPTIMIZED.md)。
@@ -204,7 +205,7 @@ Git 元数据。`v0.2.47` 已包含此构建入口；`optimized` 分支还会继
 
 - [源码、固定依赖与构建方法](docs/release/SOURCE.md)
 - [完整分支工作与第三方署名](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.47 变更](docs/release/0.2.47.md) · [反馈问题](https://github.com/WiredThings/blood-echoes/issues)
+- [0.2.48 变更](docs/release/0.2.48.md) · [反馈问题](https://github.com/WiredThings/blood-echoes/issues)
 
 感谢 **DiAvisoo、bmy/bbport-mac、deadinside28、shadPS4、Huax-1839、IFreemz、Awakenchan、
 Wooloomooloo2／Mark Hall** 及各依赖组件贡献者。

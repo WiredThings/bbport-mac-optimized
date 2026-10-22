@@ -1,0 +1,245 @@
+--- a/gpu/shadps4/video_core/texture_cache/image.h
++++ b/gpu/shadps4/video_core/texture_cache/image.h
+@@ -129,6 +129,9 @@
+ 
+     bool CanReleaseGuestBacking() const;
+     bool CanReleaseInvalidBacking() const;
++    // Additional state gates only: the caller MUST also hold a released heap
++    // generation transaction excluding every overlapping live allocation.
++    bool CanReleaseFreedStorageBacking() const;
+ 
+     bool SafeToDownload() const {
+         return True(flags & ImageFlagBits::GpuModified) && False(flags & (ImageFlagBits::Dirty));
+--- a/gpu/shadps4/video_core/texture_cache/image.cpp
++++ b/gpu/shadps4/video_core/texture_cache/image.cpp
+@@ -90,6 +90,18 @@
+         False(flags & (ImageFlagBits::GpuModified | ImageFlagBits::GpuDirty)) &&
+         !usage.render_target && !usage.depth_target && !usage.storage && !usage.vo_surface &&
+         !scene_proxy && !binding.is_bound && !binding.is_target && !binding.needs_rebind &&
++        backend->IsFreeKnown(tick_accessed_last) &&
++        (!gpu_write_tick || backend->IsFreeKnown(gpu_write_tick));
++}
++
++bool Image::CanReleaseFreedStorageBacking() const {
++    // No readback to freed allocator payloads. This is NOT a normal cache eviction
++    // predicate: only a confirmed dead logical allocation can make GPU-only data dead.
++    return backing && True(flags & ImageFlagBits::Registered) &&
++        True(flags & ImageFlagBits::GpuModified) && False(flags & ImageFlagBits::GpuDirty) &&
++        usage.storage && !usage.render_target && !usage.depth_target && !usage.vo_surface &&
++        !info.props.is_depth && !depth_id && info.num_samples==1 && !scene_proxy &&
++        !binding.is_bound && !binding.is_target && !binding.needs_rebind && !binding.force_general &&
+         backend->IsFreeKnown(tick_accessed_last) &&
+         (!gpu_write_tick || backend->IsFreeKnown(gpu_write_tick));
+ }
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -1504,7 +1504,11 @@
+     backend.BeforeImageAccess(); // join helper texture bindings before examining/removing slots
+     std::scoped_lock lock{mutex};
+     auto& lifetimes=BbResourceLifetime::Get();
+-    std::vector<std::pair<ImageId,BbResourceLifetime::Tag>> candidates;
++    // Candidate stays opt-in until isolated repeated-load, death and FPS validation.
++    static const bool dead_storage=[] {const auto* v=std::getenv("BB_TEXTURE_RELEASED_STORAGE");return v && v[0]=='1';}();
++    const u64 cold_cutoff=gc_tick_at_second[(gc_second-2)%gc_tick_at_second.size()];
++    struct Candidate {ImageId id;BbResourceLifetime::Tag tag;bool storage;};
++    std::vector<Candidate> candidates;
+     std::vector<ImageId> reassociate;
+     u64 waiting=0, protected_images=0;
+     for (const auto& [index,tag]:guest_image_owners) {
+@@ -1514,33 +1518,48 @@
+         if (owner && owner!=tag) { reassociate.push_back(id);continue; }
+         if (lifetimes.Status(tag)!=BbResourceLifetime::State::Released) continue;
+         // No writeback, no guest page decommit, no query/depth/velocity/proxy deletion.
+-        // An image ever used as a target/storage stays on the existing safe lifetime path.
++        // The default path retains every GPU-written role. The optional storage-only
++        // extension additionally requires both coldness and the locked generation proof.
+         if (!backend.IsFreeKnown(image.tick_accessed_last) ||
+             (image.gpu_write_tick && !backend.IsFreeKnown(image.gpu_write_tick))) {
+             ++waiting;continue;
+         }
+         // Range-family unknown frees show additional allocation paths; keep it diagnostic
+         // until those are paired too. Only the fully wrapped TLSF heap authorizes removal.
+-        if (tag.domain!=BbResourceLifetime::Domain::Heap || !image.CanReleaseGuestBacking()) {
++        const bool extra_storage=dead_storage && !BbToggle::Disabled(BbToggle::TextureCollector) &&
++            cold_cutoff && image.lru_touched_tick<cold_cutoff && image.CanReleaseFreedStorageBacking();
++        if (tag.domain!=BbResourceLifetime::Domain::Heap ||
++            (!image.CanReleaseGuestBacking() && !extra_storage)) {
+             ++protected_images;continue;
+         }
+-        if (candidates.size()<16) candidates.emplace_back(id,tag);
++        // Do not end a render pass for candidates which the interval proof
++        // already rejects. Removal below repeats the proof atomically; allocations
++        // are allowed to race with this read-only preflight.
++        if (extra_storage && !lifetimes.ReleasedRangeUnused(tag,image.info.guest_address,
++                                                          image.info.guest_size,2000)) continue;
++        if (candidates.size()<16) candidates.push_back({id,tag,extra_storage});
+     }
+     for(const auto id:reassociate) AssociateGuestImage(id);
+     lifetimes.NoteScan(waiting,protected_images);
+     if (!BbResourceLifetime::ReclaimReady() || candidates.empty()) return;
+     backend.EndRendering(); // release held pass references through the existing backend path
+-    for(const auto& [id,tag]:candidates) {
++    u64 storage_images=0,storage_bytes=0;
++    for(const auto& [id,tag,storage]:candidates) {
+         const auto& image=slot_images[id];
+         const u64 address=image.info.guest_address, size=image.info.guest_size;
+         // Both allocator domains must have no replacement overlap. A dropped record disables
+         // reclamation. Keep the generation locked through unregistration; never wait for GPU.
+-        lifetimes.WithReleased(tag,address,size,2000,[&]() -> BbResourceLifetime::u64 {
++        u64 removed_bytes=0;
++        const bool removed=lifetimes.WithReleased(tag,address,size,2000,[&]() -> BbResourceLifetime::u64 {
+             u64 bytes=0;for(const auto& backing:image.backing_images)bytes+=backing.image.size_bytes;
++            removed_bytes=bytes;
+             FreeImage(id); // normal unwatch/unregister/deferred destruction; same GPU safety rules
+             return bytes;
+         });
+-    }
++        if(removed && storage) {++storage_images;storage_bytes+=removed_bytes;}
++    }
++    if(storage_images)std::printf("Released storage reclaim: images=%llu capacity=%llu bytes; explicit dead heap, GPU-complete, no live overlap, no writeback\n",
++        (unsigned long long)storage_images,(unsigned long long)storage_bytes);
+ }
+ 
+ void TextureCache::RunGarbageCollector() {
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1304,6 +1304,58 @@
+     }
+     Settle(f);
+     CHECK(weak_buffer == nil);
++}
++
++// Exercise positive retirement with a real GPU-written texture and an independent
++// allocation tracker. Reuse/alias exclusions gate the actual destruction callback.
++static void TestReleasedStorageRetirement(Fixture& f) {
++    namespace Life=BbResourceLifetime;
++    Img storage{f.runtime,MakeInfo(vk::Format::eR8G8B8A8Unorm,64,64)};
++    auto& image=*storage.image;
++    image.flags=ImageFlagBits::Registered;image.usage.storage=1;
++    vk::ClearValue clear{};clear.color.float32[0]=1;clear.color.float32[3]=1;
++    f.runtime.ClearImage(&image,{.base={0,0},.extent={1,1}},clear);
++    image.tick_accessed_last=f.runtime.CurrentTick();image.gpu_write_tick=f.runtime.CurrentTick();
++    CHECK(!image.CanReleaseFreedStorageBacking());
++    Life::Tracker lifetimes;
++    const auto tag=lifetimes.Allocate(Life::Domain::Heap,image.guest_begin,image.info.guest_size+64);
++    CHECK(tag && lifetimes.Release(tag));
++    bool destroyed=false;
++    CHECK(!lifetimes.WithReleased(tag,image.guest_begin,image.info.guest_size,60000,[&] {destroyed=true;return 1;}));
++    CHECK(!destroyed);Settle(f);CHECK(image.CanReleaseFreedStorageBacking());
++    CHECK(!image.CanReleaseGuestBacking()); // valid GPU-written storage stays protected normally
++    auto whole=WholeCopy(64,64);auto readback=MakeBuffer(f.runtime,64*64*4,MemoryType::HostCached);
++    f.runtime.DownloadImage(&image,readback.get(),{&whole,1});Settle(f);
++    bool red=true;for(unsigned n=0;n<64*64;++n)red &= readback->mapped_data[n*4]==255 && readback->mapped_data[n*4+1]==0 && readback->mapped_data[n*4+2]==0 && readback->mapped_data[n*4+3]==255;
++    CHECK(red); // GPU-only contents remain intact before proven retirement
++    image.usage.render_target=1;CHECK(!image.CanReleaseFreedStorageBacking());image.usage.render_target=0;
++    image.usage.depth_target=1;CHECK(!image.CanReleaseFreedStorageBacking());image.usage.depth_target=0;
++    image.usage.vo_surface=1;CHECK(!image.CanReleaseFreedStorageBacking());image.usage.vo_surface=0;
++    image.scene_proxy=true;CHECK(!image.CanReleaseFreedStorageBacking());image.scene_proxy=false;
++    image.binding.is_bound=1;CHECK(!image.CanReleaseFreedStorageBacking());image.binding.is_bound=0;
++    image.binding.needs_rebind=1;CHECK(!image.CanReleaseFreedStorageBacking());image.binding.needs_rebind=0;
++    image.flags|=ImageFlagBits::GpuDirty;CHECK(!image.CanReleaseFreedStorageBacking());image.flags&=~ImageFlagBits::GpuDirty;
++    auto overlap=lifetimes.Allocate(Life::Domain::Range,image.guest_begin+128,32);
++    CHECK(!lifetimes.WithReleased(tag,image.guest_begin,image.info.guest_size,0,[&] {destroyed=true;return 1;}));
++    CHECK(!destroyed && storage.image && lifetimes.Release(overlap));
++    auto replacement=lifetimes.Allocate(Life::Domain::Heap,image.guest_begin,image.info.guest_size+64);
++    CHECK(lifetimes.Status(tag)==Life::State::Reused);
++    CHECK(!lifetimes.WithReleased(tag,image.guest_begin,image.info.guest_size,0,[&] {destroyed=true;return 1;}));
++    CHECK(!destroyed && storage.image && lifetimes.Release(replacement));
++    __weak id<MTLTexture> weak;
++    @autoreleasepool {
++        weak=storage.Texture();
++        __attribute__((objc_precise_lifetime)) id<MTLTexture> view=[storage.Texture() newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
++        CHECK(lifetimes.WithReleased(tag,image.guest_begin,image.info.guest_size,0,[&] {
++            CHECK(image.CanReleaseFreedStorageBacking());
++            const auto bytes=image.info.guest_size;storage.image.reset();destroyed=true;return bytes;
++        }));
++        Settle(f);CHECK(weak!=nil); // a real native view still owns the backing
++        view=nil;
++    }
++    Settle(f);CHECK(destroyed && weak==nil);
++    CHECK(lifetimes.Read().reclaimed_images==1);
++    puts("released storage: real GPU contents, completion, generation/overlap gates and native view destruction passed; no writeback");
+ }
+ 
+ static void TestMemoryCategoriesAndIdleBacking(Fixture& f) {
+@@ -2056,6 +2108,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_RELEASED_STORAGE_ONLY")) {TestReleasedStorageRetirement(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_CONTENT_AUDIT_ONLY")) {TestContentAudit(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_PATTERN_UPDATES_ONLY")) {TestPatternUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BARRIER_SOURCES_ONLY")) {TestBarrierSources(f);Settle(f);return failures?1:0;}
+--- a/gpu/shim/bbport_resource_lifetime.h
++++ b/gpu/shim/bbport_resource_lifetime.h
+@@ -41,6 +41,9 @@
+   // old cache entry.
+   bool WithReleased(Tag, u64 address, u64 size, u64 min_age_ms,
+                     const std::function<u64()> &reclaim);
++  // Read-only preflight can avoid an unnecessary encoder break. It is NOT
++  // authorization: WithReleased must revalidate under the lock before removal.
++  bool ReleasedRangeUnused(Tag, u64 address, u64 size, u64 min_age_ms) const;
+   Snapshot Read() const;
+   void NoteScan(u64 waiting, u64 protected_images);
+ 
+@@ -52,6 +55,7 @@
+   };
+   void Remember(Record);
+   State StatusLocked(Tag) const;
++  bool ReleasedRangeUnusedLocked(Tag,u64 address,u64 size,u64 min_age_ms) const;
+   mutable std::mutex mutex;
+   const std::size_t capacity;
+   std::array<std::map<u64, Tag>, unsigned(Domain::Count)> live;
+--- a/gpu/shim/bbport_resource_lifetime.cpp
++++ b/gpu/shim/bbport_resource_lifetime.cpp
+@@ -147,11 +147,8 @@
+   std::scoped_lock lock{mutex};
+   return StatusLocked(tag);
+ }
+-bool Tracker::WithReleased(Tag tag, u64 address, u64 size, u64 age,
+-                           const std::function<u64()> &reclaim) {
+-  if (!Valid(address, size))
+-    return false;
+-  std::scoped_lock lock{mutex};
++bool Tracker::ReleasedRangeUnusedLocked(Tag tag,u64 address,u64 size,u64 age) const {
++  if (!Valid(address,size)) return false;
+   for (const auto &c : counters.domains)
+     if (c.dropped)
+       return false;
+@@ -172,6 +169,15 @@
+         Overlap(address, size, it->second.address, it->second.size))
+       return false;
+   }
++  return true;
++}
++bool Tracker::ReleasedRangeUnused(Tag tag,u64 address,u64 size,u64 age) const {
++  std::scoped_lock lock{mutex};return ReleasedRangeUnusedLocked(tag,address,size,age);
++}
++bool Tracker::WithReleased(Tag tag, u64 address, u64 size, u64 age,
++                           const std::function<u64()> &reclaim) {
++  std::scoped_lock lock{mutex};
++  if (!ReleasedRangeUnusedLocked(tag,address,size,age)) return false;
+   const u64 bytes = reclaim();
+   if (bytes) {
+     ++counters.reclaimed_images;
+--- a/tests/test_guest_resource_lifetime.cpp
++++ b/tests/test_guest_resource_lifetime.cpp
+@@ -49,6 +49,18 @@
+       !limited.Allocate(Domain::Range, 0x1000, 16)); // unobserved replacement
+   assert(!limited.WithReleased(y, 0x1000, 16, 0, [] { return 16; }));
+   assert(limited.Read().domains[0].dropped == 1);
++  Tracker preflight;
++  auto old=preflight.Allocate(Domain::Heap,0x80000,4096);
++  assert(!preflight.ReleasedRangeUnused(old,0x80000,4096,0));
++  assert(preflight.Release(old));
++  assert(!preflight.ReleasedRangeUnused(old,0x80000,4096,60000));
++  assert(preflight.ReleasedRangeUnused(old,0x80000,4096,0));
++  assert(preflight.Read().reclaimed_images==0); // inspection is not a fake reclaim
++  auto raced=preflight.Allocate(Domain::Range,0x80100,32);
++  bool deleted=false;
++  assert(!preflight.WithReleased(old,0x80000,4096,0,[&] {deleted=true;return 4096;}));
++  assert(!deleted && preflight.Release(raced));
++  assert(preflight.ReleasedRangeUnused(old,0x80000,4096,0));
+   Tracker concurrent;
+   auto z = concurrent.Allocate(Domain::Heap, 0x1000, 1024);
+   assert(concurrent.Release(z));

@@ -522,3 +522,22 @@
 "iCloud transfer paused: %@" = "iCloud 传输暂停：%@";
 "macOS confirmed the save files uploaded." = "macOS 已确认存档文件上传完成。";
 "iCloud Drive has not confirmed these files. Local copies are preserved." = "iCloud Drive 尚未确认这些文件，本地副本已保留。";
+
+/* Retained performance experiments, default off. */
+"Continue the pass after a consumed clear" = "清除完成后继续当前通道";
+"Retains attachment and feedback guards. About 2% faster in one matched chalice comparison; no extra cache." = "保留附件与反馈校验。一次同场景圣杯对照约快 2%；不增加缓存。";
+"Batch native-resolution color clears" = "原生分辨率颜色清除合批";
+"Combines compatible clears. Two comparison orders showed no repeatable FPS benefit; no new GPU resources." = "合并兼容的清除。两种对照顺序均未确认稳定帧率收益；不新增 GPU 资源。";
+"Merge presentation and overlay passes" = "合并呈现与浮层通道";
+"Pixel comparison passed; gameplay benefit is unconfirmed. One comparison measured higher memory, with no new GPU allocations." = "像素对照通过，帧率收益未确认。一次对照内存较高，但没有新增 GPU 分配。";
+"Fill repeated small parameter values natively" = "原生填充重复的小参数值";
+"Preserves every write. No FPS gain in the M4 comparison; takes priority over compute and in-pass updates for repeated-byte values." = "保留每次写入。M4 对照无帧率收益；重复字节值优先走此路径，而非计算或通道内写入。";
+"Memoize conservative residency bookkeeping" = "复用完整范围的驻留记录";
+"Keeps full resource ranges and invalidates on demotion. Correctness checks passed; the earlier M4 comparison was 3.3% slower." = "保留完整资源范围，降级时失效。正确性校验通过；此前 M4 对照慢约 3.3%。";
+"Merge identical physical copy stores" = "合并相同物理地址的复制写入";
+"Skips the second store only when both resolved pointers match. Correctness checks passed; the earlier M4 comparison was 1% slower." = "仅在两个解析指针相同时省去第二次写入。正确性校验通过；此前 M4 对照慢约 1%。";
+"Write small parameters within the render pass" = "在绘制通道内写入小参数";
+"Retains all writes and barriers; unknown fragment conflicts fall back. The earlier M4 comparison was 8.6% slower; adds a small host pipeline." = "保留全部写入和屏障，未知片元冲突走原路径。此前 M4 对照慢约 8.6%；增加一个小型宿主管线。";
+
+"Preserve heap release history" = "保留堆释放记录";
+"Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit." = "优先保留堆释放记录，容量不变；M4 测试未确认性能或净内存收益。";

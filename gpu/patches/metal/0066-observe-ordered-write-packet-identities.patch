@@ -1,0 +1,150 @@
+diff --git a/gpu/shadps4/video_core/amdgpu/liverpool.cpp b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+--- a/gpu/shadps4/video_core/amdgpu/liverpool.cpp
++++ b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+@@ -628,7 +628,7 @@
+     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
+     VideoCore::FrameCapture::NativeWriteOrigin(write_data->Address<VAddr>(),
+         (header->type3.count.Value()-2)*sizeof(u32),
+-        VideoCore::FrameCapture::WriteOrigin::GraphicsWriteData);
++        VideoCore::FrameCapture::WriteOrigin::GraphicsWriteData,0,data);
+     // bbport BB_GUEST_IN_PLACE: the GPU writes it in stream order, as the command processor
+     // does. A CPU store here lands before the GPU has run the work recorded before it, which may
+     // still read the old value (the game orders such writes after its own fences and
+@@ -799,7 +799,7 @@
+             const auto* dump_const = reinterpret_cast<const PM4DumpConstRam*>(header);
+             VideoCore::FrameCapture::NativeWriteOrigin(dump_const->Address<VAddr>(),
+                 dump_const->Size(),VideoCore::FrameCapture::WriteOrigin::ConstantRam,
+-                dump_const->Offset());
++                dump_const->Offset(),header);
+             if (BbCeStats::Enabled()) {
+                 BbCeStats::NoteDump(dump_const->Address<VAddr>(), dump_const->Size());
+             }
+@@ -2576,7 +2576,7 @@
+             ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
+             const u32 data_size = (header->type3.count.Value() - 2) * 4;
+             VideoCore::FrameCapture::NativeWriteOrigin(write_data->Address<VAddr>(),data_size,
+-                VideoCore::FrameCapture::WriteOrigin::ComputeWriteData);
++                VideoCore::FrameCapture::WriteOrigin::ComputeWriteData,0,header);
+             if (!write_data->wr_one_addr.Value()) {
+                 BbFreeCheck::Check(write_data->Address<u64>(), data_size, write_data->data,
+                                    BbFreeCheck::ComputeWriteData);
+diff --git a/gpu/shadps4/video_core/frame_capture.cpp b/gpu/shadps4/video_core/frame_capture.cpp
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -238,7 +238,7 @@
+     return NativeRecording()?native_capture_sequence.load(std::memory_order_relaxed):0;
+ }
+ void FrameCapture::NativeWriteOrigin(VAddr address, u64 size, WriteOrigin origin,
+-                                    u32 constant_offset) {
++                                    u32 constant_offset, const void* packet_address) {
+     if(!NativeRecording() || size!=192)return;
+     const char* packet=nullptr;
+     switch(origin) {
+@@ -247,8 +247,19 @@
+     case WriteOrigin::ConstantRam:packet="dump_const_ram";break;
+     default:return;
+     }
+-    Native(std::format("{{\"op\":\"command_write_origin\",\"order\":\"cpu_decode\",\"address\":{},\"size\":192,\"packet\":\"{}\",\"constant_offset\":{}}}",
+-        address,packet,origin==WriteOrigin::ConstantRam ? std::to_string(constant_offset) : "null"));
++    const char* phase=origin==WriteOrigin::GraphicsWriteData ? "graphics_write_execution" :
++        origin==WriteOrigin::ComputeWriteData ? "compute_decode" : "constant_engine_decode";
++    Native(std::format("{{\"op\":\"command_write_origin\",\"order\":\"{}\",\"address\":{},\"size\":192,\"packet\":\"{}\",\"constant_offset\":{},\"packet_address\":{}}}",
++        phase,address,packet,origin==WriteOrigin::ConstantRam ? std::to_string(constant_offset) : "null",
++        packet_address ? std::to_string(reinterpret_cast<uintptr_t>(packet_address)) : "null"));
++}
++void FrameCapture::NativeTaskPacket(bool copied, u64 queue, u64 position,
++                                   const void* source, const void* payload, u32 size) {
++    if(!NativeRecording() || size!=208)return;
++    Native(std::format("{{\"op\":\"ordered_task_{}\",\"queue\":{},\"position\":{},\"source\":{},\"payload\":{},\"bytes\":208}}",
++        copied ? "copy" : "execute",queue,position,
++        source ? std::to_string(reinterpret_cast<uintptr_t>(source)) : "null",
++        reinterpret_cast<uintptr_t>(payload)));
+ }
+ void FrameCapture::NativeCommandWrite(VAddr address, const void* data, u64 size,
+                                       u64 resource, u64 native, u64 offset, u64 generation) {
+@@ -270,8 +281,8 @@
+     std::memcpy(w.payload.data(),data,size);++w.version;w.active=w.has_payload=true;
+     unsigned zero_words=0, float_one_words=0;
+     for(unsigned i=0;i<48;++i){u32 word;std::memcpy(&word,w.payload.data()+4*i,4);zero_words+=word==0;float_one_words+=word==0x3f800000u;}
+-    Native(std::format("{{\"op\":\"command_write\",\"seq\":{},\"address\":{},\"size\":192,\"resource\":{},\"native\":{},\"offset\":{},\"generation\":{},\"version\":{},\"previous\":{},\"same_payload\":{},\"same_generation\":{},\"zero_words\":{},\"float_one_words\":{}}}",
+-        ++a.sequence,address,resource,native,offset,generation,w.version,previous,same,same_generation,zero_words,float_one_words));
++    Native(std::format("{{\"op\":\"command_write\",\"seq\":{},\"address\":{},\"size\":192,\"resource\":{},\"native\":{},\"offset\":{},\"generation\":{},\"version\":{},\"previous\":{},\"same_payload\":{},\"same_generation\":{},\"zero_words\":{},\"float_one_words\":{},\"payload_address\":{}}}",
++        ++a.sequence,address,resource,native,offset,generation,w.version,previous,same,same_generation,zero_words,float_one_words,reinterpret_cast<uintptr_t>(data)));
+ }
+ void FrameCapture::NativeBufferUse(u64 resource, u64 native, u64 offset, u64 size,
+                                    VAddr address, u32 stage, u64 shader, bool write,
+diff --git a/gpu/shadps4/video_core/frame_capture.h b/gpu/shadps4/video_core/frame_capture.h
+--- a/gpu/shadps4/video_core/frame_capture.h
++++ b/gpu/shadps4/video_core/frame_capture.h
+@@ -53,10 +53,16 @@
+     static void NativeCommandWrite(VAddr address, const void* data, u64 size,
+                                    u64 resource, u64 native, u64 offset, u64 generation);
+     enum class WriteOrigin { GraphicsWriteData, ComputeWriteData, ConstantRam };
+-    // CPU packet-decode provenance, not recording-thread order or GPU completion.
++    // Graphics origins are observed in ordered-task execution, compute/CE origins
++    // during their decode paths. None proves GPU completion. The graphics input may
++    // already be a copied draw-pipe packet, not the original guest packet address.
+     // No payload access. Captures only the same 192-byte diagnostic write class.
+     static void NativeWriteOrigin(VAddr address, u64 size, WriteOrigin origin,
+-                                  u32 constant_offset = 0);
++                                  u32 constant_offset = 0, const void* packet_address = nullptr);
++    // Identify original/copied 208-byte ordered packets without changing queue layout.
++    // Queue position is monotonic; a ring address alone can be reused after wrapping.
++    static void NativeTaskPacket(bool copied, u64 queue, u64 position,
++                                 const void* source, const void* payload, u32 size);
+     static void NativeBufferUse(u64 resource, u64 native, u64 offset, u64 size,
+                                 VAddr address, u32 stage, u64 shader, bool write,
+                                 const char* source, u64 caller_stage = 0);
+diff --git a/gpu/shadps4/video_core/rasterizer_core_pipe.cpp b/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
+--- a/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
+@@ -563,6 +563,8 @@
+     u8* out = draw_pipe->Begin(total);
+     *reinterpret_cast<TaskPacket*>(out) = {PacketKind::Task, size, task};
+     std::memcpy(out + sizeof(TaskPacket), data, size);
++    FrameCapture::NativeTaskPacket(true,reinterpret_cast<uintptr_t>(draw_pipe.get()),
++        draw_pipe->Head(),data,out+sizeof(TaskPacket),size);
+     draw_pipe->Commit(total);
+     return true;
+ }
+@@ -581,6 +583,8 @@
+         BB_SECTION(Task);
+         self.buffer_cache.NewPacket();
+         const auto& task = *reinterpret_cast<const TaskPacket*>(data);
++        FrameCapture::NativeTaskPacket(false,reinterpret_cast<uintptr_t>(self.draw_pipe.get()),
++            self.draw_pipe->Consumed(),nullptr,data+sizeof(TaskPacket),task.size);
+         if (BbSections::Enabled()) {
+             const u64 t0 = __rdtsc();
+             task.task(self, data + sizeof(TaskPacket));
+diff --git a/tests/test_frame_capture_metadata.cpp b/tests/test_frame_capture_metadata.cpp
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -23,6 +23,11 @@
+  FrameCapture::NativeWriteOrigin(4096,192,FrameCapture::WriteOrigin::ConstantRam,768);
+  FrameCapture::NativeWriteOrigin(4096,192,FrameCapture::WriteOrigin::GraphicsWriteData);
+  FrameCapture::NativeWriteOrigin(4096,192,FrameCapture::WriteOrigin::ComputeWriteData);
++ FrameCapture::NativeWriteOrigin(4096,192,FrameCapture::WriteOrigin::GraphicsWriteData,0,reinterpret_cast<void*>(4242));
++ FrameCapture::NativeTaskPacket(true,7,8192,reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),208);
++ FrameCapture::NativeTaskPacket(false,7,8192,nullptr,reinterpret_cast<void*>(2),208);
++ FrameCapture::NativeTaskPacket(true,7,9000,reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),207);
++ FrameCapture::NativeTaskPacket(true,7,16384,reinterpret_cast<void*>(3),reinterpret_cast<void*>(2),208); // same ring pointer, new position
+  FrameCapture::NativeWriteOrigin(1,191,FrameCapture::WriteOrigin::ConstantRam,999);
+  FrameCapture::NativeWriteOrigin(1,192,static_cast<FrameCapture::WriteOrigin>(99),999);
+  std::array<unsigned char,192> payload{};
+@@ -53,7 +58,15 @@
+  assert(text.find("\"packet\":\"dump_const_ram\",\"constant_offset\":768")!=std::string::npos);
+  assert(text.find("\"packet\":\"graphics_write_data\",\"constant_offset\":null")!=std::string::npos);
+  assert(text.find("\"packet\":\"compute_write_data\",\"constant_offset\":null")!=std::string::npos);
+- assert(text.find("\"order\":\"cpu_decode\"")!=std::string::npos);
++ assert(text.find("\"order\":\"graphics_write_execution\"")!=std::string::npos);
++ assert(text.find("\"order\":\"compute_decode\"")!=std::string::npos);
++ assert(text.find("\"order\":\"constant_engine_decode\"")!=std::string::npos);
++ assert(text.find("\"packet_address\":4242")!=std::string::npos);
++ assert(text.find("\"op\":\"ordered_task_copy\",\"queue\":7,\"position\":8192,\"source\":1,\"payload\":2,\"bytes\":208")!=std::string::npos);
++ assert(text.find("\"op\":\"ordered_task_execute\",\"queue\":7,\"position\":8192,\"source\":null,\"payload\":2,\"bytes\":208")!=std::string::npos);
++ assert(text.find("\"position\":16384,\"source\":3,\"payload\":2")!=std::string::npos);
++ assert(text.find("\"position\":9000")==std::string::npos);
++ assert(text.find("\"payload_address\":")!=std::string::npos);
+  assert(text.find("\"constant_offset\":999")==std::string::npos);
+  assert(text.find("\"constant_offset\":998")==std::string::npos);
+  assert(text.find("\"same_payload\":false,\"same_generation\":false")!=std::string::npos);

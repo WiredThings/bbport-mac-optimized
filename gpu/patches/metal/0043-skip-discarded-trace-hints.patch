@@ -1,0 +1,47 @@
+diff --git a/gpu/shim/common/debug.h b/gpu/shim/common/debug.h
+--- a/gpu/shim/common/debug.h
++++ b/gpu/shim/common/debug.h
+@@ -17,7 +17,8 @@
+ #define EMULATOR_TRACE
+ #define RENDERER_TRACE
+ #define HLE_TRACE
+-#define TRACE_HINT(str) ((void)(str))
++// Profiling is disabled in this shim: do not format or allocate discarded hint text.
++#define TRACE_HINT(str) ((void)0)
+ #define TRACE_WARN(msg) ((void)(msg))
+ #define TRACE_ERROR(msg) ((void)(msg))
+ #define TRACE_CRIT(msg) ((void)(msg))
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -792,6 +792,10 @@
+ add_executable(submit-timing-test EXCLUDE_FROM_ALL ../tests/test_submit_timing.cpp)
+ target_compile_options(submit-timing-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(submit-timing-test PRIVATE shim)
++
++add_executable(trace-hint-test EXCLUDE_FROM_ALL ../tests/test_trace_hint.cpp)
++target_compile_options(trace-hint-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(trace-hint-test PRIVATE shim shadps4)
+ if(APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+     enable_language(ASM)
+     add_executable(guest-resource-hooks-test EXCLUDE_FROM_ALL
+diff --git a/tests/test_trace_hint.cpp b/tests/test_trace_hint.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_trace_hint.cpp
+@@ -0,0 +1,15 @@
++#include "common/debug.h"
++#include <cassert>
++#include <cstdio>
++#include <string>
++#include <string_view>
++
++int main() {
++    assert(!IsProfilerConnected());
++    unsigned evaluations=0;
++    [[maybe_unused]] auto hint=[&]() {++evaluations;return std::string(64,'x');};
++    TRACE_HINT(hint());
++    TRACE_HINT(std::string_view{"borrowed hint"});
++    assert(evaluations==0);
++    puts("disabled trace hints do not evaluate or allocate their text; string_view caller compiles");
++}

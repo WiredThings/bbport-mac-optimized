@@ -1,0 +1,255 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.h
+@@ -21,5 +21,9 @@
+ Snapshot Read();
+ // Bounded metadata only; no resource retention, allocation, waits or readback.
+ void CaptureLifetimes();
++// Native diagnostic inventory only. These are encoded-command observations, not
++// per-texel coverage or permission to discard a backing. Views resolve to the base.
++enum class Content { Upload, Clear, Copy, Draw, StorageBinding, Unknown, Count };
++void NoteContent(const void* texture, Content event);
+ void Report(const void* device, bool force = false);
+ } // namespace Metal::MemoryStats
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_memory_stats.mm
+@@ -18,7 +18,9 @@
+ using VideoCore::FrameCapture;
+ std::uint64_t NowUs() {return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+ struct Entry { std::uint64_t bytes; Kind kind; bool retired = false, discarded = false; BbResourceLifetime::Tag guest{};
+-    std::uint64_t uid=0, born_us=0, retired_us=0; };
++    std::uint64_t uid=0, born_us=0, retired_us=0;
++    std::array<std::uint64_t,unsigned(Content::Count)> content{};
++    std::uint64_t content_us=0; };
+ struct Destroyed { std::uint64_t native=0; Entry entry{}; std::uint64_t destroyed_us=0; };
+ struct LifetimeAudit { std::uint64_t next_uid=0, destroyed=0; std::array<Destroyed,256> recent{}; };
+ struct Ledger {
+@@ -120,6 +122,16 @@
+     it->second.discarded = value;
+ }
+ Snapshot Read() { auto& l = Get(); std::scoped_lock lock{l.mutex}; return l.totals; }
++void NoteContent(const void* pointer, Content event) {
++    if(!FrameCapture::NativeMode() || !pointer || unsigned(event)>=unsigned(Content::Count))return;
++    // Native textures/views only; no pixels, command-buffer wait or retained history.
++    id<MTLTexture> texture=(__bridge id<MTLTexture>)pointer;
++    for(unsigned depth=0;depth<8 && texture.parentTexture;++depth)texture=texture.parentTexture;
++    auto& l=Get();std::scoped_lock lock{l.mutex};
++    if(auto i=l.entries.find((__bridge const void*)texture);i!=l.entries.end()) {
++        ++i->second.content[unsigned(event)];i->second.content_us=NowUs();
++    }
++}
+ void CaptureLifetimes() {
+     if(!FrameCapture::NativeRecording())return;
+     // Copy integers only, then release the ledger lock before emitting. The fixed ring
+@@ -136,7 +148,7 @@
+     const auto now=NowUs();
+     FrameCapture::Native(std::format("{{\"op\":\"memory_lifetimes\",\"now_us\":{},\"live_count\":{},\"live_overflow\":{},\"destroyed_total\":{},\"destroyed_ring\":256}}",now,entries.size(),overflow,history.destroyed));
+     for(const auto& [native,e]:entries)
+-        FrameCapture::Native(std::format("{{\"op\":\"memory_live\",\"uid\":{},\"native\":{},\"kind\":{},\"bytes\":{},\"retired\":{},\"discarded\":{},\"born_us\":{},\"retired_us\":{},\"guest\":{},\"generation\":{}}}",e.uid,native,unsigned(e.kind),e.bytes,e.retired,e.discarded,e.born_us,e.retired_us,e.guest.address,e.guest.generation));
++        FrameCapture::Native(std::format("{{\"op\":\"memory_live\",\"uid\":{},\"native\":{},\"kind\":{},\"bytes\":{},\"retired\":{},\"discarded\":{},\"born_us\":{},\"retired_us\":{},\"guest\":{},\"generation\":{},\"content_us\":{},\"uploads\":{},\"clears\":{},\"copies\":{},\"draws\":{},\"storage_binds\":{},\"unknown_writes\":{}}}",e.uid,native,unsigned(e.kind),e.bytes,e.retired,e.discarded,e.born_us,e.retired_us,e.guest.address,e.guest.generation,e.content_us,e.content[0],e.content[1],e.content[2],e.content[3],e.content[4],e.content[5]));
+     for(const auto& d:history.recent)if(d.destroyed_us)
+         FrameCapture::Native(std::format("{{\"op\":\"memory_destroyed\",\"uid\":{},\"native\":{},\"kind\":{},\"bytes\":{},\"born_us\":{},\"retired_us\":{},\"destroyed_us\":{}}}",d.entry.uid,d.native,unsigned(d.entry.kind),d.entry.bytes,d.entry.born_us,d.entry.retired_us,d.destroyed_us));
+ }
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1761,6 +1761,7 @@
+         UploadCopies({*this, scheduler, *impl}, texture,
+                      dst->info.pixel_format, dst->backing->image.image_ci.format,
+                      NativeBuffer(*src), upload_copies, __func__);
++        if(!upload_copies.empty())MemoryStats::NoteContent((__bridge const void*)texture,MemoryStats::Content::Upload);
+     }
+ 
+     for (const auto& copy : upload_copies) {
+@@ -1839,6 +1840,7 @@
+     if (!src->backing || !dst->backing) {
+         return;
+     }
++    MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
+     // Opt-in diagnostic: identify real proxy-to-native copy round trips before optimizing.
+     static const bool copy_audit=[] {const char* v=std::getenv("BB_MTL_COPY_AUDIT");return v&&v[0]=='1';}();
+@@ -1976,6 +1978,7 @@
+ }
+ 
+ void Runtime::CopyImageWithBuffer(Image* src, Image* dst, const Buffer* buffer, u64 offset) {
++    if(dst && dst->backing)MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     if (!src->backing || !dst->backing) {
+         return;
+     }
+@@ -2033,6 +2036,7 @@
+ }
+ 
+ void Runtime::CopyMip(Image* src, Image* dst, u32 mip, u32 slice) {
++    if(dst && dst->backing)MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     if (!src->backing || !dst->backing) {
+         return;
+     }
+@@ -2113,6 +2117,7 @@
+ }
+ 
+ void Runtime::CopyColorAndDepth(Image* src, Image* dst) {
++    if(dst && dst->backing)MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     if (!src->backing || !dst->backing) {
+         return;
+     }
+@@ -2148,6 +2153,7 @@
+ }
+ 
+ void Runtime::CopyDepthStencil(Image* src, Image* dst, const SubresourceRange& sub_range) {
++    if(dst && dst->backing)MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     if (!src->backing || !dst->backing) {
+         return;
+     }
+@@ -2193,6 +2199,7 @@
+         return;
+     }
+     SetBackingSamples(dst, 1, false);
++    MemoryStats::NoteContent(dst->backing->image.native,MemoryStats::Content::Copy);
+     PromoteCopySource(src, *dst);
+ 
+     const bool needs_resolve = src->backing->num_samples != 1;
+@@ -2279,6 +2286,7 @@
+ 
+     @autoreleasepool {
+         id<MTLTexture> texture = NativeTexture(*dst);
++        MemoryStats::NoteContent((__bridge const void*)texture,MemoryStats::Content::Clear);
+         const vk::Format format = dst->backing->image.image_ci.format;
+         const bool is_3d = texture.textureType == MTLTextureType3D;
+         const u32 levels = std::min<u32>(range.extent.levels, texture.mipmapLevelCount);
+@@ -2457,6 +2465,7 @@
+         new_backing->state.pl_stage = dst_stage;
+     }
+ 
++    if(copy_backing)MemoryStats::NoteContent(new_backing->image.native,MemoryStats::Content::Copy);
+     backing = new_backing;
+ }
+ 
+@@ -2583,6 +2592,7 @@
+             id<MTLBlitCommandEncoder> blit = impl->sched.blit;
+             [blit copyFromTexture:(__bridge id<MTLTexture>)old->image.native
+                         toTexture:(__bridge id<MTLTexture>)fresh.image.native];
++            MemoryStats::NoteContent(fresh.image.native,MemoryStats::Content::Copy);
+             // What the copy leaves: all subresources written by a transfer.
+             fresh.state.pl_stage = vk::PipelineStageFlagBits2::eCopy;
+             fresh.state.access_mask = vk::AccessFlagBits2::eTransferWrite;
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1,4 +1,6 @@
+ #include "video_core/frame_capture.h"
++#include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "common/scope_exit.h"
+ #include "video_core/renderer_metal/mtl_occlusion.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+@@ -46,6 +48,17 @@
+ namespace Metal {
+ 
+ namespace {
++void NoteAttachmentContent(const RenderState& state, MemoryStats::Content kind, bool clears_only=false) {
++    if(!VideoCore::FrameCapture::NativeMode())return;
++    for(u32 i=0;i<std::min<u32>(state.num_color_attachments,state.color_attachments.size());++i) {
++        const auto& a=state.color_attachments[i];
++        if(a.image_view && (!clears_only || a.is_clear))MemoryStats::NoteContent(
++            reinterpret_cast<const void*>(a.image_view),kind);
++    }
++    const auto& ds=state.depth_stencil_attachment;
++    if(ds.image_view && (!clears_only || ds.depth_clear || ds.stencil_clear))
++        MemoryStats::NoteContent(reinterpret_cast<const void*>(ds.image_view),kind);
++}
+ 
+ /// The resource tables are indexed by the recompiler's running binding (see the header); a
+ /// pipeline has at most 5 stages of Shader::NUM_BUFFERS + NUM_IMAGES + NUM_SAMPLERS of them, mip
+@@ -615,6 +628,7 @@
+             ImageUsageLog::Bound(native, texture.storage ? ImageUsageLog::Use::Storage
+                                                          : ImageUsageLog::Use::Sampled);
+         }
++        if(texture.storage && native)MemoryStats::NoteContent(native,MemoryStats::Content::StorageBinding);
+         impl->textures[index] = native;
+         impl->num_textures = std::max(impl->num_textures, index + 1);
+     }
+@@ -995,6 +1009,7 @@
+     // state (WithoutClears): the draws after it continue it instead of clearing again.
+     if (!scheduler.IsRenderingWith(state) && !scheduler.IsRenderingWith(WithoutClears(state))) {
+         MTLRenderPassDescriptor* desc = MakePassDescriptor(state, pipeline.Render());
++        NoteAttachmentContent(state,MemoryStats::Content::Clear,true);
+         scheduler.RenderEncoder((__bridge const void*)desc, state, !impl->velocity_replaying, bound_only);
+         if (scheduler.PassLabels()) {
+             scheduler.LabelEncoder(impl->next_pass_label.c_str());
+@@ -1788,6 +1803,11 @@
+ 
+ void Rasterizer::RecordDraw(const VideoCore::PipelineBase* pipeline, const RenderState& state,
+                             const DrawCall& draw, const DynamicDrawState& dynamic) {
++    const u64 content_draws_before=VideoCore::FrameCapture::NativeMode()?impl->recorded_draws.load(std::memory_order_relaxed):0;
++    SCOPE_EXIT {
++        if(VideoCore::FrameCapture::NativeMode() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
++            NoteAttachmentContent(state,MemoryStats::Content::Draw);
++    };
+     @autoreleasepool {
+         const auto& graphics = *static_cast<const GraphicsPipeline*>(pipeline);
+         if (!impl->velocity_replaying && BypassMotionBlur(graphics, state, dynamic)) return;
+@@ -1905,6 +1925,11 @@
+                                     const IndirectDraw& indirect, const IndirectBuffers& buffers,
+                                     const DynamicDrawState& dynamic) {
+     scheduler.FlushRenderTail();
++    const u64 content_draws_before=VideoCore::FrameCapture::NativeMode()?impl->recorded_draws.load(std::memory_order_relaxed):0;
++    SCOPE_EXIT {
++        if(VideoCore::FrameCapture::NativeMode() && impl->recorded_draws.load(std::memory_order_relaxed)!=content_draws_before)
++            NoteAttachmentContent(state,MemoryStats::Content::Draw);
++    };
+     @autoreleasepool {
+         const auto& graphics = *static_cast<const GraphicsPipeline*>(pipeline);
+         // The count buffer (draw count from the GPU) needs a compute pass that clamps and
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1951,6 +1951,44 @@
+     puts("pattern updates: byte-exact fills, old readers, intervening writes, CPU mutation, canaries, fallback and no additional staging passed");
+ }
+ 
++static void TestContentAudit(Fixture& f) {
++    using VideoCore::FrameCapture;
++    namespace Stats=Metal::MemoryStats;
++    CHECK(FrameCapture::NativeMode());
++    char directory[]="/private/tmp/bb-content-test-XXXXXX";CHECK(mkdtemp(directory));
++    const std::filesystem::path root=directory,trigger=root/"trigger";
++    setenv("BB_CAPTURE_DIR",directory,1);setenv("BB_CAPTURE_TRIGGER",trigger.c_str(),1);
++    Img image{f.runtime,MakeInfo(vk::Format::eR8G8B8A8Unorm,8,8)};
++    Img target{f.runtime,MakeInfo(vk::Format::eR8G8B8A8Unorm,8,8)};
++    auto native=(__bridge id<MTLTexture>)image.image->backing->image.native;
++    id<MTLTexture> view=[native newTextureViewWithPixelFormat:native.pixelFormat];CHECK(view);
++    const auto source_id=uintptr_t(image.image->backing->image.native),target_id=uintptr_t(target.image->backing->image.native);
++    vk::ClearValue clear{};clear.color.float32[0]=1;clear.color.float32[3]=1;
++    f.runtime.ClearImage(image.image.get(),{.base={0,0},.extent={1,1}},clear);
++    auto buffer=MakeBuffer(f.runtime,256,MemoryType::HostUncached);
++    auto bytes=Pattern(256,37);std::memcpy(buffer->mapped_data.data(),bytes.data(),bytes.size());
++    auto whole=WholeCopy(8,8);f.runtime.UploadImage(image.image.get(),buffer.get(),{&whole,1});
++    Stats::NoteContent((__bridge const void*)view,Stats::Content::StorageBinding); // aggregation through a real view
++    f.runtime.CopyImage(image.image.get(),target.image.get());Settle(f);
++    auto readback=MakeBuffer(f.runtime,256,MemoryType::HostCached);
++    f.runtime.DownloadImage(target.image.get(),readback.get(),{&whole,1});Settle(f);
++    CHECK(std::memcmp(readback->mapped_data.data(),bytes.data(),bytes.size())==0);
++    std::ofstream(trigger)<<"1";FrameCapture::OnFlip(456);FrameCapture::FrameBoundary(201);
++    Stats::CaptureLifetimes();FrameCapture::FrameBoundary(202);
++    bool source_found=false,target_found=false;
++    for(auto& entry:std::filesystem::directory_iterator(root))if(entry.path().extension()==".txt") {
++        std::ifstream file(entry.path());std::string line;
++        while(std::getline(file,line))if(line.find("\"op\":\"memory_live\"")!=std::string::npos) {
++            if(line.find(std::format("\"native\":{},",source_id))!=std::string::npos)
++                source_found=line.find("\"uploads\":1,\"clears\":1,\"copies\":0,\"draws\":0,\"storage_binds\":1")!=std::string::npos;
++            if(line.find(std::format("\"native\":{},",target_id))!=std::string::npos)
++                target_found=line.find("\"copies\":1")!=std::string::npos;
++        }
++    }
++    CHECK(source_found && target_found);view=nil;std::filesystem::remove_all(root);
++    puts("content audit: real upload/clear/copy, view-to-base aggregation, exact GPU bytes and bounded lifetime metadata passed");
++}
++
+ // Validate the real Runtime instrumentation alongside unchanged access bookkeeping.
+ static void TestBarrierSources(Fixture& f) {
+     using VideoCore::FrameCapture;
+@@ -2009,6 +2047,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_CONTENT_AUDIT_ONLY")) {TestContentAudit(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_PATTERN_UPDATES_ONLY")) {TestPatternUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BARRIER_SOURCES_ONLY")) {TestBarrierSources(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_NATIVE_CLEAR_BATCH_ONLY")) {TestNativeColorClearBatch(f);Settle(f);return failures?1:0;}

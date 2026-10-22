@@ -1,0 +1,258 @@
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -317,6 +317,10 @@
+ 
+ add_executable(mtl-memory-budget-test EXCLUDE_FROM_ALL ../tests/test_mtl_memory_budget.cpp)
+ if(APPLE)
++    add_executable(mtl-copy-pair-test EXCLUDE_FROM_ALL ../tests/test_mtl_copy_pair.mm)
++    target_compile_options(mtl-copy-pair-test PRIVATE -UNDEBUG -fobjc-arc)
++    target_include_directories(mtl-copy-pair-test PRIVATE shadps4)
++    target_link_libraries(mtl-copy-pair-test PRIVATE "-framework Metal" "-framework Foundation")
+     add_executable(mtl-copy-watch-test EXCLUDE_FROM_ALL ../tests/test_mtl_copy_watch.mm)
+     target_compile_options(mtl-copy-watch-test PRIVATE -UNDEBUG -fobjc-arc)
+     target_include_directories(mtl-copy-watch-test PRIVATE shadps4)
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
+@@ -178,6 +178,7 @@
+     // Diagnostic only, limited to three selected plain vertex modules. Binding maps identical.
+     std::unique_ptr<CompiledShader> strict_vertex_reference;
+     // Opt-in, in-memory-only pointer-access diagnostics for the known copy kernel.
++    bool copy_pair_merged{}; ///< runtime source specialization only; original disk text retained
+     mutable std::unique_ptr<CompiledShader> copy_watch_reference;
+     mutable std::string copy_watch_source;
+     mutable bool copy_watch_attempted{};
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+@@ -35,6 +35,7 @@
+ #include "video_core/renderer_metal/mtl_spirv_pervertex.h"
+ #include "video_core/renderer_metal/mtl_fragment_uniforms.h"
+ #include "video_core/renderer_metal/mtl_copy_watch.h"
++#include "video_core/renderer_metal/mtl_copy_pair.h"
+ #include "video_core/frame_capture.h"
+ 
+ #ifndef BB_SPIRV_CROSS_VERSION
+@@ -822,10 +823,13 @@
+ /// `relaxed_math`: MTLMathModeRelaxed instead of Safe (macOS 15 and later; below it the library is
+ /// always built without fast math). mathFloatingPointFunctions stays at its default (Fast).
+ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const std::string& entry,
+-                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr) {
++                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr, bool copy_pair=false, bool* pair_applied=nullptr) {
+     CompileAudit audit{"library"};
+     MetalObjects objects{};
+     std::string source=msl;
++    bool paired=false;
++    if(copy_pair){auto rewrite=RewriteCopyPair(source);if(rewrite.ok){source=std::move(rewrite.source);paired=true;}}
++    if(pair_applied)*pair_applied=paired;
+     const auto helpers=inline_vertex?InlineStrictVertexMath(source):0;
+     if(inlined) *inlined=helpers;
+     unsigned uniforms=0;
+@@ -844,11 +848,12 @@
+             [device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()]
+                                  options:options
+                                    error:&error];
+-        if (!library && (helpers || uniforms)) {
++        if (!library && (helpers || uniforms || paired)) {
+             // Unsupported compiler/source combination keeps the original rendering path.
+             std::printf("Metal shader specialization rejected; retaining original source\n");
+             if(inlined) *inlined=0;
+             if(uniform_buffers) *uniform_buffers=0;
++            if(pair_applied) *pair_applied=false;
+             error=nil;
+             library=[device newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()]
+                                         options:options error:&error];
+@@ -1140,6 +1145,8 @@
+     const bool fragment_uniforms=uniforms_enabled && scan.stage==ShaderStage::Fragment && variant.kind==VariantKind::Plain;
+     const bool inline_vertex=VertexMathInliningEnabled() && scan.stage==ShaderStage::Vertex &&
+                              variant.kind==VariantKind::Plain;
++    static const bool pair_enabled=[]{const char* e=std::getenv("BB_MTL_COPY_PAIR");return e && e[0]=='1';}();
++    const bool merge_pair=pair_enabled && hash==0xfefebf9full && scan.stage==ShaderStage::Compute && variant.kind==VariantKind::Plain;
+     MetalObjects objects{};
+     std::string msl;
+     bool cached = false;
+@@ -1149,7 +1156,7 @@
+             CompiledShader parsed;
+             std::string cached_msl;
+             if (ParseCache(text, parsed, cached_msl) && parsed.stage == scan.stage) {
+-                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers);
++                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged);
+                 if (objects.error.empty()) {
+                     shader->entry = std::move(parsed.entry);
+                     shader->bindings = std::move(parsed.bindings);
+@@ -1191,7 +1198,7 @@
+         } catch (const std::exception& e) {
+             return fail(CompileStatus::Failed, "SPIRV-Cross: " + FirstLine(e.what()));
+         }
+-        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers);
++        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged);
+         if (!objects.error.empty()) {
+             return fail(CompileStatus::Failed, objects.error);
+         }
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -2141,6 +2141,9 @@
+             }
+             if(!watched)VideoCore::FrameCapture::Native("{\"op\":\"gpu_copy_pointer_uncovered\",\"kind\":\"direct\"}");
+         }
++        if(compute.shader->copy_pair_merged && !watched) {
++            static bool logged=false;if(!logged){logged=true;std::printf("Metal copy paired-store merge: active; same physical pointer only, distinct guest/current views retain both stores\n");}
++        }
+         [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)(watched?compute.copy_watch_state:compute.state)];
+         impl->BindStage(Impl::StageKind::Compute, *compute.shader, push_data);
+         [enc dispatchThreadgroups:MTLSizeMake(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z)
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_copy_pair.h
+@@ -0,0 +1,73 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <string>
++#include <string_view>
++#include <vector>
++#include <cctype>
++namespace Metal {
++struct CopyPairRewrite {std::string source,error;bool ok=false;unsigned pairs=0;};
++inline CopyPairRewrite RewriteCopyPair(std::string_view input) {
++    CopyPairRewrite out;
++    const auto fail=[&](const char* s){out.error=s;return out;};
++    const auto trim=[](std::string_view s){while(!s.empty()&&std::isspace((unsigned char)s.front()))s.remove_prefix(1);while(!s.empty()&&std::isspace((unsigned char)s.back()))s.remove_suffix(1);return s;};
++    const auto ident=[](std::string_view s){if(s.empty()||(!std::isalpha((unsigned char)s[0])&&s[0]!='_'))return false;for(char c:s)if(!std::isalnum((unsigned char)c)&&c!='_')return false;return true;};
++    const auto pure=[&](std::string_view s){
++        if(s.find("++")!=s.npos||s.find("--")!=s.npos||s.find("=")!=s.npos) {
++            for(size_t n=0;n<s.size();++n)if(s[n]=='=' && (n==0||(s[n-1]!='!'&&s[n-1]!='<'&&s[n-1]!='>'&&s[n-1]!='=')) && (n+1==s.size()||s[n+1]!='='))return false;
++            if(s.find("++")!=s.npos||s.find("--")!=s.npos)return false;
++        }
++        for(size_t n=0;n<s.size();) {
++            if(!std::isalpha((unsigned char)s[n])&&s[n]!='_'){++n;continue;}
++            const size_t first=n;while(n<s.size()&&(std::isalnum((unsigned char)s[n])||s[n]=='_'))++n;
++            const auto name=s.substr(first,n-first);size_t at=n;while(at<s.size()&&std::isspace((unsigned char)s[at]))++at;
++            if(at<s.size()&&s[at]=='(' && name!="bool"&&name!="uint"&&name!="ulong"&&name!="float")return false;
++            if(at<s.size()&&s[at]=='<' && name!="as_type" && name!="reinterpret_cast") {
++                auto end=s.find('>',at+1);if(end!=s.npos){++end;while(end<s.size()&&std::isspace((unsigned char)s[end]))++end;if(end<s.size()&&s[end]=='(')return false;}
++            }
++        }
++        return true;
++    };
++    if(input.size()>128*1024||input.find("bb_copy_pair_")!=input.npos||input.find("bb_copy_ptr")!=input.npos||input.find("atomic_")!=input.npos||input.find("volatile")!=input.npos)return fail("unsupported source");
++    const auto kernel=input.find("kernel void ");
++    if(kernel==input.npos||input.find("kernel void ",kernel+1)!=input.npos)return fail("one kernel required");
++    const auto open=input.find('{',kernel),close=input.rfind('}');
++    if(open==input.npos||close==input.npos||close<=open)return fail("kernel body");
++    const auto body=input.substr(open+1,close-open-1);
++    for(auto word:{"//","/*","\"","'","while","for (","for(","do "})if(body.find(word)!=body.npos)return fail("unsupported body");
++    struct Store{size_t begin,end,block;std::string_view type,address,value;};std::vector<Store> stores;
++    constexpr std::string_view cast="*(reinterpret_cast<device ";
++    for(size_t at=open+1;(at=input.find(cast,at))<close;) {
++        const auto begin=at;auto type_end=input.find("*>(",at+cast.size());if(type_end==input.npos||type_end>=close)return fail("cast syntax");
++        auto type=trim(input.substr(at+cast.size(),type_end-at-cast.size()));
++        const size_t arg=type_end+2;size_t stop=arg;unsigned depth=0;
++        for(;stop<close;++stop){if(input[stop]=='(')++depth;if(input[stop]==')'&&!--depth)break;}
++        if(stop+1>=close||input[stop+1]!=')')return fail("cast parentheses");
++        size_t next=stop+2;while(next<close&&std::isspace((unsigned char)input[next]))++next;
++        if(next>=close||input[next]!='='||(next+1<close&&input[next+1]=='=')){at=begin+cast.size();continue;}
++        const size_t semi=input.find(';',next);if(semi==input.npos||semi>=close)return fail("store terminator");
++        const auto value=trim(input.substr(next+1,semi-next-1));
++        if((type!="float"&&type!="uint")||!ident(value))return fail("store type/value");
++        std::vector<size_t> blocks;
++        for(size_t n=open;n<begin;++n){if(input[n]=='{')blocks.push_back(n);else if(input[n]=='}'){if(blocks.empty())return fail("block");blocks.pop_back();}}
++        if(blocks.empty())return fail("store outside body");
++        const auto address=input.substr(arg+1,stop-arg-1);if(!pure(address))return fail("impure address");
++        stores.push_back({begin,semi+1,blocks.back(),type,address,value});at=semi+1;
++    }
++    if(stores.size()!=2)return fail("expected exactly two physical stores");
++    const auto& a=stores[0];const auto& b=stores[1];
++    if(a.block!=b.block||a.type!=b.type||a.value!=b.value)return fail("pair mismatch");
++    auto between=trim(input.substr(a.end,b.begin-a.end));
++    if(between.find(a.value)!=between.npos||between.find('{')!=between.npos||between.find('}')!=between.npos)return fail("interposed value/control flow");
++    while(!between.empty()) {
++        auto semi=between.find(';');if(semi==between.npos)return fail("interposed statement");
++        auto stmt=trim(between.substr(0,semi));between=trim(between.substr(semi+1));
++        const auto space=stmt.find(' '),eq=stmt.find('=');if(space==stmt.npos||eq==stmt.npos||eq<=space)return fail("interposed mutation");
++        const auto type=stmt.substr(0,space);if(type!="bool"&&type!="uint"&&type!="ulong"&&type!="float")return fail("interposed type");
++        if(!ident(trim(stmt.substr(space+1,eq-space-1)))||!pure(stmt.substr(eq+1)))return fail("interposed side effect");
++    }
++    const std::string type(a.type),value(a.value);
++    const auto first="device "+type+"* const bb_copy_pair_current = reinterpret_cast<device "+type+"*>("+std::string(a.address)+");\n*bb_copy_pair_current = "+value+";";
++    const auto second="device "+type+"* const bb_copy_pair_guest = reinterpret_cast<device "+type+"*>("+std::string(b.address)+");\nif (bb_copy_pair_guest != bb_copy_pair_current) *bb_copy_pair_guest = "+value+";";
++    out.source=std::string(input.substr(0,a.begin))+first+std::string(input.substr(a.end,b.begin-a.end))+second+std::string(input.substr(b.end));out.ok=true;out.pairs=1;return out;
++}
++}
+--- /dev/null
++++ b/tests/test_mtl_copy_pair.mm
+@@ -0,0 +1,78 @@
++#import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++#include "video_core/renderer_metal/mtl_copy_pair.h"
++#include <cassert>
++#include <array>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <cstdio>
++static const char* Source=R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct B {uint data[1];};struct R {ulong data[1];};
++kernel void main0(const device B& meta [[buffer(0)]],device R& root [[buffer(1)]],uint tid [[thread_position_in_grid]]) {
++    ulong source=ulong(meta.data[0])|(ulong(meta.data[1])<<32ul);
++    uint off=tid*4u+meta.data[12];
++    ulong va=(ulong(meta.data[2])|(ulong(meta.data[3])<<32ul))+ulong(off);
++    bool range=4u<=meta.data[4] && off<=meta.data[4]-4u;
++    ulong page=(range && va<(1ul<<40ul)?va:0ul)>>14ul;
++    ulong currentLeaf=root.data[meta.data[10]?page>>12ul:page];
++    ulong currentEntry=meta.data[10]?*(reinterpret_cast<device ulong*>(currentLeaf+((page&4095ul)<<3ul))):currentLeaf;
++    ulong trash=ulong(meta.data[6])|(ulong(meta.data[7])<<32ul);
++    uint value=*(reinterpret_cast<device uint*>(source+ulong(tid)*4ul));
++    *(reinterpret_cast<device uint*>(range && va<(1ul<<40ul) && currentEntry?currentEntry+(va&16383ul):trash))=value;
++    bool guestRange=range && meta.data[5]!=0u;
++    ulong guestPage=(guestRange && va<(1ul<<40ul)?va:0ul)>>14ul;
++    ulong guestLeaf=root.data[(meta.data[10]?guestPage>>12ul:guestPage)+meta.data[9]];
++    ulong guestEntry=meta.data[10]?*(reinterpret_cast<device ulong*>(guestLeaf+((guestPage&4095ul)<<3ul))):guestLeaf;
++    *(reinterpret_cast<device uint*>(guestRange && va<(1ul<<40ul) && guestEntry?guestEntry+(va&16383ul):trash))=value;
++}
++)MSL";
++static id<MTLLibrary> Library(id<MTLDevice> d,const std::string& s,bool relaxed=false){
++ MTLCompileOptions* o=[MTLCompileOptions new];o.languageVersion=MTLLanguageVersion3_1;o.mathMode=relaxed?MTLMathModeRelaxed:MTLMathModeSafe;
++ NSError* e=nil;auto l=[d newLibraryWithSource:[NSString stringWithUTF8String:s.c_str()] options:o error:&e];if(!l)fprintf(stderr,"%s\n",e.localizedDescription.UTF8String);assert(l);return l;
++}
++int main(int argc,char**argv){@autoreleasepool{
++ std::string original=Source;assert(Metal::RewriteCopyPair(original).ok);
++ const auto replace=[](std::string s,const char* from,const char* to){auto p=s.find(from);assert(p!=s.npos);s.replace(p,strlen(from),to);return s;};
++ for(auto bad:{replace(original,"uint value=", "volatile uint value="),replace(original,"bool guestRange=", "value=9u; bool guestRange="),replace(original,"bool guestRange=", "meta.data[4]=9u; bool guestRange="),replace(original,"bool guestRange=", "mutate(); bool guestRange="),replace(original,"bool guestRange=", "mutate<uint>(); bool guestRange="),replace(original,"=value;", "=value+1u;"),replace(original,"bool guestRange=", "if (tid==0u) {} bool guestRange=")})assert(!Metal::RewriteCopyPair(bad).ok);
++ auto d=MTLCreateSystemDefaultDevice();assert(d);auto q=[d newCommandQueue];
++ const auto buffer=[&](NSUInteger n){auto b=[d newBufferWithLength:n options:MTLResourceStorageModeShared];assert(b);memset(b.contents,0,n);return b;};
++ auto src=buffer(512),dst=buffer(512),mirror=buffer(512),meta=buffer(256),root=buffer(4096),leaf0=buffer(32768),leaf1=buffer(32768),zero=buffer(32768),trash=buffer(512);
++ unsigned configurations=0;
++ for(bool relaxed:{false,true})for(bool floating:{false,true}){@autoreleasepool{
++  std::string text=original;
++  if(floating){size_t at=0;while((at=text.find("device uint*>",at))!=text.npos){text.replace(at,13,"device float*>");at+=14;}text=replace(text,"uint value=","float value=");}
++  auto merged=Metal::RewriteCopyPair(text);assert(merged.ok);
++  auto lb=Library(d,text,relaxed),lm=Library(d,merged.source,relaxed);NSError* error=nil;
++  auto pb=[d newComputePipelineStateWithFunction:[lb newFunctionWithName:@"main0"] error:&error];assert(pb);
++  auto pm=[d newComputePipelineStateWithFunction:[lm newFunctionWithName:@"main0"] error:&error];assert(pm);
++  for(bool two:{false,true})for(unsigned which=0;which<14;++which){
++   unsigned lanes=which<2||which==12?64:1;
++   std::array<unsigned char,512> expected_dst{},expected_mirror{},expected_trash{};std::array<unsigned char,256> expected_meta{};
++   for(bool opt:{false,true}){
++    memset(dst.contents,0x9a,512);memset(mirror.contents,0x6b,512);memset(trash.contents,0xa5,512);memset(meta.contents,0,256);memset(leaf0.contents,0,32768);memset(leaf1.contents,0,32768);memset(zero.contents,0,32768);
++    auto* in=(uint32_t*)src.contents;for(unsigned i=0;i<128;++i)in[i]=i*17+3;uint32_t special[]={0x7fc00001,0x7f800000,0xff800000,0x80000000,1,0xffffffff};memcpy(in,special,sizeof(special));
++    uint64_t source=which==12?dst.gpuAddress:src.gpuAddress,va=0x100000;
++    uint32_t words[64]={};words[0]=source;words[1]=source>>32;words[2]=va;words[3]=va>>32;words[4]=256;words[5]=1;words[6]=trash.gpuAddress;words[7]=trash.gpuAddress>>32;words[9]=two?1:128;words[10]=two;
++    if(which==6)words[5]=0;if(which==7)words[4]=0;if(which==8)words[4]=3;if(which==9){words[4]=64;words[12]=64;}if(which==10){words[4]=64;words[12]=60;}if(which==11){words[4]=0xffffffffu;words[12]=0xfffffffcu;}
++    uint64_t current=dst.gpuAddress,guest=which==0?dst.gpuAddress:mirror.gpuAddress;
++    if(which==2)guest=dst.gpuAddress+16;if(which==3||which==5)current=0;if(which==4||which==5)guest=0;
++    if(which==13){current=meta.gpuAddress+20;in[0]=0;}
++    memcpy(meta.contents,words,sizeof(words));
++    auto* roots=(uint64_t*)root.contents;for(unsigned i=0;i<512;++i)roots[i]=two?zero.gpuAddress:0;
++    if(two){roots[0]=leaf0.gpuAddress;roots[1]=leaf1.gpuAddress;((uint64_t*)leaf0.contents)[64]=current;((uint64_t*)leaf1.contents)[64]=guest;}
++    else{roots[64]=current;roots[64+128]=guest;}
++    auto cb=[q commandBuffer];auto enc=[cb computeCommandEncoder];[enc setComputePipelineState:opt?pm:pb];[enc setBuffer:meta offset:0 atIndex:0];[enc setBuffer:root offset:0 atIndex:1];
++    for(id<MTLBuffer> b in @[src,dst,mirror,meta,root,leaf0,leaf1,zero,trash])[enc useResource:b usage:MTLResourceUsageRead|MTLResourceUsageWrite];
++    [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(lanes,1,1)];[enc endEncoding];[cb commit];[cb waitUntilCompleted];assert(cb.status==MTLCommandBufferStatusCompleted);
++    if(!opt){memcpy(expected_dst.data(),dst.contents,512);memcpy(expected_mirror.data(),mirror.contents,512);memcpy(expected_trash.data(),trash.contents,512);memcpy(expected_meta.data(),meta.contents,256);}
++    else{assert(!memcmp(expected_dst.data(),dst.contents,512));assert(!memcmp(expected_mirror.data(),mirror.contents,512));assert(!memcmp(expected_trash.data(),trash.contents,512));assert(!memcmp(expected_meta.data(),meta.contents,256));}
++   }
++   ++configurations;
++  }
++ }}
++ for(int i=1;i<argc;++i){std::ifstream f(argv[i]);std::string text{std::istreambuf_iterator<char>(f),{}};auto r=Metal::RewriteCopyPair(text);if(r.ok){Library(d,r.source);printf("corpus merged %s\n",argv[i]);}}
++ printf("PASS %u configurations / %u dispatches: uint/float Safe/Relaxed, flat/two-level, identical/separate/offset, absent views, write-through disabled, range edges, self-copy, metadata alias; complete outputs and canaries\n",configurations,configurations*2);
++}}

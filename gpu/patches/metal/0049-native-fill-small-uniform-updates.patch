@@ -1,0 +1,76 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1688,6 +1688,17 @@
+ 
+ void Runtime::UpdateBuffer(const Buffer* dst, u64 offset, std::span<const u8> data) {
+     if (data.empty()) {
++        return;
++    }
++    static const bool fill_updates=[] {const char* v=std::getenv("BB_MTL_FILL_UPDATES");return v && v[0]=='1';}();
++    // A repeated byte is an exact native fill, not a redundant-write assumption. Keep
++    // every command in stream order; no GPU/guest-memory equality check or snapshot cache.
++    if(fill_updates && data.size()<=256 && !(offset&3) && !(data.size()&3) &&
++       offset<=dst->SizeBytes() && data.size()<=dst->SizeBytes()-offset &&
++       std::ranges::all_of(data,[byte=data.front()](u8 v){return v==byte;})) {
++        if(FrameCapture::NativeRecording())FrameCapture::Native(std::format(
++            "{{\"op\":\"pattern_update\",\"bytes\":{},\"value\":{}}}",data.size(),data.front()));
++        FillBuffer(dst,offset,data.size(),u32(data.front())*0x01010101u);
+         return;
+     }
+     static const bool inline_updates = [] {
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1912,6 +1912,45 @@
+     puts("native color clear batching: mixed formats, repeated target, read/copy visibility and complete target retirement passed");
+ }
+ 
++// Exact byte fills must preserve prior readers, intervening writers, CPU snapshot semantics
++// and surrounding bytes. This test exercises real GPU copies, not a CPU implementation mirror.
++static void TestPatternUpdates(Fixture& f) {
++    namespace Stats=Metal::MemoryStats;
++    auto target=MakeBuffer(f.runtime,1024,MemoryType::DeviceLocal);
++    auto before=MakeBuffer(f.runtime,1024,MemoryType::DeviceLocal);
++    auto middle=MakeBuffer(f.runtime,1024,MemoryType::DeviceLocal);
++    auto after=MakeBuffer(f.runtime,1024,MemoryType::DeviceLocal);
++    for(unsigned length:{4u,128u,192u,256u})for(u8 value:{u8(0),u8(0xff),u8(0x7f),u8(0xa5)}) {
++        f.runtime.FillBuffer(target.get(),0,1024,0x3c3c3c3c);
++        const vk::BufferCopy full{.srcOffset=0,.dstOffset=0,.size=1024};
++        f.runtime.CopyBuffer(target.get(),before.get(),{&full,1});
++        const auto base=Stats::Read()[unsigned(Stats::Kind::Staging)].bytes;
++        std::vector<u8> data(length,value);
++        f.runtime.UpdateBuffer(target.get(),16,data);
++        f.runtime.CopyBuffer(target.get(),middle.get(),{&full,1});
++        // An intervening different write makes equality-based suppression incorrect.
++        f.runtime.FillBuffer(target.get(),16,length,0x55555555);
++        f.runtime.UpdateBuffer(target.get(),16,data);
++        data.assign(length,u8(value^0xff)); // UpdateBuffer consumes a CPU snapshot
++        f.runtime.CopyBuffer(target.get(),after.get(),{&full,1});
++        Settle(f);
++        bool correct=true;
++        for(unsigned byte=0;byte<1024;++byte) {
++            const u8 expected=byte>=16 && byte<16+length?value:0x3c;
++            correct &= before->mapped_data[byte]==0x3c && middle->mapped_data[byte]==expected && after->mapped_data[byte]==expected;
++        }
++        CHECK(correct);
++        if(const char* flag=std::getenv("BB_MTL_FILL_UPDATES");flag && flag[0]=='1')
++            CHECK(Stats::Read()[unsigned(Stats::Kind::Staging)].bytes==base);
++    }
++    // Nonuniform and non-dword payloads retain the original upload path.
++    for(unsigned length:{3u,191u,192u,257u}) {
++        auto data=Pattern(length,37);f.runtime.UpdateBuffer(target.get(),32,data);Settle(f);
++        CHECK(std::memcmp(target->mapped_data.data()+32,data.data(),length)==0);
++    }
++    puts("pattern updates: byte-exact fills, old readers, intervening writes, CPU mutation, canaries, fallback and no additional staging passed");
++}
++
+ // Validate the real Runtime instrumentation alongside unchanged access bookkeeping.
+ static void TestBarrierSources(Fixture& f) {
+     using VideoCore::FrameCapture;
+@@ -1970,6 +2009,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_PATTERN_UPDATES_ONLY")) {TestPatternUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BARRIER_SOURCES_ONLY")) {TestBarrierSources(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_NATIVE_CLEAR_BATCH_ONLY")) {TestNativeColorClearBatch(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_INLINE_UPDATES_ONLY")) {TestInlineUpdates(f);Settle(f);return failures?1:0;}

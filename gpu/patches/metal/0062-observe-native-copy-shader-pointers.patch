@@ -1,0 +1,567 @@
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -299,6 +299,12 @@
+ 
+ # Explicit test targets; neither launches the game nor needs a Vulkan device.
+ add_executable(mtl-memory-budget-test EXCLUDE_FROM_ALL ../tests/test_mtl_memory_budget.cpp)
++if(APPLE)
++    add_executable(mtl-copy-watch-test EXCLUDE_FROM_ALL ../tests/test_mtl_copy_watch.mm)
++    target_compile_options(mtl-copy-watch-test PRIVATE -UNDEBUG -fobjc-arc)
++    target_include_directories(mtl-copy-watch-test PRIVATE shadps4)
++    target_link_libraries(mtl-copy-watch-test PRIVATE "-framework Metal" "-framework Foundation")
++endif()
+ target_compile_options(mtl-memory-budget-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(mtl-memory-budget-test PRIVATE shadps4)
+ add_executable(texture-cache-gc-test EXCLUDE_FROM_ALL ../tests/test_texture_cache_gc.cpp)
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
+@@ -177,6 +177,12 @@
+     unsigned strict_vertex_helpers_inlined{};
+     // Diagnostic only, limited to three selected plain vertex modules. Binding maps identical.
+     std::unique_ptr<CompiledShader> strict_vertex_reference;
++    // Opt-in, in-memory-only pointer-access diagnostics for the known copy kernel.
++    mutable std::unique_ptr<CompiledShader> copy_watch_reference;
++    mutable std::string copy_watch_source;
++    mutable bool copy_watch_attempted{};
++    bool copy_watch_relaxed{};
++    u32 copy_watch_reads{},copy_watch_writes{};
+     /// Compute: the module's LocalSize execution mode (threadsPerThreadgroup of a dispatch); MSL
+     /// has no way to declare it, SPIRV-Cross turns gl_WorkGroupSize into a constant. Always read
+     /// from the SPIR-V, also on a disk cache hit.
+@@ -214,6 +220,9 @@
+     const ShaderBinding* Find(u32 set, u32 binding, ShaderBinding::Kind kind) const;
+ };
+ 
++// Only called for an active diagnostic window, never during startup/preloading.
++void PrepareCopyWatchShader(Device&,const CompiledShader&);
++
+ enum class CompileStatus : u8 {
+     Ok,
+     UnsupportedStage, ///< geometry (P7.1), and a tessellation stage compiled as a plain stage
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+@@ -15,6 +15,7 @@
+ #include <cstring>
+ #include <fstream>
+ #include <map>
++#include <mutex>
+ #include <span>
+ #include <sstream>
+ #include <stdexcept>
+@@ -33,6 +34,8 @@
+ #include "video_core/renderer_metal/mtl_spirv_geometry.h"
+ #include "video_core/renderer_metal/mtl_spirv_pervertex.h"
+ #include "video_core/renderer_metal/mtl_fragment_uniforms.h"
++#include "video_core/renderer_metal/mtl_copy_watch.h"
++#include "video_core/frame_capture.h"
+ 
+ #ifndef BB_SPIRV_CROSS_VERSION
+ #define BB_SPIRV_CROSS_VERSION "unknown"
+@@ -903,6 +906,28 @@
+         id<MTLLibrary> released = (__bridge_transfer id<MTLLibrary>)library;
+         (void)released;
+     }
++}
++
++void PrepareCopyWatchShader(Device& device,const CompiledShader& shader) {
++    if(!VideoCore::FrameCapture::NativeRecording())return;
++    static std::mutex mutex;static unsigned modules=0;
++    std::scoped_lock lock{mutex};
++    if(shader.copy_watch_attempted)return;
++    shader.copy_watch_attempted=true;
++    if(shader.copy_watch_source.empty() || modules>=8)return;
++    ++modules;
++    auto watched=BuildLibrary(device.GetImpl().device,shader.copy_watch_source,shader.entry,
++                              "copy pointer watch",shader.copy_watch_relaxed);
++    std::string().swap(shader.copy_watch_source);
++    if(watched.error.empty()) {
++        auto reference=std::make_unique<CompiledShader>();
++        reference->stage=shader.stage;reference->entry=shader.entry;
++        reference->library=(__bridge_retained void*)watched.library;
++        reference->function=(__bridge_retained void*)watched.function;
++        shader.copy_watch_reference=std::move(reference);
++    }
++    std::printf("Copy pointer watch: lazy library reads=%u writes=%u ready=%d %s\n",
++        shader.copy_watch_reads,shader.copy_watch_writes,int(shader.copy_watch_reference!=nullptr),watched.error.c_str());
+ }
+ 
+ const ShaderBinding* CompiledShader::Find(u32 set, u32 binding, ShaderBinding::Kind kind) const {
+@@ -1181,6 +1206,20 @@
+     shader->library = (__bridge_retained void*)objects.library;
+     shader->function = (__bridge_retained void*)objects.function;
+ 
++    static const bool copy_watch=[] {
++        const char* mode=std::getenv("BB_CAPTURE_NATIVE");const char* flag=std::getenv("BB_CAPTURE_COPY_POINTERS");
++        return mode && mode[0]=='1' && flag && flag[0]=='1';
++    }();
++    if(copy_watch && hash==0xfefebf9full && scan.stage==ShaderStage::Compute &&
++       variant.kind==VariantKind::Plain && shader->num_buffers<CopyWatchRootSlot) {
++        const auto rewrite=RewriteCopyWatch(msl);
++        if(rewrite.ok) {
++            shader->copy_watch_source=rewrite.source;shader->copy_watch_relaxed=relaxed_math;
++            shader->copy_watch_reads=rewrite.reads;shader->copy_watch_writes=rewrite.writes;
++        } else std::printf("Copy pointer watch: unsupported shader %llx: %s\n",
++                           (unsigned long long)hash,rewrite.error.c_str());
++    }
++
+     if(shader->strict_vertex_helpers_inlined && VertexMathReferenceRequested(hash) && ReserveVertexMathReference()) {
+         // Keep cached source byte-for-byte unchanged. Both states use the same bindings,
+         // Safe mode, explicit fma operands and shader body; only helper call barriers differ.
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.h
+@@ -190,6 +190,8 @@
+ 
+     void* state{};    ///< id<MTLComputePipelineState> (+1)
+     void* function{}; ///< id<MTLFunction> (+1)
++    mutable void* copy_watch_state{}; ///< diagnostic only; never added to binary archives
++    mutable bool copy_watch_attempted{};
+     /// The shader's LocalSize: threadsPerThreadgroup of a dispatch (the grid is a number of
+     /// groups, as in Vulkan: dispatchThreadgroups).
+     std::array<u32, 3> threads_per_group{1, 1, 1};
+@@ -197,6 +199,8 @@
+     u32 thread_execution_width{};
+     const CompiledShader* shader{};
+ };
++
++void PrepareCopyWatchPipeline(Device&,const ComputePipeline&);
+ 
+ /// The depth/stencil part that Vulkan sets dynamically (vk_rasterizer.cpp UpdateDepthStencilState):
+ /// not in GraphicsPipelineKey, a separate MTLDepthStencilState. The stencil references are encoder
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -22,6 +22,7 @@
+ #include "video_core/renderer_metal/mtl_tessellation.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ #include "video_core/renderer_vulkan/liverpool_to_vk.h"
++#include "video_core/frame_capture.h"
+ 
+ namespace Metal {
+ 
+@@ -207,7 +208,7 @@
+ }
+ 
+ ComputePipeline::~ComputePipeline() {
+-    for (void* object : {state, function}) {
++    for (void* object : {state, function, copy_watch_state}) {
+         if (object) {
+             id released = (__bridge_transfer id)object;
+             (void)released;
+@@ -656,6 +657,7 @@
+                 break;
+             }
+             pipeline->state = (__bridge_retained void*)state;
++
+             pipeline->vertex_function = (__bridge_retained void*)desc.vertexFunction;
+             if (desc.fragmentFunction) {
+                 pipeline->fragment_function = (__bridge_retained void*)desc.fragmentFunction;
+@@ -690,6 +692,26 @@
+         }
+     }
+     return it->second->state ? it->second.get() : nullptr;
++}
++
++void PrepareCopyWatchPipeline(Device& device,const ComputePipeline& pipeline) {
++    if(!VideoCore::FrameCapture::NativeRecording())return;
++    if(pipeline.copy_watch_attempted || !pipeline.shader)return;
++    pipeline.copy_watch_attempted=true;
++    PrepareCopyWatchShader(device,*pipeline.shader);
++    if(!pipeline.shader->copy_watch_reference)return;
++    const auto total=pipeline.threads_per_group[0]*pipeline.threads_per_group[1]*pipeline.threads_per_group[2];
++    @autoreleasepool {
++        MTLComputePipelineDescriptor* watched=[MTLComputePipelineDescriptor new];
++        watched.computeFunction=(__bridge id<MTLFunction>)pipeline.shader->copy_watch_reference->function;
++        watched.maxTotalThreadsPerThreadgroup=total;
++        NSError* error=nil;
++        id<MTLComputePipelineState> state=[device.GetImpl().device newComputePipelineStateWithDescriptor:watched
++            options:MTLPipelineOptionNone reflection:nil error:&error];
++        if(state && total<=state.maxTotalThreadsPerThreadgroup)
++            pipeline.copy_watch_state=(__bridge_retained void*)state;
++        else std::printf("Copy pointer watch: lazy pipeline unavailable %s\n",error?error.localizedDescription.UTF8String:"thread limit");
++    }
+ }
+ 
+ const ComputePipeline* PsoCache::GetComputePipeline(const Vulkan::ComputePipelineKey& key,
+@@ -751,6 +773,7 @@
+                 break;
+             }
+             pipeline->state = (__bridge_retained void*)state;
++
+         } while (false);
+     }
+ 
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1,5 +1,6 @@
+ #include "video_core/frame_capture.h"
+ #include "video_core/renderer_metal/mtl_memory_stats.h"
++#include "video_core/renderer_metal/mtl_copy_watch.h"
+ #include "common/scope_exit.h"
+ #include "video_core/renderer_metal/mtl_occlusion.h"
+ // SPDX-License-Identifier: GPL-2.0-or-later
+@@ -120,6 +121,23 @@
+     const RenderPipeline* velocity_pipeline = nullptr;
+     std::unordered_map<const GraphicsPipeline*, const RenderPipeline*> velocity_variants;
+     bool velocity_requested = false;
++    id<MTLBuffer> copy_watch_buffer=nil;
++    struct CopyWatchRecord {u64 sequence{},shader{};u32 reads{},writes{};};
++    std::array<CopyWatchRecord,128> copy_watch_records{};
++    size_t copy_watch_count{};
++    void DrainCopyWatch(Scheduler& scheduler) {
++        if(!copy_watch_count)return;
++        // Opt-in diagnostics only: complete this traced window before reading
++        // 64-byte counters. No resource contents or game memory are read back.
++        scheduler.Finish();
++        for(size_t i=0;i<copy_watch_count;++i) {
++            const auto& r=copy_watch_records[i];CopyWatchData d{};
++            std::memcpy(&d,static_cast<const char*>(copy_watch_buffer.contents)+i*256,sizeof(d));
++            VideoCore::FrameCapture::Native(std::format("{{\"op\":\"gpu_copy_pointer_watch\",\"capture_sequence\":{},\"shader\":{},\"watch\":{},\"bytes\":{},\"flags\":{},\"read_expressions\":{},\"write_expressions\":{},\"current_hits\":{},\"guest_hits\":{},\"overflow\":{},\"mapping\":{},\"read_sites\":{},\"write_sites\":{}}}",
++                r.sequence,r.shader,d.guest,d.bytes,d.flags,d.reads,d.writes,d.current_hits,d.guest_hits,d.overflow,d.mapping,r.reads,r.writes));
++        }
++        copy_watch_count=0;
++    }
+     u64 blur_copies = 0;
+     bool late_velocity_logged = false;
+     bool blur_fallback_logged = false;
+@@ -219,9 +237,11 @@
+     scheduler.SetSubmitCallback([this](VideoCore::SubmitInfo&) { runtime.FlushBarriers(); });
+     pass_labels = scheduler.PassLabels();
+     VideoCore::FrameCapture::SetNativeBoundaryDrain(this, [](void* context) {
+-        auto& scheduler=static_cast<Rasterizer*>(context)->scheduler;
++        auto& rasterizer=*static_cast<Rasterizer*>(context);
++        auto& scheduler=rasterizer.scheduler;
+         scheduler.EndEncoder(); // joins replay and closes compute/blit as well as render
+         scheduler.EndEncoder(); // a velocity render-tail callback may have encoded host work
++        rasterizer.impl->DrainCopyWatch(scheduler);
+     });
+ }
+ 
+@@ -229,6 +249,8 @@
+     // The recording thread and the signal thread call into this class and its pipeline cache:
+     // they stop, and the draw preparation workers (which hold the pipeline cache) go, first.
+     ShutdownThreads();
++    impl->DrainCopyWatch(scheduler);
++    if(impl->copy_watch_buffer)MemoryStats::Retire((__bridge const void*)impl->copy_watch_buffer);
+     VideoCore::FrameCapture::ClearNativeBoundaryDrain(this);
+     draw_prep.reset();
+     scheduler.SetSubmitCallback({});
+@@ -2006,8 +2028,14 @@
+             const char* value = std::getenv("BB_MTL_PRECISE_COMPUTE");
+             return value && value[0] == '1';
+         }();
++        static const bool copy_watch=[] {
++            const char* flag=std::getenv("BB_CAPTURE_COPY_POINTERS");return flag && flag[0]=='1';
++        }();
++        if(copy_watch && VideoCore::FrameCapture::NativeRecording() && cs.pgm_hash==0xfefebf9full)
++            PrepareCopyWatchPipeline(device,compute);
+         const bool direct_resources=compute.shader->HasOnlyDirectComputeResources();
+-        const bool bound_only=precise_compute && direct_resources;
++        const bool bound_only=precise_compute && direct_resources &&
++            !(copy_watch && VideoCore::FrameCapture::NativeRecording() && cs.pgm_hash==0xfefebf9full);
+         scheduler.ComputeEncoder(nullptr, bound_only);
+         if(VideoCore::FrameCapture::NativeRecording()) {
+             VideoCore::FrameCapture::Native(std::format("{{\"op\":\"compute_access\",\"queue\":{},\"direct_resources\":{},\"requested_bound_only\":{},\"guest_declared\":{},\"bda\":{},\"paged\":{},\"indirect\":false}}",(uintptr_t)&scheduler,
+@@ -2020,7 +2048,37 @@
+             std::snprintf(text, sizeof(text), "CS %llx", (unsigned long long)cs.pgm_hash);
+             scheduler.LabelEncoder(text);
+         }
+-        [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)compute.state];
++        bool watched=false;
++        if(copy_watch && VideoCore::FrameCapture::NativeRecording() && cs.pgm_hash==0xfefebf9full) {
++            const char* input=std::getenv("BB_WATCH");char* end=nullptr;
++            const u64 address=input?std::strtoull(input,&end,0):0;
++            const u64 bytes=end && *end==','?std::strtoull(end+1,&end,0):0;
++            const u32 shift=buffer_cache.GetSparsePageShift();
++            const u64 plane=buffer_cache.DiagnosticBdaGuestOffset();
++            if(compute.copy_watch_state && input && end && !*end && address && address<(u64{1}<<40) &&
++               bytes==192 && shift<32 && (address&((u64{1}<<shift)-1))+bytes<=(u64{1}<<shift) &&
++               plane && plane<=~u32{0} && buffer_cache.GetBdaPageTableBuffer()->SizeBytes()>=plane*16 &&
++               impl->copy_watch_count<impl->copy_watch_records.size()) {
++                if(!impl->copy_watch_buffer) {
++                    impl->copy_watch_buffer=[impl->dev.device newBufferWithLength:128*256 options:MTLResourceStorageModeShared];
++                    if(impl->copy_watch_buffer)MemoryStats::Track((__bridge const void*)impl->copy_watch_buffer,MemoryStats::Kind::Staging);
++                }
++                if(impl->copy_watch_buffer) {
++                    const auto slot=impl->copy_watch_count++;
++                    CopyWatchData d{};d.guest=address;d.bytes=bytes;d.shift=shift;
++                    d.plane_offset=plane;d.two_level=buffer_cache.DiagnosticBdaTwoLevel();
++                    std::memcpy(static_cast<char*>(impl->copy_watch_buffer.contents)+slot*256,&d,sizeof(d));
++                    impl->copy_watch_records[slot]={VideoCore::FrameCapture::NativeCaptureSequence(),cs.pgm_hash,
++                        compute.shader->copy_watch_reads,compute.shader->copy_watch_writes};
++                    [enc setBuffer:impl->copy_watch_buffer offset:slot*256 atIndex:CopyWatchSlot];
++                    [enc setBuffer:(__bridge id<MTLBuffer>)buffer_cache.GetBdaPageTableBuffer()->buffer.native
++                        offset:0 atIndex:CopyWatchRootSlot];
++                    watched=true;
++                }
++            }
++            if(!watched)VideoCore::FrameCapture::Native("{\"op\":\"gpu_copy_pointer_uncovered\",\"kind\":\"direct\"}");
++        }
++        [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)(watched?compute.copy_watch_state:compute.state)];
+         impl->BindStage(Impl::StageKind::Compute, *compute.shader, push_data);
+         [enc dispatchThreadgroups:MTLSizeMake(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z)
+             threadsPerThreadgroup:MTLSizeMake(compute.threads_per_group[0],
+@@ -2060,6 +2118,12 @@
+                 compute.shader->uses_device_address,compute.shader->uses_bda_pagetable));
+         }
+         id<MTLComputeCommandEncoder> enc = impl->sched.compute;
++        if(VideoCore::FrameCapture::NativeRecording()) {
++            const char* flag=std::getenv("BB_CAPTURE_COPY_POINTERS");
++            const auto& stage=pipeline->GetStage(Shader::SwStage::Compute);
++            if(flag && flag[0]=='1' && stage.pgm_hash==0xfefebf9full)
++                VideoCore::FrameCapture::Native("{\"op\":\"gpu_copy_pointer_uncovered\",\"kind\":\"indirect\"}");
++        }
+         [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)compute.state];
+         impl->BindStage(Impl::StageKind::Compute, *compute.shader, push_data);
+         [enc dispatchThreadgroupsWithIndirectBuffer:NativeBuffer(*args)
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+@@ -87,6 +87,8 @@
+ 
+     /// Retrieves the device local DBA page table buffer.
+     void ReportBdaPageTable() { bda_page_table->Report(); }
++    bool DiagnosticBdaTwoLevel() const { return bda_page_table->TwoLevel(); }
++    u64 DiagnosticBdaGuestOffset() const { return bda_page_table->GuestOffset(); }
+ 
+     [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
+         return bda_page_table->Root();
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_copy_watch.h
+@@ -0,0 +1,135 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cstdint>
++#include <string>
++#include <string_view>
++#include <cctype>
++namespace Metal {
++inline constexpr unsigned CopyWatchSlot=30;
++inline constexpr unsigned CopyWatchRootSlot=29;
++struct alignas(16) CopyWatchData {
++    std::uint64_t guest{};
++    std::uint32_t bytes{},shift{},plane_offset{},two_level{};
++    std::uint32_t flags{},reads{},writes{},current_hits{},guest_hits{},overflow{};
++    std::uint32_t mapping{},pad[3]{};
++};
++static_assert(sizeof(CopyWatchData)==64);
++struct CopyWatchRewrite {
++    std::string source,error;
++    unsigned reads{},writes{},physical_reads{},physical_writes{};
++    bool ok{};
++};
++// A diagnostic for the known plain copy shader only. Each observed expression
++// returns precisely its original pointer; arithmetic, values and conditions stay
++// intact. Counters describe evaluated source-level accesses, not hardware loads.
++inline CopyWatchRewrite RewriteCopyWatch(std::string_view input) {
++    CopyWatchRewrite out;
++    auto fail=[&](const char* why){out.error=why;return out;};
++    if(input.size()>128*1024 || input.find("[[buffer(30)]]")!=input.npos ||
++       input.find("[[buffer(29)]]")!=input.npos || input.find("thread_index_in_threadgroup")!=input.npos ||
++       input.find("atomic_")!=input.npos)return fail("unsupported source/binding");
++    auto kernel=input.find("kernel void ");
++    if(kernel==input.npos || input.find("kernel void ",kernel+1)!=input.npos)return fail("expected one kernel");
++    auto open=input.find('{',kernel);
++    if(open==input.npos)return fail("missing body");
++    auto close=input.rfind('}');if(close==input.npos || close<=open)return fail("missing body");
++    struct Parser {
++        CopyWatchRewrite& out;bool valid=true;
++        static size_t end(std::string_view s,size_t pos,char l,char r) {
++            unsigned depth=0;
++            for(size_t n=pos;n<s.size();++n){if(s[n]==l)++depth;if(s[n]==r && !--depth)return n;}
++            return s.npos;
++        }
++        bool write(std::string_view s,size_t pos) {
++            while(pos<s.size() && std::isspace(static_cast<unsigned char>(s[pos])))++pos;
++            if(pos==s.size())return false;
++            if(s[pos]=='=' && (pos+1==s.size() || s[pos+1]!='='))return true;
++            if(s.substr(pos,2)=="++" || s.substr(pos,2)=="--" ||
++               (pos+1<s.size() && s[pos+1]=='=' && s[pos]!='=' && s[pos]!='<' && s[pos]!='>' && s[pos]!='!'))valid=false;
++            return false;
++        }
++        std::string body(std::string_view s,unsigned depth=0) {
++            if(depth>32){valid=false;return {};}
++            std::string result;
++            for(size_t n=0;n<s.size();) {
++                constexpr std::string_view cast="*(reinterpret_cast<device ";
++                if(s.substr(n,cast.size())==cast) {
++                    auto type_end=s.find("*>(",n+cast.size());
++                    if(type_end==s.npos){valid=false;return {};}
++                    auto arg=type_end+2;auto stop=end(s,arg,'(',')');
++                    if(stop==s.npos || stop+1>=s.size() || s[stop+1]!=')'){valid=false;return {};}
++                    const auto type=s.substr(n+cast.size(),type_end-n-cast.size());
++                    if(type.empty() || type.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_")!=type.npos){valid=false;return {};}
++                    const bool w=write(s,stop+2);out.physical_reads+=!w;out.physical_writes+=w;
++                    out.reads+=!w;out.writes+=w;
++                    result+="*(bb_copy_ptr(reinterpret_cast<device "+std::string(type)+"*>("+
++                        body(s.substr(arg+1,stop-arg-1),depth+1)+"), bb_copy_watch, bb_copy_ranges, "+(w?"true":"false")+"))";
++                    n=stop+2;continue;
++                }
++                if(std::isalpha(static_cast<unsigned char>(s[n])) || s[n]=='_') {
++                    size_t name=n+1;
++                    while(name<s.size() && (std::isalnum(static_cast<unsigned char>(s[name])) || s[name]=='_'))++name;
++                    if(s.substr(name,6)==".data[") {
++                        const auto stop=end(s,name+5,'[',']');
++                        if(stop==s.npos){valid=false;return {};}
++                        bool w=write(s,stop+1);out.reads+=!w;out.writes+=w;
++                        result+="*(bb_copy_ptr("+std::string(s.substr(n,name-n))+".data + ("+
++                            body(s.substr(name+6,stop-name-6),depth+1)+"), bb_copy_watch, bb_copy_ranges, "+(w?"true":"false")+"))";
++                        n=stop+1;continue;
++                    }
++                    result+=s.substr(n,name-n);n=name;continue;
++                }
++                result+=s[n++];
++            }
++            return result;
++        }
++    } parser{out};
++    const auto original=input.substr(open+1,close-open-1);
++    const auto rewritten=parser.body(original);
++    // Only the recognized resource syntax is allowed to carry memory accesses.
++    size_t casts=0;for(size_t at=0;(at=original.find("reinterpret_cast<device ",at))!=original.npos;++at)++casts;
++    if(!parser.valid || casts!=out.physical_reads+out.physical_writes || !out.reads || !out.writes)
++        return fail("uncovered physical access");
++    static constexpr const char* helper=R"MSL(
++struct BbCopyWatch { ulong guest; uint bytes,shift,plane_offset,two_level;
++    atomic_uint flags,reads,writes,current_hits,guest_hits,overflow,mapping;uint pad[3]; };
++struct BbCopyRanges {ulong current,guest;uint bytes;};
++inline BbCopyRanges bb_copy_ranges_for(const device ulong* root,device BbCopyWatch& d) {
++    ulong page=d.guest>>d.shift;ulong offset=d.guest&((1ul<<d.shift)-1ul);
++    ulong a=0,b=0;
++    if(d.two_level) {
++        ulong la=root[page>>12ul],lb=root[(page>>12ul)+d.plane_offset];
++        if(la)a=reinterpret_cast<const device ulong*>(la)[page&4095ul];
++        if(lb)b=reinterpret_cast<const device ulong*>(lb)[page&4095ul];
++    } else {a=root[page];b=root[page+d.plane_offset];}
++    return BbCopyRanges{a?a+offset:0,b?b+offset:0,d.bytes};
++}
++inline bool bb_copy_overlap(ulong a,uint bytes,ulong b,uint count) {
++    return b && (a<=b?b-a<ulong(bytes):a-b<ulong(count));
++}
++inline void bb_copy_count(device atomic_uint& value,device BbCopyWatch& d) {
++    if(atomic_fetch_add_explicit(&value,1u,memory_order_relaxed)==0xffffffffu)
++        atomic_fetch_or_explicit(&d.overflow,1u,memory_order_relaxed);
++}
++template<typename T> inline device T* bb_copy_ptr(device T* p,device BbCopyWatch& d,
++    thread const BbCopyRanges& r,bool write) {
++    ulong a=reinterpret_cast<ulong>(p);
++    bool c=bb_copy_overlap(a,uint(sizeof(T)),r.current,r.bytes);
++    bool g=bb_copy_overlap(a,uint(sizeof(T)),r.guest,r.bytes);
++    if(c||g) {
++        atomic_fetch_or_explicit(&d.flags,write?2u:1u,memory_order_relaxed);
++        if(write)bb_copy_count(d.writes,d);else bb_copy_count(d.reads,d);
++        if(c)bb_copy_count(d.current_hits,d);if(g)bb_copy_count(d.guest_hits,d);
++    }
++    return p;
++}
++)MSL";
++    std::string prefix(input.substr(0,kernel));
++    std::string signature(input.substr(kernel,open-kernel));
++    auto paren=signature.rfind(')');if(paren==signature.npos)return fail("missing signature");
++    signature.insert(paren,", const device ulong* bb_copy_root [[buffer(29)]], device BbCopyWatch& bb_copy_watch [[buffer(30)]], uint bb_copy_lane [[thread_index_in_threadgroup]]");
++    out.source=prefix+helper+signature+"{\nBbCopyRanges bb_copy_ranges=bb_copy_ranges_for(bb_copy_root,bb_copy_watch);\nif(bb_copy_lane==0u)atomic_fetch_or_explicit(&bb_copy_watch.mapping,(bb_copy_ranges.current?1u:0u)|(bb_copy_ranges.guest?2u:0u),memory_order_relaxed);\n"+
++        rewritten+"}"+std::string(input.substr(close+1));
++    out.ok=true;return out;
++}
++}
+--- /dev/null
++++ b/tests/test_mtl_copy_watch.mm
+@@ -0,0 +1,101 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Synthetic CPU/GPU data only; no game, archive, save, settings or cache access.
++#import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++#include "video_core/renderer_metal/mtl_copy_watch.h"
++#include <cassert>
++#include <array>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <cstdio>
++
++static constexpr const char* Source=R"MSL(
++#include <metal_stdlib>
++using namespace metal;
++struct Buffer {uint data[1];};struct Root {ulong data[1];};
++kernel void main0(const device Buffer& meta [[buffer(0)]],device Root& bda_pagetable [[buffer(1)]],uint tid [[thread_position_in_grid]]) {
++    if(tid<64u) {
++        ulong a=ulong(meta.data[0])|(ulong(meta.data[1])<<32ul);
++        ulong b=ulong(meta.data[2])|(ulong(meta.data[3])<<32ul);
++        ulong c=ulong(meta.data[4])|(ulong(meta.data[5])<<32ul);
++        uint value=*(reinterpret_cast<device uint*>(a+ulong(tid)*4ul));
++        *(reinterpret_cast<device uint*>(b+ulong(tid)*4ul))=value;
++        *(reinterpret_cast<device uint*>(c+ulong(tid)*4ul))=value;
++    }
++}
++)MSL";
++static id<MTLLibrary> Library(id<MTLDevice> device,const std::string& source,bool relaxed=false) {
++    MTLCompileOptions* options=[MTLCompileOptions new];options.languageVersion=MTLLanguageVersion3_1;
++    options.mathMode=relaxed?MTLMathModeRelaxed:MTLMathModeSafe;
++    NSError* error=nil;
++    id<MTLLibrary> lib=[device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
++    if(!lib)std::fprintf(stderr,"MSL: %s\n",error.localizedDescription.UTF8String);
++    assert(lib);return lib;
++}
++int main(int argc,char** argv) {@autoreleasepool {
++    const std::string original=Source;
++    const auto rewritten=Metal::RewriteCopyWatch(original);
++    assert(rewritten.ok && rewritten.physical_reads==1 && rewritten.physical_writes==2);
++    assert(original==Source);
++    for(const auto& bad:{std::string("kernel void k(){}"),original+"\nkernel void other(){}",original+"\n// [[buffer(30)]]"})
++        assert(!Metal::RewriteCopyWatch(bad).ok);
++    id<MTLDevice> device=MTLCreateSystemDefaultDevice();assert(device);
++    id<MTLCommandQueue> queue=[device newCommandQueue];
++    auto buffer=[&](NSUInteger size){id<MTLBuffer> b=[device newBufferWithLength:size options:MTLResourceStorageModeShared];assert(b);std::memset(b.contents,0,size);return b;};
++    id<MTLBuffer> src=buffer(512),dst=buffer(512),mirror=buffer(512),other=buffer(512),meta=buffer(256),root=buffer(2048),leaf0=buffer(32768),leaf1=buffer(32768),counter=buffer(256);
++    for(unsigned n=0;n<128;++n)static_cast<uint32_t*>(src.contents)[n]=n*17+3;
++    const std::array<uint64_t,3> addresses={src.gpuAddress,dst.gpuAddress,mirror.gpuAddress};std::memcpy(meta.contents,addresses.data(),sizeof(addresses));
++    // Include NaN payloads, infinities, signed zero and subnormals in the
++    // float copy cases; compare every output byte under both compiler modes.
++    const uint32_t special[]={0x7fc00001,0x7f800000,0xff800000,0x80000000,1,0xffffffff};
++    std::memcpy(src.contents,special,sizeof(special));
++    for(bool relaxed:{false,true})for(bool float_copy:{false,true}) {@autoreleasepool {
++        std::string variant=original;
++        if(float_copy) {
++            for(size_t at=0;(at=variant.find("device uint*>",at))!=variant.npos;at+=14)
++                variant.replace(at,13,"device float*>");
++            const auto value=variant.find("uint value=");assert(value!=variant.npos);variant.replace(value,11,"float value=");
++        }
++        const auto watched_source=Metal::RewriteCopyWatch(variant);assert(watched_source.ok);
++        const auto baseline_lib=Library(device,variant,relaxed),watch_lib=Library(device,watched_source.source,relaxed);
++        NSError* error=nil;
++        id<MTLComputePipelineState> baseline=[device newComputePipelineStateWithFunction:[baseline_lib newFunctionWithName:@"main0"] error:&error];assert(baseline);
++        id<MTLComputePipelineState> watched=[device newComputePipelineStateWithFunction:[watch_lib newFunctionWithName:@"main0"] error:&error];assert(watched);
++    for(bool two:{false,true})for(unsigned target=0;target<4;++target) {
++        auto* table=static_cast<uint64_t*>(root.contents);std::memset(table,0,2048);
++        std::memset(leaf0.contents,0,32768);std::memset(leaf1.contents,0,32768);
++        const uint64_t a=target==0?src.gpuAddress:target==1?dst.gpuAddress:target==2?other.gpuAddress:0;
++        const uint64_t b=target==1?mirror.gpuAddress:0;
++        if(two){table[0]=leaf0.gpuAddress;table[1]=leaf1.gpuAddress;static_cast<uint64_t*>(leaf0.contents)[64]=a;static_cast<uint64_t*>(leaf1.contents)[64]=b;}
++        else {table[64]=a;table[64+128]=b;}
++        std::array<uint8_t,512> expected{},expected_mirror{};
++        for(bool observe:{false,true}) {
++            std::memset(dst.contents,0x9a,512);std::memset(mirror.contents,0x6b,512);
++            Metal::CopyWatchData data{};data.guest=0x100000;data.bytes=192;data.shift=14;
++            data.plane_offset=two?1:128;data.two_level=two;std::memcpy(counter.contents,&data,sizeof(data));
++            id<MTLCommandBuffer> commands=[queue commandBuffer];id<MTLComputeCommandEncoder> enc=[commands computeCommandEncoder];
++            [enc setComputePipelineState:observe?watched:baseline];
++            [enc setBuffer:meta offset:0 atIndex:0];[enc setBuffer:root offset:0 atIndex:1];
++            if(observe)[enc setBuffer:counter offset:0 atIndex:Metal::CopyWatchSlot];
++            if(observe)[enc setBuffer:root offset:0 atIndex:Metal::CopyWatchRootSlot];
++            for(id<MTLBuffer> b in @[src,dst,mirror,other,leaf0,leaf1])
++                [enc useResource:b usage:MTLResourceUsageRead|MTLResourceUsageWrite];
++            [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
++            [enc endEncoding];[commands commit];[commands waitUntilCompleted];assert(commands.status==MTLCommandBufferStatusCompleted);
++            if(!observe){std::memcpy(expected.data(),dst.contents,512);std::memcpy(expected_mirror.data(),mirror.contents,512);}
++            else {
++                assert(!std::memcmp(expected.data(),dst.contents,512));assert(!std::memcmp(expected_mirror.data(),mirror.contents,512));
++                std::memcpy(&data,counter.contents,sizeof(data));assert(!data.overflow);
++                assert(data.mapping==(target==1?3:target==3?0:1));
++                if(target==0){assert(data.flags==1 && data.reads==48 && !data.writes);}
++                else if(target==1){assert(data.flags==2 && data.writes==96 && !data.reads && data.current_hits==48 && data.guest_hits==48);}
++                else assert(!data.flags && !data.reads && !data.writes);
++            }
++        }
++    }
++    }}
++    // Optional private local corpus: compile rewritten cache text without modifying it.
++    for(int n=1;n<argc;++n){std::ifstream f(argv[n]);std::string source{std::istreambuf_iterator<char>(f),{}};auto r=Metal::RewriteCopyWatch(source);assert(r.ok);Library(device,r.source);std::printf("corpus: %s r=%u w=%u\n",argv[n],r.reads,r.writes);}
++    std::puts("PASS: pointer diagnostics preserve complete output and canaries; uint/float and Safe/Relaxed modes; flat/two-level source, destination, guest mirror, unrelated and unmapped watches");
++}}

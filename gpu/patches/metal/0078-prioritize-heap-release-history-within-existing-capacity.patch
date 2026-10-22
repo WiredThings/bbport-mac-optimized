@@ -1,0 +1,163 @@
+--- a/gpu/shim/bbport_resource_lifetime.cpp
++++ b/gpu/shim/bbport_resource_lifetime.cpp
+@@ -22,12 +22,34 @@
+ void Tracker::Remember(Record r) {
+   if (!capacity)
+     return;
+-  while (retired.size() >= capacity && !order.empty()) {
+-    retired.erase(order.front());
+-    order.pop_front();
++  if (!heap_priority) {
++    // Preserve the original insertion FIFO, including out-of-order frees.
++    while (retired.size() >= capacity && !order.empty()) {
++      retired.erase(order.front());
++      order.pop_front();
++    }
++    retired.emplace(r.tag.generation, r);
++    order.push_back(r.tag.generation);
++    return;
++  }
++  const auto domain = unsigned(r.tag.domain);
++  if (retired.size() >= capacity) {
++    unsigned victim = unsigned(Domain::Count);
++    // Only heap releases can authorize texture removal. Frequent range
++    // recycling must not evict that evidence. Keep the same total capacity.
++    if (!priority_order[unsigned(Domain::Range)].empty())
++      victim = unsigned(Domain::Range);
++    else if (domain == unsigned(Domain::Range))
++      return;
++    else
++      victim = unsigned(Domain::Heap);
++    if (priority_order[victim].empty())
++      return;
++    retired.erase(priority_order[victim].front());
++    priority_order[victim].pop_front();
+   }
+   retired.emplace(r.tag.generation, r);
+-  order.push_back(r.tag.generation);
++  priority_order[domain].push_back(r.tag.generation);
+ }
+ Tag Tracker::Allocate(Domain d, u64 address, u64 size) {
+   if (unsigned(d) >= unsigned(Domain::Count) || !Valid(address, size))
+@@ -243,7 +265,14 @@
+   return on;
+ }
+ Tracker &Get() {
+-  static auto *tracker = new Tracker;
++  // Developer-only candidate until repeated-load and memory comparison pass.
++  static auto *tracker = [] {
++    const auto* value = std::getenv("BB_LIFETIME_HEAP_HISTORY_PRIORITY");
++    const bool priority = value && value[0] == '1';
++    std::printf("Guest lifetime history: heap-priority=%u, total-capacity=32768\n",
++                unsigned(priority));
++    return new Tracker(32768, priority);
++  }();
+   return *tracker;
+ }
+ void Report() {
+--- a/gpu/shim/bbport_resource_lifetime.h
++++ b/gpu/shim/bbport_resource_lifetime.h
+@@ -36,7 +36,8 @@
+ // Unknown/missing/overlapping histories cannot authorize reclamation.
+ class Tracker {
+ public:
+-  explicit Tracker(std::size_t capacity = 32768) : capacity(capacity) {}
++  explicit Tracker(std::size_t capacity = 32768, bool heap_priority = false)
++      : capacity(capacity), heap_priority(heap_priority) {}
+   Tag Allocate(Domain, u64 address, u64 size);
+   Tag Find(Domain, u64 address) const;
+   Tag Owner(u64 address, u64 size) const;
+@@ -67,9 +68,11 @@
+   bool ReleasedRangeUnusedLocked(Tag,u64 address,u64 size,u64 min_age_ms) const;
+   mutable std::mutex mutex;
+   const std::size_t capacity;
++  const bool heap_priority;
+   std::array<std::map<u64, Tag>, unsigned(Domain::Count)> live;
+   std::unordered_map<u64, Record> retired;
+   std::deque<u64> order;
++  std::array<std::deque<u64>, unsigned(Domain::Count)> priority_order;
+   std::array<std::unordered_map<u64, u64>, unsigned(Domain::Count)> previous;
+   Snapshot counters{};
+ };
+--- a/tests/test_guest_resource_lifetime.cpp
++++ b/tests/test_guest_resource_lifetime.cpp
+@@ -110,6 +110,79 @@
+   worker.join();
+   assert(finished && concurrent.Owner(0x1000, 16));
+   assert(t.Read().reclaimed_images == 2 && t.Read().reclaimed_bytes == 256);
++  // Disabled mode must preserve release insertion order, not allocation generation.
++  for (bool priority : {false, true}) {
++    Tracker reverse(2, priority);
++    const auto first = reverse.Allocate(Domain::Heap, 0x500000, 16);
++    const auto second = reverse.Allocate(Domain::Heap, 0x500100, 16);
++    assert(reverse.Release(second) && reverse.Release(first));
++    const auto third = reverse.Allocate(Domain::Heap, 0x500200, 16);
++    assert(reverse.Release(third));
++    assert(reverse.Status(second) == State::Unknown);
++    assert(reverse.Status(first) == State::Released);
++  }
++  { // Same total-capacity history retention policy.
++    for (bool priority : {false, true}) {
++      Tracker history(8, priority);
++      const auto heap = history.Allocate(Domain::Heap, 0x100000, 4096);
++      assert(history.Release(heap));
++      for (unsigned i = 0; i < 32; ++i) {
++        const auto range = history.Allocate(Domain::Range, 0x300000, 64);
++        assert(history.Release(range));
++      }
++      assert(history.Status(heap) == (priority ? State::Released : State::Unknown));
++      bool invoked = false;
++      assert(history.WithReleased(heap, 0x100000, 4096, 0, [&] {
++        invoked = true;
++        return 4096;
++      }) == priority);
++      assert(invoked == priority);
++      if (priority) {
++        const auto overlap = history.Allocate(Domain::Range, 0x100080, 64);
++        assert(!history.WithReleased(heap, 0x100000, 4096, 0, [] {
++          assert(false);
++          return 1;
++        }));
++        assert(history.Release(overlap));
++      }
++    }
++    // Preserving history must not turn a replacement into a genuine release.
++    Tracker priority(8, true);
++    const auto stale = priority.Allocate(Domain::Heap, 0x100000, 4096);
++    const auto replacement = priority.Allocate(Domain::Heap, 0x100000, 4096);
++    assert(priority.Release(replacement));
++    for (unsigned i = 0; i < 32; ++i) {
++      const auto range = priority.Allocate(Domain::Range, 0x300000, 64);
++      assert(priority.Release(range));
++    }
++    assert(priority.Status(stale) == State::Reused);
++    assert(!priority.WithReleased(stale, 0x100000, 4096, 0, [] {
++      assert(false);
++      return 1;
++    }));
++    // All-heap churn still obeys the original total cap and fails closed.
++    Tracker bounded(8, true);
++    const auto old = bounded.Allocate(Domain::Heap, 0x100000, 64);
++    assert(bounded.Release(old));
++    for (unsigned i = 0; i < 32; ++i) {
++      const auto heap = bounded.Allocate(Domain::Heap, 0x300000, 64);
++      assert(bounded.Release(heap));
++    }
++    assert(bounded.Status(old) == State::Unknown);
++    assert(!bounded.WithReleased(old, 0x100000, 64, 0, [] {
++      assert(false);
++      return 1;
++    }));
++    Tracker full(2, true);
++    const auto first = full.Allocate(Domain::Heap, 0x100000, 64);
++    const auto second = full.Allocate(Domain::Heap, 0x100100, 64);
++    assert(full.Release(first) && full.Release(second));
++    const auto range = full.Allocate(Domain::Range, 0x300000, 64);
++    assert(full.Release(range));
++    assert(full.Status(first) == State::Released);
++    assert(full.Status(second) == State::Released);
++    assert(full.Status(range) == State::Unknown);
++  }
+   std::puts("PASS: explicit frees, generations, overlapping domains, bounded "
+             "history/overflow, atomic reuse protection");
+ }

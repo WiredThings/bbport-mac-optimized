@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -13,6 +14,136 @@ spec=importlib.util.spec_from_file_location('benchmark',Path(__file__).parents[1
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 
 class BenchmarkTests(unittest.TestCase):
+    def test_reviewed_30s_policy_loading_burst_and_continuous_stops(self):
+        g=b.MemoryGuard(9626.56,12288,24576,30)
+        for t,swap in [(0,9775.62),(37.38,9797),(40.55,10095.62),(43.72,10393.38),(47,10393.38)]:
+            g.check(dict(level=2,swap_mib=swap),t)
+        for rate,stop,label in [(40,30,'sustained'),(128,9,'emergency')]:
+            g=b.MemoryGuard(9626.56,12288,24576,30)
+            for t in range(0,stop,3):g.check(dict(level=2,swap_mib=10000+t*rate),t)
+            with self.assertRaisesRegex(RuntimeError,label):g.check(dict(level=2,swap_mib=10000+stop*rate),stop)
+
+    def test_30s_policy_does_not_join_separated_bursts(self):
+        for samples in [([(t,10000+(t//9)*500) for t in range(0,100,3)]),
+                        [(0,10000),(3,10100),(6,10000),(9,10100)],
+                        [(t,10000+t*5) for t in range(0,301,3)]]:
+            g=b.MemoryGuard(9626.56,12288,24576,30)
+            for t,swap in samples:g.check(dict(level=2,swap_mib=swap),t)
+        for level,swap,error in [(4,10000,'critical'),(1,24577,'absolute'),(1,22000,'total swap')]:
+            with self.assertRaisesRegex(RuntimeError,error):
+                b.MemoryGuard(9626.56,12288,24576,30).check(dict(level=level,swap_mib=swap),0)
+
+    def test_deadline_requires_timezone_stops_before_game_or_files(self):
+        stamp=b.authorization_deadline('2026-10-22T17:00:00+08:00')
+        self.assertEqual(stamp,b.authorization_deadline('2026-10-22T09:00:00+00:00'))
+        b.check_authorization_deadline(stamp,stamp-1)
+        with self.assertRaisesRegex(RuntimeError,'deadline'):b.check_authorization_deadline(stamp,stamp)
+        with self.assertRaises(argparse.ArgumentTypeError):b.authorization_deadline('2026-10-22T17:00:00')
+        with patch.object(b.time,'time',return_value=stamp),self.assertRaisesRegex(RuntimeError,'deadline'):
+            b.run(argparse.Namespace(stop_at=stamp))
+
+    def test_cli_records_reviewed_rate_and_deadline(self):
+        argv=['benchmark','run','--workspace','/unused','--name','rate-test','--swap-rapid-window-seconds','30','--stop-at','2026-10-22T17:00:00+08:00']
+        with patch.object(sys,'argv',argv),patch.object(b,'run') as run:b.main()
+        self.assertEqual(run.call_args.args[0].swap_rapid_window_seconds,30)
+        self.assertEqual(run.call_args.args[0].stop_at,b.authorization_deadline(argv[-1]))
+        a=self.result();c=self.result();c['swap_rapid_window_seconds']=30
+        with self.assertRaisesRegex(ValueError,'guard policies'):self.compare(a,c)
+
+    def test_cli_accepts_expanded_budget_without_accessing_game(self):
+        argv=['benchmark','run','--workspace','/unused','--name','budget-test',
+              '--max-swap-growth-mib','12288','--max-swap-total-mib','24576','--swap-budget-baseline-mib','9626.56']
+        with patch.object(sys,'argv',argv),patch.object(b,'run') as run:
+            b.main()
+        args=run.call_args.args[0]
+        self.assertEqual((args.max_swap_growth_mib,args.max_swap_total_mib,args.swap_budget_baseline_mib),(12288,24576,9626.56))
+
+    def test_cli_defaults_use_new_capacity_and_reject_nonfinite_baseline(self):
+        argv=['benchmark','run','--workspace','/unused','--name','budget-test']
+        with patch.object(sys,'argv',argv),patch.object(b,'run') as run:
+            b.main()
+        self.assertEqual(run.call_args.args[0].max_swap_growth_mib,12288)
+        with patch.object(sys,'argv',argv+['--swap-budget-baseline-mib','nan']),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
+            b.main()
+
+    def test_expanded_swap_capacity_does_not_treat_existing_10gib_as_failure(self):
+        g=b.MemoryGuard(10000,b.DEFAULT_SWAP_GROWTH_MIB,b.DEFAULT_SWAP_TOTAL_MIB)
+        g.check(dict(level=1,swap_mib=10000),0)
+        g.check(dict(level=2,swap_mib=21000),1000) # slow growth, within both limits
+        with self.assertRaisesRegex(RuntimeError,'total swap growth'):
+            g.check(dict(level=2,swap_mib=22289),2000)
+        with self.assertRaisesRegex(RuntimeError,'absolute system swap'):
+            b.MemoryGuard(24000,12288,24576).check(dict(level=1,swap_mib=24577),0)
+
+    def test_expanded_capacity_keeps_critical_and_rapid_stops(self):
+        with self.assertRaisesRegex(RuntimeError,'critical'):
+            b.MemoryGuard(10000,12288).check(dict(level=4,swap_mib=10000),0)
+        g=b.MemoryGuard(10000,12288)
+        for t,swap in [(0,10000),(3,10300)]:g.check(dict(level=2,swap_mib=swap),t)
+        with self.assertRaisesRegex(RuntimeError,'rapid swap'):
+            g.check(dict(level=2,swap_mib=10600),6)
+
+    def test_shared_allowance_does_not_reset_batch_and_respects_absolute_cap(self):
+        self.assertEqual(b.swap_allowance(9626.56,9807.62),11850)
+        self.assertEqual(b.swap_allowance(9626.56,18000),3658)
+        self.assertEqual(b.swap_allowance(24000,24000),320)
+        self.assertEqual(b.swap_allowance(9626.56,22000),0)
+        self.assertEqual(b.swap_allowance(9626.56,9000),12288)
+        for invalid in (-1,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):b.swap_allowance(invalid,9000)
+
+    def test_compare_rejects_unlike_absolute_or_shared_budgets(self):
+        for key,value in [('max_swap_total_mib',24576),('shared_swap_budget_baseline_mib',9626.56)]:
+            a=self.result();c=self.result();c[key]=value
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'guard policies'):
+                self.compare(a,c)
+
+    def test_visual_capture_refuses_score_before_game_or_file_access(self):
+        with self.assertRaisesRegex(ValueError,'refuse a scored run'):
+            b.run(argparse.Namespace(visual_observation='present'))
+
+    def test_comparison_keeps_legacy_visual_state_unverified(self):
+        result=self.compare(self.result(),self.result())
+        self.assertEqual(result['visual_observation'],'unverified')
+        self.assertIn('not certified',result['notes'])
+
+    def test_visual_observation_modes_must_match_and_never_include_capture(self):
+        for left,right in [('absent','unverified'),('present','present'),('absent','present'),('invented','invented')]:
+            a=self.result();c=self.result()
+            a['visual_observation']=left;c['visual_observation']=right
+            with self.subTest(left=left,right=right),self.assertRaisesRegex(ValueError,'[Vv]isual observation'):
+                self.compare(a,c)
+        a=self.result();a['visual_observation']='absent'
+        result=self.compare(a,a)
+        self.assertEqual(result['visual_observation'],'absent')
+        self.assertIn('not automatically detected',result['notes'])
+
+    def test_gpu_pointer_watch_is_bounded_and_never_scored(self):
+        self.assertIn('BB_CAPTURE_COPY_POINTERS',b.DIAGNOSTIC_OVERRIDES)
+        for native,watch in ((False,None),(True,None),(False,'0x7056eed0e0,192')):
+            with self.assertRaisesRegex(ValueError,'GPU pointer watch requires'):
+                b.run(argparse.Namespace(env=['BB_CAPTURE_COPY_POINTERS=1'],capture_native=native,watch_buffer=watch))
+    def test_srt_watch_requires_bounded_capture_before_game_setup(self):
+        for native,watch in ((False,None),(True,None),(False,'0x7056eed0e0,192')):
+            with self.assertRaisesRegex(ValueError,'SRT reads require'):
+                b.run(argparse.Namespace(env=['BB_CAPTURE_SRT_READS=1'],capture_native=native,watch_buffer=watch))
+    def test_development_marker_must_be_in_executed_embedded_game(self):
+        with tempfile.TemporaryDirectory() as d:
+            engine=Path(d);top=engine/'bin/bb-probe-metal';top.parent.mkdir();top.write_bytes(b'BB_DEVELOPMENT_WORLD_WARPER_V1');top.chmod(0o755)
+            self.assertEqual(b.executed_game_probe(engine),top)
+            (engine/'DEVELOPMENT-WORLD-WARPER.json').write_text('{}')
+            b.validate_development_runtime(engine)
+            nested=engine/'bin/Bloodborne Game.app/Contents/MacOS/bb-probe-metal'
+            nested.parent.mkdir(parents=True);nested.write_bytes(b'release runtime');nested.chmod(0o755)
+            self.assertEqual(b.executed_game_probe(engine),nested)
+            with self.assertRaisesRegex(ValueError,'actual executed'):b.validate_development_runtime(engine)
+            nested.write_bytes(top.read_bytes());b.validate_development_runtime(engine)
+    def test_buffer_watch_is_bounded_and_diagnostic_only(self):
+        self.assertEqual(b.watch_buffer_range('0x7056eed0e0,192'),'0x7056eed0e0,192')
+        for bad in ['0,192','0x10000000000,1','4096,4097','4096,0','-1,192','garbage','1,2,3']:
+            with self.assertRaises(argparse.ArgumentTypeError):b.watch_buffer_range(bad)
+        with self.assertRaisesRegex(ValueError,'never scored'):
+            b.run(argparse.Namespace(watch_buffer='0x7056eed0e0,192',capture_native=False))
     def test_memory_warning_is_recorded_without_abort(self):
         g=b.MemoryGuard(100,256);warning=dict(level=2,swap_mib=100)
         for t in range(0,300,3):g.check(warning,t,True)
@@ -45,9 +176,27 @@ class BenchmarkTests(unittest.TestCase):
     def test_compare_rejects_different_guard_policies(self):
         a=self.result();c=self.result();c['guard_policy']=b.GUARD_POLICY
         with self.assertRaisesRegex(ValueError,'guard policies'):self.compare(a,c)
+    def test_paired_session_clocks_allow_slow_but_monitored_sampling(self):
+        ready=dict(locked=False,all_displays_asleep=False)
+        g=b.SessionGuard()
+        g.check(ready,0,100,sample_duration=.05)
+        g.check(ready,3,103,sample_duration=2.4)
+        g.check(ready,6,106,sample_duration=.05)
+        # A truly unmonitored sample remains invalid even with matching clock pairs.
+        with self.assertRaisesRegex(RuntimeError,'exceeded 12 seconds'):
+            g.check(ready,9,109,sample_duration=12.01)
     def test_memory_critical_or_swap_growth_stops_immediately(self):
         for sample in [dict(level=4,swap_mib=100),dict(level=1,swap_mib=357)]:
             with self.assertRaisesRegex(RuntimeError,'Memory guard'):b.MemoryGuard(100,256).check(sample,10)
+    def test_copy_scope_observer_cannot_score_before_file_or_game_access(self):
+        args=argparse.Namespace(env=['BB_CAPTURE_COPY_SCOPE=1'],capture_native=False)
+        with self.assertRaisesRegex(ValueError,'never a performance score'):b.run(args)
+
+    def test_fragment_guard_cannot_be_scored_or_open_game_files(self):
+        self.assertIn('BB_CAPTURE_FRAGMENT_GUARD',b.DIAGNOSTIC_OVERRIDES)
+        args=argparse.Namespace(env=['BB_CAPTURE_FRAGMENT_GUARD=1'],capture_native=False)
+        with self.assertRaisesRegex(ValueError,'never a performance score'):b.run(args)
+
     def test_gather_reuse_and_current_math_are_score_overrides(self):
         for key in ('BB_MTL_GATHER_REUSE','BB_MTL_RELAXED_MATH'):
             self.assertIn(key,b.OVERRIDES)
@@ -102,6 +251,19 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(b.stable_scene(r,[-9,-4,-18]))
         for row in r[-30:]:row['draws']='20'
         self.assertFalse(b.stable_scene(r))
+    def test_verified_corridor_keeps_low_count_frames_but_rejects_wrong_scene(self):
+        rows=self.rows()
+        for row in rows[::10]:row.update(draws='150',frame_ms='80')
+        self.assertFalse(b.stable_scene(rows))
+        self.assertTrue(b.stable_scene(rows,[-9,-4,-18]))
+        score=b.metrics(rows,[-9,-4,-18])
+        self.assertEqual(score['frames'],1000)
+        self.assertAlmostEqual(score['fps'],1000/26)
+        self.assertAlmostEqual(score['low_draw_frame_fraction'],.1)
+        with self.assertRaises(ValueError):b.metrics(rows,[7,2,8])
+        for row in rows:row['draws']='20'
+        self.assertFalse(b.stable_scene(rows,[-9,-4,-18]))
+        with self.assertRaises(ValueError):b.metrics(rows,[-9,-4,-18])
     def test_isolated_camera_telemetry_gap_retains_all_frame_times(self):
         r=self.rows();r[500].update(cam_x='',cam_y='',cam_z='',draws='3',frame_ms='100')
         m=b.metrics(r);self.assertEqual(m['frames'],1000);self.assertEqual(m['missing_camera_samples'],1);self.assertAlmostEqual(m['fps'],1000/20.08)
@@ -160,6 +322,26 @@ class BenchmarkTests(unittest.TestCase):
         text=lambda:'\n'.join('NATIVE '+json.dumps(row) for row in rows)
         with self.assertRaisesRegex(ValueError,'Incomplete encoder'):b.validate_native_capture(text())
         rows.pop(1);self.assertEqual(b.validate_native_capture(text())['attachments'],1)
+    def test_consecutive_capture_requires_identity_and_unbroken_frame_numbers(self):
+        def frame(number,index,count=3):
+            rows=[dict(op='frame',frame=number,truncated=False,series_count=count,series_member=index),
+                  dict(op='open',queue=1,kind=1,guest=True),
+                  dict(op='attachment',queue=1,slot=0,id=1,w=1,h=1,load=1,store=1),
+                  dict(op='close',queue=1,kind=1)]
+            return '\n'.join('NATIVE '+json.dumps(r) for r in rows)
+        valid=[frame(10+i,i+1) for i in range(3)]
+        self.assertEqual([r['frame'] for r in b.validate_consecutive_captures(valid)],[10,11,12])
+        with self.assertRaisesRegex(ValueError,'Gap'):b.validate_consecutive_captures([valid[0],frame(12,2),frame(13,3)])
+        with self.assertRaisesRegex(ValueError,'identity'):b.validate_consecutive_captures([valid[0],valid[1],frame(12,1)])
+        with self.assertRaisesRegex(ValueError,'identity'):b.validate_consecutive_captures([frame(10,1,1),valid[1],valid[2]])
+        with self.assertRaises(ValueError):b.validate_consecutive_captures(valid[:1])
+    def test_consecutive_capture_cli_rejects_score_or_single_frame_mode(self):
+        base=['benchmark','run','--workspace','/unused','--name','consecutive']
+        for flags in [['--capture-consecutive'],['--capture-native','--capture-consecutive'],
+                      ['--capture-consecutive','--capture-count','2']]:
+            with patch.object(b.sys,'argv',base+flags),patch.object(b,'run') as run,contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):b.main()
+                run.assert_not_called()
     def test_capture_series_cli_bounds_before_any_game_start(self):
         base=['benchmark','run','--workspace','/unused','--name','series']
         for flags in [['--capture-native','--capture-count','4'],['--capture-count','2'],['--capture-native','--capture-display','--capture-count','2']]:
@@ -201,6 +383,23 @@ class BenchmarkTests(unittest.TestCase):
         try:
             b.stop_owned(own);self.assertIsNotNone(own.poll());self.assertIsNone(other.poll())
         finally:b.stop_owned(other)
+    def test_owned_helper_exit_between_poll_and_group_lookup_is_reaped(self):
+        own=subprocess.Popen([b.sys.executable,'-c','import sys; sys.stdin.buffer.read()'],stdin=subprocess.PIPE,start_new_session=True)
+        other=subprocess.Popen(['sleep','15'],start_new_session=True)
+        native_getpgid=b.os.getpgid
+        def exit_then_lookup(pid):
+            self.assertEqual(pid,own.pid)
+            own.stdin.close();self.assertEqual(own.wait(timeout=5),0)
+            return native_getpgid(pid)
+        try:
+            with patch.object(b.os,'getpgid',side_effect=exit_then_lookup),patch.object(b.os,'killpg') as terminate:
+                b.stop_owned(own)
+                terminate.assert_not_called()
+            self.assertEqual(own.returncode,0);self.assertIsNone(other.poll())
+        finally:
+            if own.stdin and not own.stdin.closed:own.stdin.close()
+            own.wait(timeout=5);b.stop_owned(other)
+
     def test_protected_capture_helpers_use_only_owned_pid_fallback(self):
         own=Mock(pid=1234);own.poll.return_value=None
         with patch.object(b.os,'getpgid',return_value=1234), patch.object(b.os,'killpg',side_effect=PermissionError), patch.object(b.os,'kill') as kill:

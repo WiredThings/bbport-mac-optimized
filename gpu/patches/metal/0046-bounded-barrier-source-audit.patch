@@ -1,0 +1,152 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -271,6 +271,8 @@
+     StagingPool staging_pool;
+     BufferAccessTracker tracker;
+     VideoCore::Image::Barriers scratch_barriers; ///< Transit's bookkeeping, never recorded
++    struct BarrierAudit;
++    std::unique_ptr<BarrierAudit> barrier_audit; // bounded CPU metadata, native capture only
+     bool memory_pending = false; ///< an access since the last FlushBarriers needs a barrier
+     u64 buffer_write_epoch = 1; ///< recording thread, monotonic across FlushBarriers
+     bool global_write = false;   ///< bbport: AccessGlobal wrote since the last FlushBarriers
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -737,9 +737,42 @@
+ 
+ // ---- Runtime: construction, ticks, queries ------------------------------------------------------
+ 
++// Source access provenance only. It is not a consumer dependency graph and cannot justify
++// dropping barriers. Store integer identities, never resource ownership or payloads.
++struct Runtime::BarrierAudit {
++    struct Range { uintptr_t id; u64 offset, size, stages, access; };
++    std::array<Range,8> ranges{};
++    u64 reads=0, writes=0, read_stages=0, write_stages=0;
++    u64 global_reads=0, global_writes=0;
++    unsigned count=0, overflow=0;
++    void Note(bool global, const Buffer* buffer, u64 offset, u64 size,
++              vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
++        const bool read=bool(access&ReadMask), write=bool(access&WriteMask);
++        if(read) {++reads;read_stages|=u64(VkPipelineStageFlags2(stages));if(global)++global_reads;}
++        if(write) {++writes;write_stages|=u64(VkPipelineStageFlags2(stages));if(global)++global_writes;}
++        if(!global && (read||write)) {
++            if(count<ranges.size())ranges[count++]={uintptr_t(buffer),offset,size,
++                u64(VkPipelineStageFlags2(stages)),u64(VkAccessFlags2(access))};
++            else ++overflow;
++        }
++    }
++    void Capture(uintptr_t queue) const {
++        std::string list;
++        for(unsigned i=0;i<count;++i) {
++            const auto& r=ranges[i];if(i)list+=',';
++            list+=std::format("{{\"id\":{},\"offset\":{},\"size\":{},\"stages\":{},\"access\":{}}}",
++                r.id,r.offset,r.size,r.stages,r.access);
++        }
++        FrameCapture::Native(std::format(
++            "{{\"op\":\"barrier_sources\",\"queue\":{},\"reads\":{},\"writes\":{},\"read_stages\":{},\"write_stages\":{},\"global_reads\":{},\"global_writes\":{},\"overflow\":{},\"ranges\":[{}]}}",
++            queue,reads,writes,read_stages,write_stages,global_reads,global_writes,overflow,list));
++    }
++};
++
+ Runtime::Runtime(Device& device_, Scheduler& scheduler_)
+     : CacheBackend{MakeLimits(device_)}, device{device_}, scheduler{scheduler_},
+       impl{std::make_unique<Impl>(device_, scheduler_)}, staging_pool{*this} {
++    if(FrameCapture::NativeMode())barrier_audit=std::make_unique<BarrierAudit>();
+     GuestMemory::UseAsChunkProvider(); // the caches made after this ask Metal about chunks
+ }
+ 
+@@ -911,6 +944,7 @@
+ 
+ void Runtime::AccessBuffer(const Buffer* handle, u64 offset, u64 size,
+                            vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
++    if(barrier_audit)barrier_audit->Note(false,handle,offset,size,src_stage,src_access);
+     u64 start = offset;
+     u64 end = offset + std::max<u64>(size, 1) - 1;
+     u8 access = 0;
+@@ -949,6 +983,7 @@
+ }
+ 
+ void Runtime::AccessGlobal(vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
++    if(barrier_audit)barrier_audit->Note(true,nullptr,0,0,src_stage,src_access);
+     if (src_stage) {
+         memory_pending = true;
+     }
+@@ -981,11 +1016,13 @@
+ void Runtime::FlushBarriers() {
+     BeforeImageAccess();
+     if (memory_pending) {
++        if(barrier_audit && FrameCapture::NativeRecording())barrier_audit->Capture(uintptr_t(&scheduler));
+         scheduler.MemoryBarrier();
+     }
+     memory_pending = false;
+     global_write = false;
+     tracker.Clear();
++    if(barrier_audit)*barrier_audit={};
+ }
+ 
+ // ---- Objects ------------------------------------------------------------------------------------
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -17,6 +17,12 @@
+ #include "video_core/buffer_cache/guest_read_gather.h"
+ #include <sys/mman.h>
+ #include <mach/mach.h>
++
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <format>
++#include "video_core/frame_capture.h"
+ 
+ #include <algorithm>
+ #include <array>
+@@ -1905,10 +1911,47 @@
+     puts("native color clear batching: mixed formats, repeated target, read/copy visibility and complete target retirement passed");
+ }
+ 
++// Validate the real Runtime instrumentation alongside unchanged access bookkeeping.
++static void TestBarrierSources(Fixture& f) {
++    using VideoCore::FrameCapture;
++    CHECK(FrameCapture::NativeMode()); // runner sets BB_CAPTURE_NATIVE before Fixture construction
++    char directory[]="/private/tmp/bb-barrier-sources-test-XXXXXX";CHECK(mkdtemp(directory));
++    const std::filesystem::path root=directory,trigger=root/"trigger";
++    setenv("BB_CAPTURE_DIR",directory,1);setenv("BB_CAPTURE_TRIGGER",trigger.c_str(),1);
++    auto buffer=MakeBuffer(f.runtime,128,MemoryType::Stream);
++    f.runtime.FlushBarriers();
++    std::ofstream(trigger)<<"1";FrameCapture::OnFlip(123);FrameCapture::FrameBoundary(101);
++    f.runtime.AccessBuffer(buffer.get(),4,16,vk::PipelineStageFlagBits2::eVertexShader,vk::AccessFlagBits2::eShaderRead);
++    f.runtime.AccessGlobal(vk::PipelineStageFlagBits2::eFragmentShader,vk::AccessFlagBits2::eShaderRead);
++    f.runtime.AccessGlobal(vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderWrite);
++    CHECK(f.runtime.IsBufferAccessed(buffer.get(),64,16,true)); // global write remains authoritative
++    f.runtime.FlushBarriers();
++    CHECK(!f.runtime.IsBufferAccessed(buffer.get(),4,16,true));
++    for(unsigned i=0;i<12;++i)
++        f.runtime.AccessBuffer(buffer.get(),i*4,4,vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderWrite);
++    f.runtime.FlushBarriers();f.runtime.FlushBarriers();
++    CHECK(!f.runtime.IsBufferAccessed(buffer.get(),4,16,true));
++    FrameCapture::FrameBoundary(102);
++    std::string text;
++    for(auto& entry:std::filesystem::directory_iterator(root))if(entry.path().extension()==".txt") {
++        std::ifstream file(entry.path());text.assign(std::istreambuf_iterator<char>(file),{});
++    }
++    size_t events=0,pos=0;while((pos=text.find("\"op\":\"barrier_sources\"",pos))!=std::string::npos){++events;++pos;}
++    CHECK(events==2);CHECK(text.find("\"reads\":2,\"writes\":1")!=std::string::npos);
++    CHECK(text.find("\"global_reads\":1,\"global_writes\":1")!=std::string::npos);
++    CHECK(text.find("\"overflow\":4")!=std::string::npos);
++    CHECK(text.find(std::format("\"read_stages\":{}",uint64_t(VkPipelineStageFlags2(vk::PipelineStageFlagBits2::eVertexShader|vk::PipelineStageFlagBits2::eFragmentShader))))!=std::string::npos);
++    CHECK(text.find("\"offset\":4,\"size\":16")!=std::string::npos);
++    CHECK(text.find("\"truncated\":false")!=std::string::npos);
++    std::filesystem::remove_all(root);
++    puts("barrier source capture: exact stages/ranges, global unknowns, bounded overflow and epoch reset passed");
++}
++
+ int main() {
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_BARRIER_SOURCES_ONLY")) {TestBarrierSources(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_NATIVE_CLEAR_BATCH_ONLY")) {TestNativeColorClearBatch(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_INLINE_UPDATES_ONLY")) {TestInlineUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_QUERY_CHAIN_ONLY")) {TestSmallComputeFills(f);TestOcclusion(f);Settle(f);return failures?1:0;}

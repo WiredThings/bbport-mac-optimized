@@ -1,0 +1,385 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.h
+@@ -127,6 +127,8 @@
+     /// memoryBarrierWithScope:Buffers|Textures afterStages:Vertex|Fragment
+     /// beforeStages:Vertex|Fragment (the scheduler's in-pass barrier).
+     void MemoryBarrier();
++    /// Explicit vertex barriers; callers exclude earlier fragment/attachment aliases.
++    void VertexBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes);
+     struct BarrierCounts { u64 requested{}, dropped{}; };
+     [[nodiscard]] BarrierCounts BarrierSnapshot() const noexcept;
+     void PushDebugGroup(const char* name);
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_render_list.mm
+@@ -52,6 +52,7 @@
+     PushDebugGroup,
+     PopDebugGroup,
+     InsertDebugSignpost,
++    VertexBarrier,
+ };
+ 
+ struct Header {
+@@ -186,6 +187,7 @@
+     static constexpr Op op = Op::MemoryBarrier;
+     u64 pad;
+ };
++struct CmdVertexBarrier {static constexpr Op op=Op::VertexBarrier;u64 pad;};
+ template <Op O>
+ struct CmdLabel { ///< + `length` characters (with the terminating 0)
+     static constexpr Op op = O;
+@@ -335,6 +337,10 @@
+     [enc memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
+                     afterStages:MTLRenderStageVertex | MTLRenderStageFragment
+                    beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
++}
++BB_RL_APPLY(CmdVertexBarrier) {
++    [enc memoryBarrierWithScope:MTLBarrierScopeBuffers afterStages:MTLRenderStageVertex
++        beforeStages:MTLRenderStageVertex|MTLRenderStageFragment];
+ }
+ BB_RL_APPLY(CmdPush) {
+     [enc pushDebugGroup:[NSString stringWithUTF8String:static_cast<const char*>(extra)]];
+@@ -492,7 +498,9 @@
+ 
+     Impl() {
+         const char* native=std::getenv("BB_CAPTURE_NATIVE"),*audit=std::getenv("BB_CAPTURE_FRAGMENT_GUARD");
+-        if(native && native[0]=='1' && audit && audit[0]=='1')fragment_guard=std::make_unique<FragmentAccessGuard>();
++        const char* updates=std::getenv("BB_MTL_RENDER_UPDATES");
++        if((native && native[0]=='1' && audit && audit[0]=='1') || (updates && updates[0]=='1'))
++            fragment_guard=std::make_unique<FragmentAccessGuard>();
+         ResetFilter();
+     }
+ 
+@@ -646,6 +654,7 @@
+                 BB_RL_CASE(DrawIndexedPrimitivesIndirect, CmdDrawIndexedIndirect)
+                 BB_RL_CASE(DrawPatches, CmdPatches)
+                 BB_RL_CASE(MemoryBarrier, CmdBarrier)
++                BB_RL_CASE(VertexBarrier, CmdVertexBarrier)
+                 BB_RL_CASE(PushDebugGroup, CmdPush)
+                 BB_RL_CASE(PopDebugGroup, CmdPop)
+                 BB_RL_CASE(InsertDebugSignpost, CmdSignpost)
+@@ -904,6 +913,17 @@
+     impl->Count(false);
+     impl->Issue(CmdDraw{vertex_start, vertex_count, instance_count, base_instance, type, 0});
+ }
++void RenderList::VertexBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes) {
++    assert(pipeline && buffer && data && bytes && bytes<=256 && !(bytes%4));
++    impl->has_barrier=true; // held/replayed encoders must wait for incoming producers too
++    impl->Issue(CmdVertexBarrier{0});
++    SetRenderPipelineState(pipeline);
++    SetBuffer(Stage::Vertex,buffer,offset,0);
++    SetBytes(Stage::Vertex,data,bytes,1);
++    FragmentReady(); // this host pipeline never rasterizes or executes a fragment function
++    DrawPrimitives(MTLPrimitiveTypePoint,0,bytes/4,1,0);
++    impl->Issue(CmdVertexBarrier{0}); // not subject to generic-barrier coalescing
++}
+ 
+ void RenderList::DrawIndexedPrimitives(u32 type, u64 index_count, u32 index_type,
+                                        void* index_buffer, u64 index_offset, u64 instance_count,
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -187,6 +187,7 @@
+                  vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,
+                  std::optional<VideoCore::SubresourceRange> subres_range = {}) override;
+     void FlushBarriers() override;
++    u64 RenderUpdateCount() const;
+     void FlushImageBarriers() override;
+     void BeforeImageAccess() override {
+         if (image_access_hook) {
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1698,7 +1698,9 @@
+     if (data.empty()) {
+         return;
+     }
+-    if(FrameCapture::NativeRecording() && data.size()==192 && scheduler.Commands().FragmentGuardEnabled()) {
++    std::optional<FragmentAccessGuard::Snapshot> observed_fragments;
++    const auto fragment_snapshot=[&] {
++        if(observed_fragments)return *observed_fragments;
+         auto& list=scheduler.Commands();const auto* pass=scheduler.OpenRenderState();
+         if(pass) {
+             const auto attachment=[&](u64 handle) {
+@@ -1715,8 +1717,13 @@
+         const auto native=NativeBuffer(*dst);
+         if(native.heap)list.FragmentUnknown(FragmentAccessGuard::InvalidRange);
+         const auto guard=list.FragmentSnapshot((__bridge void*)native,offset,data.size());
+-        FrameCapture::Native(std::format("{{\"op\":\"inline_update_fragment_guard\",\"native\":{},\"offset\":{},\"bytes\":192,\"render_pass\":{},\"draws\":{},\"known_draws\":{},\"resources\":{},\"reasons\":{},\"overlap\":{}}}",
++        if(FrameCapture::NativeRecording() && data.size()==192)FrameCapture::Native(std::format("{{\"op\":\"inline_update_fragment_guard\",\"native\":{},\"offset\":{},\"bytes\":192,\"render_pass\":{},\"draws\":{},\"known_draws\":{},\"resources\":{},\"reasons\":{},\"overlap\":{}}}",
+             uintptr_t((__bridge void*)native),offset,bool(pass),guard.draws,guard.known_draws,guard.resources,guard.reasons,guard.overlap));
++        observed_fragments=guard;
++        return guard;
++    };
++    if(FrameCapture::NativeRecording() && data.size()==192 && scheduler.Commands().FragmentGuardEnabled()) {
++        fragment_snapshot();
+     }
+     static const bool fill_updates=[] {const char* v=std::getenv("BB_MTL_FILL_UPDATES");return v && v[0]=='1';}();
+     // A repeated byte is an exact native fill, not a redundant-write assumption. Keep
+@@ -1733,10 +1740,36 @@
+         const char* value = std::getenv("BB_MTL_INLINE_UPDATES");
+         return value && value[0] == '1';
+     }();
++    static const bool render_updates=[] {
++        const char* value=std::getenv("BB_MTL_RENDER_UPDATES");return value && value[0]=='1';
++    }();
+     // Keep every write in GPU stream order. setBytes snapshots the call's CPU payload;
+     // neither the guest backing nor any existing copy/cache lifetime is bypassed.
+     if (inline_updates && data.size() <= 256 && !(offset % 16) && !(data.size() % 4) &&
+         offset <= dst->SizeBytes() && data.size() <= dst->SizeBytes() - offset) {
++        // Apple tile render passes cannot wait for their prior fragment work here.
++        // Unknown/raw fragment accesses, attachment aliases and scheduler tails fall back.
++        // Owned buffers are distinct allocations or a canonical imported guest chunk.
++        if(render_updates && scheduler.CanInlineBufferUpdate() && dst->buffer.owner==this &&
++           scheduler.Commands().FragmentGuardEnabled()) {
++            const auto native=NativeBuffer(*dst);
++            if(native && !native.heap && offset<=native.length && data.size()<=native.length-offset) {
++                const auto guard=fragment_snapshot();
++                if(!guard.reasons && !guard.overlap && guard.draws==guard.known_draws) {
++                    if(auto pipeline=impl->kernels.RenderInlineUpdate();pipeline &&
++                       scheduler.InlineBufferUpdate((__bridge void*)pipeline,(__bridge void*)native,
++                                                    offset,data.data(),u32(data.size()))) {
++                        AccessBuffer(dst,offset,data.size(),vk::PipelineStageFlagBits2::eVertexShader,
++                                     vk::AccessFlagBits2::eShaderWrite);
++                        if(++impl->render_updates==1)LOG_INFO(Render,"Render inline buffer updates active");
++                        if(FrameCapture::NativeRecording())FrameCapture::Native(std::format(
++                            "{{\"op\":\"inline_render_update\",\"native\":{},\"offset\":{},\"bytes\":{}}}",
++                            uintptr_t((__bridge void*)native),offset,data.size()));
++                        return;
++                    }
++                }
++            }
++        }
+         if (auto pipeline = impl->kernels.InlineUpdate()) {
+             if (IsBufferAccessed(dst, offset, data.size(), true)) FlushBarriers();
+             scheduler.ComputeEncoder("Inline buffer update", true);
+@@ -1759,6 +1792,8 @@
+     const vk::BufferCopy copy{.srcOffset = staging.offset, .dstOffset = offset, .size = data.size()};
+     CopyBuffer(staging.buffer, dst, std::span{&copy, 1});
+ }
++
++u64 Runtime::RenderUpdateCount() const { return impl->render_updates; }
+ 
+ void Runtime::InlineData(Buffer* dst, u64 offset, u32 value) {
+     UpdateBuffer(dst, offset, std::span{reinterpret_cast<const u8*>(&value), sizeof(value)});
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_impl.h
+@@ -57,6 +57,7 @@
+     id<MTLComputePipelineState> FillU32();
+     /// Optional <=256-byte ordered update, direct bound destination, no guest BDA lookup.
+     id<MTLComputePipelineState> InlineUpdate();
++    id<MTLRenderPipelineState> RenderInlineUpdate();
+ 
+     /// The slot of the (set 0) `binding` among the buffers of `shader`.
+     static u32 BufferSlot(const HostShaders::Shader& shader, u32 binding);
+@@ -92,6 +93,8 @@
+     id<MTLComputePipelineState> fill_u32 = nil;
+     id<MTLComputePipelineState> inline_update = nil;
+     bool inline_update_tried{};
++    id<MTLRenderPipelineState> render_inline_update=nil;
++    bool render_inline_update_tried{};
+     std::map<std::tuple<u32, u32, bool>, id<MTLRenderPipelineState>> ms_copy;
+     std::map<std::pair<u32, u32>, id<MTLRenderPipelineState>> ms_depth;
+     id<MTLDepthStencilState> depth_always_write = nil;
+@@ -101,6 +104,7 @@
+     Device::Impl& dev;
+     Scheduler::Impl& sched;
+     HostKernels kernels;
++    u64 render_updates{};
+     /// Native chunk buffers handed out by ImportBuffer: shared with the guest memory module, so
+     /// they stay resident and only lose the reference the cache object held.
+     std::mutex imported_mutex;
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime_kernels.mm
+@@ -233,6 +233,21 @@
+         }
+     }
+     return inline_update;
++}
++id<MTLRenderPipelineState> HostKernels::RenderInlineUpdate() {
++    if(!render_inline_update_tried) {
++        render_inline_update_tried=true;
++        @autoreleasepool {
++            NSError* error=nil;
++            auto library=[dev.device newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nvertex void update(device uint* dst[[buffer(0)]],constant uint* src[[buffer(1)]],uint i[[vertex_id]]){dst[i]=src[i];}\n" options:CompileOptions() error:&error];
++            auto descriptor=[MTLRenderPipelineDescriptor new];
++            descriptor.vertexFunction=library ? [library newFunctionWithName:@"update"] : nil;
++            descriptor.rasterizationEnabled=NO;
++            if(descriptor.vertexFunction)render_inline_update=[dev.device newRenderPipelineStateWithDescriptor:descriptor error:&error];
++            if(!render_inline_update)LOG_WARNING(Render,"Render inline update unavailable; retaining compute: {}",ErrorText(error));
++        }
++    }
++    return render_inline_update;
+ }
+ 
+ id<MTLComputePipelineState> HostKernels::FillU32() {
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.h
+@@ -106,6 +106,8 @@
+     /// The open compute encoder, or a new one (dispatches of one encoder run in order). `label`
+     /// names a new encoder with BB_PASS_LABELS=1.
+     void ComputeEncoder(const char* label = nullptr, bool bound_only = false);
++    bool CanInlineBufferUpdate() const noexcept;
++    bool InlineBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes);
+     /// The open blit encoder, or a new one.
+     void BlitEncoder(const char* label = nullptr);
+     /// Ends the open encoder, if any (the command buffer stays open).
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -408,6 +408,16 @@
+     ASSERT_MSG(pass_descriptor, "HostRenderEncoder without a pass descriptor");
+     BeginEncoder(EncoderKind::Render,pass_descriptor,false,true);
+     render_state.reset();
++}
++bool Scheduler::CanInlineBufferUpdate() const noexcept {
++    return open_encoder==EncoderKind::Render && render_state && commands_active &&
++        !hoisting && !render_tail_pending && !running_render_tail && !impl->pending_clears;
++}
++bool Scheduler::InlineBufferUpdate(void* pipeline,void* buffer,u64 offset,const void* data,u32 bytes) {
++    if(!CanInlineBufferUpdate())return false;
++    if(!holding) {JoinReplay();WaitOutstandingFences(*impl,EncoderKind::Render);}
++    commands.VertexBufferUpdate(pipeline,buffer,offset,data,bytes);
++    return true;
+ }
+ 
+ void Scheduler::RenderEncoder(const void* pass_descriptor, const VideoCore::RenderState& state, bool guest, bool bound_only) {
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -440,6 +440,120 @@
+     f.runtime.CopyBuffer(dst.get(),snapshots.get(),{&read_second,1});
+     Settle(f);CHECK(Equal(*snapshots,0,first));CHECK(Equal(*snapshots,256,second));
+     std::puts("inline updates: payload snapshots, canaries, overlap and fallback passed");
++}
++
++// Actual Runtime path, not just a host-shader prototype. Separate processes select the flag
++// and scheduler hold mode; every safe case must hit the candidate and every conflict must not.
++static void TestRenderUpdates(Fixture& f) {
++    using Stage=Metal::RenderList::Stage;
++    const bool enabled=std::getenv("BB_MTL_RENDER_UPDATES") && std::getenv("BB_MTL_RENDER_UPDATES")[0]=='1';
++    NSError* error=nil;
++    auto library=[f.mtl newLibraryWithSource:@R"(
++#include <metal_stdlib>
++using namespace metal;
++float4 position(uint i){return float4(i==1?3.0:-1.0,i==2?3.0:-1.0,0,1);}
++vertex float4 before(uint i[[vertex_id]],device const uint* b[[buffer(0)]],device uint* witness[[buffer(2)]]){witness[i]=b[i];return position(i);}
++vertex float4 after(uint i[[vertex_id]]){return position(i);}
++fragment float4 red(){return float4(1,0,0,1);}
++fragment float4 read_old(device const uint* b[[buffer(0)]],device uint* w[[buffer(2)]],float4 p[[position]]){if(uint(p.x)==0 && uint(p.y)==0)w[0]=b[0];return float4(1,0,0,1);}
++fragment float4 read_new(constant uint* b[[buffer(0)]]){return float4(0,b[0]==0xa0000000u && b[47]==0xa000002fu?1.0:0.0,0,1);}
++)" options:nil error:&error];
++    CHECK(library!=nil);if(!library)return;
++    const auto make_pipeline=[&](NSString* vs,NSString* fs) {
++        auto d=[MTLRenderPipelineDescriptor new];d.vertexFunction=[library newFunctionWithName:vs];
++        d.fragmentFunction=[library newFunctionWithName:fs];d.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
++        auto pipeline=[f.mtl newRenderPipelineStateWithDescriptor:d error:&error];CHECK(pipeline!=nil);return pipeline;
++    };
++    auto pre=make_pipeline(@"before",@"red"),overlap=make_pipeline(@"before",@"read_old"),post=make_pipeline(@"after",@"read_new");
++    if(!pre || !overlap || !post)return;
++    g_backing=static_cast<u8*>(mmap(nullptr,BackingSize,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0));
++    CHECK(g_backing!=MAP_FAILED);if(g_backing==MAP_FAILED)return;
++    setenv("BB_GUEST_IN_PLACE","1",1);CHECK(f.runtime.GuestMemoryUsable());
++    Metal::GuestMemory::Install(f.device);CHECK(g_chunk_allocator && g_chunk_allocator(BackingPhys,BackingSize)==-3);
++    if(!g_chunk_allocator)return;
++    Buffer imported{f.runtime,65536,BackingPhys,"render update alias A"};
++    Buffer alias{f.runtime,65536,BackingPhys,"render update alias B"};
++    CHECK(imported.buffer.native==alias.buffer.native);
++    auto target=MakeBuffer(f.runtime,4096,MemoryType::DeviceLocal,"render update destination");
++    auto witness=MakeBuffer(f.runtime,4096,MemoryType::DeviceLocal,"vertex read before update");
++    auto frag_witness=MakeBuffer(f.runtime,4096,MemoryType::DeviceLocal,"fragment read before update");
++    auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
++    td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageRenderTarget;
++    auto texture=[f.mtl newTextureWithDescriptor:td];auto dummy=[f.mtl newTextureWithDescriptor:td];CHECK(texture && dummy);
++    unsigned tails=0;f.scheduler.SetRenderTail([&]{++tails;});
++    for(unsigned mode=0;mode<9;++mode) {
++        Settle(f);
++        Buffer* dst=mode==8?&imported:target.get();
++        Buffer* fs_buffer=mode==8?&alias:dst;
++        auto native=(__bridge id<MTLBuffer>)dst->buffer.native;
++        std::memset(native.contents,0xcd,256);std::memset(witness->mapped_data.data(),0,16);
++        std::memset(frag_witness->mapped_data.data(),0,16);
++        std::array<u8,192> old;old.fill(0xcd);
++        f.runtime.UpdateBuffer(dst,16,old); // preceding compute producer, including fence handling
++        CHECK(!f.scheduler.CanInlineBufferUpdate());
++        const auto begin=[&](id<MTLTexture> tex,bool clear) {
++            auto pass=[MTLRenderPassDescriptor renderPassDescriptor];pass.colorAttachments[0].texture=tex;
++            pass.colorAttachments[0].loadAction=clear?MTLLoadActionClear:MTLLoadActionLoad;
++            pass.colorAttachments[0].storeAction=MTLStoreActionStore;
++            RenderState state{};state.width=8;state.height=8;state.num_layers=1;state.num_color_attachments=1;
++            state.color_attachments[0].image_view=uintptr_t((__bridge void*)tex);
++            f.scheduler.RenderEncoder((__bridge const void*)pass,state);
++        };
++        // Holding + threaded replay gets a real previous recorded pass, not an empty list.
++        begin(dummy,true);
++        auto& list=f.scheduler.Commands();
++        list.SetRenderPipelineState((__bridge void*)post);
++        list.SetBuffer(Stage::Fragment,fs_buffer->buffer.native,16,0);list.FragmentReady();
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        begin(texture,true);
++        list.SetRenderPipelineState((__bridge void*)((mode==1 || mode==8)?overlap:pre));
++        list.SetBuffer(Stage::Vertex,dst->buffer.native,16,0);
++        list.SetBuffer(Stage::Vertex,witness->buffer.native,0,2);
++        list.SetBuffer(Stage::Fragment,fs_buffer->buffer.native,16,0);
++        list.SetBuffer(Stage::Fragment,frag_witness->buffer.native,0,2);
++        if(mode==1 || mode==8) {
++            list.FragmentBuffer(fs_buffer->buffer.native,16,192);
++            list.FragmentBuffer(frag_witness->buffer.native,0,4);
++        }
++        if(mode!=3)list.FragmentReady(); // unclassified draws must be rejected
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        f.runtime.AccessBuffer(dst,16,192,vk::PipelineStageFlagBits2::eVertexShader,vk::AccessFlagBits2::eShaderRead);
++        if(mode==1 || mode==8)f.runtime.AccessBuffer(fs_buffer,16,192,vk::PipelineStageFlagBits2::eFragmentShader,vk::AccessFlagBits2::eShaderRead);
++        if(mode==2)list.FragmentUnknown(Metal::FragmentAccessGuard::RawAddress);
++        if(mode==4)for(unsigned i=1;i<=65;++i)list.FragmentBuffer(reinterpret_cast<void*>(u64(i)),0,4);
++        if(mode==5)f.scheduler.RequestRenderTail();
++        if(mode==6) {
++            if(list.Recording()) {
++                f.scheduler.BeginHoist();CHECK(!f.scheduler.CanInlineBufferUpdate());f.scheduler.EndHoist();
++                f.scheduler.ReleaseHeldPass(); // same physical pass must retain fragment history
++            }
++            CHECK(f.scheduler.CanInlineBufferUpdate());
++        }
++        if(mode==7)list.FragmentUnknown(Metal::FragmentAccessGuard::UnknownTexture);
++        std::array<u32,48> payload;for(unsigned i=0;i<payload.size();++i)payload[i]=0xa0000000u+i;
++        const auto before_count=f.runtime.RenderUpdateCount();
++        f.runtime.UpdateBuffer(dst,16,{reinterpret_cast<const u8*>(payload.data()),sizeof(payload)});
++        const bool safe=mode==0 || mode==6;
++        CHECK(f.runtime.RenderUpdateCount()-before_count==u64(enabled && safe));
++        std::memset(payload.data(),0xee,sizeof(payload)); // snapshot survives CPU mutation/replay
++        if(!f.scheduler.IsRendering())begin(texture,false);
++        list.SetRenderPipelineState((__bridge void*)post);
++        list.SetBuffer(Stage::Fragment,dst->buffer.native,16,0);
++        list.FragmentBuffer(dst->buffer.native,16,192);list.FragmentReady();
++        list.DrawPrimitives(MTLPrimitiveTypeTriangle,0,3,1,0);
++        Settle(f);
++        const auto* bytes=static_cast<const u8*>(native.contents);
++        for(unsigned i=0;i<256;++i) {
++            const u32 word=0xa0000000u+(i-16)/4;
++            CHECK(bytes[i]==(i>=16 && i<208?reinterpret_cast<const u8*>(&word)[(i-16)%4]:0xcd));
++        }
++        for(unsigned i=0;i<3;++i)CHECK(reinterpret_cast<const u32*>(witness->mapped_data.data())[i]==0xcdcdcdcdu);
++        if(mode==1 || mode==8)CHECK(*reinterpret_cast<const u32*>(frag_witness->mapped_data.data())==0xcdcdcdcdu);
++        std::array<u8,256> pixels;[texture getBytes:pixels.data() bytesPerRow:32 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
++        for(unsigned i=0;i<64;++i)CHECK(pixels[4*i]==0 && pixels[4*i+1]==255 && pixels[4*i+2]==0 && pixels[4*i+3]==255);
++        std::printf("render updates mode=%u candidate=%d exact bytes/canaries/vertices/fragments/pixels\n",mode,int(enabled && safe));
++    }
++    CHECK(tails>0);f.scheduler.SetRenderTail({});Settle(f);
+ }
+ 
+ static void TestGuestChunk(Fixture& f) {
+@@ -2157,6 +2271,7 @@
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_RENDER_UPDATES_ONLY")) {TestRenderUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_RELEASED_STORAGE_ONLY")) {TestReleasedStorageRetirement(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_CONTENT_AUDIT_ONLY")) {TestContentAudit(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_PATTERN_UPDATES_ONLY")) {TestPatternUpdates(f);Settle(f);return failures?1:0;}
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_fragment_guard.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_fragment_guard.h
+@@ -6,7 +6,8 @@
+ #include <limits>
+ 
+ namespace Metal {
+-// Diagnostic metadata only: canonical native buffers, not cache-wrapper identities.
++// Bounded access metadata: canonical native buffers, not cache-wrapper identities.
++// Collected for capture or the opt-in in-pass update candidate; never deletes a write.
+ // Bounding intervals may over-report conflicts; capacity/unknown metadata never permit one.
+ class FragmentAccessGuard {
+ public:

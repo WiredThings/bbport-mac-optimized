@@ -1,0 +1,42 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -186,10 +186,18 @@
+     [encoder setBytes:&push length:sizeof(push) atIndex:4];
+     [encoder setBuffer:NativeBuffer(*scales.buffer) offset:scales.offset atIndex:5];
+     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+-    if (VideoCore::FrameCapture::NativeRecording())
++    if (VideoCore::FrameCapture::NativeRecording()) {
++        // The query resolver writes one u64 every 16 bytes. Record its enclosing
++        // guest/native interval conservatively; the snapshot below preserves the
++        // actual pair count, destination and strided-write geometry.
++        VideoCore::FrameCapture::NativeBufferUse(uintptr_t(destination),
++            uintptr_t(destination->buffer.native),offset,(pairs-1)*16+8,address,
++            7,0,true,"occlusion_snapshot");
+         VideoCore::FrameCapture::Native(std::format(
+-            "{{\"op\":\"occlusion_snapshot\",\"queue\":{},\"count\":{},\"pairs\":{},\"end\":{},\"poison\":{},\"chained\":{}}}",
+-            (uintptr_t)&s, push.count, push.pairs, push.end, push.poison, chained?"true":"false"));
++            "{{\"op\":\"occlusion_snapshot\",\"queue\":{},\"count\":{},\"pairs\":{},\"end\":{},\"poison\":{},\"chained\":{},\"address\":{},\"native\":{},\"offset\":{},\"stride\":16,\"write_bytes\":8}}",
++            (uintptr_t)&s, push.count, push.pairs, push.end, push.poison, chained?"true":"false",
++            address,uintptr_t(destination->buffer.native),offset));
++    }
+     // Both paths preserve counter reset, history and guest-write ordering. The chained path
+     // keeps a serial compute encoder for a following tiny clear/query; future render/blit
+     // encoders still wait for its fence. No CPU reset or query-result readback is introduced.
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -27,6 +27,7 @@
+  FrameCapture::NativeWriteOrigin(1,192,static_cast<FrameCapture::WriteOrigin>(99),999);
+  std::array<unsigned char,192> payload{};
+  FrameCapture::NativeCommandWrite(4096,payload.data(),payload.size(),100,200,128,10);
++ FrameCapture::NativeBufferUse(100,200,128,120,4096,7,0,true,"occlusion_snapshot");
+  FrameCapture::NativeCommandWrite(4096,payload.data(),payload.size(),100,200,128,10);
+  payload[1]=1;
+  FrameCapture::NativeCommandWrite(4096,payload.data(),payload.size(),100,200,128,11);
+@@ -48,6 +49,7 @@
+  auto read=[&](unsigned frame){for(auto& e:std::filesystem::directory_iterator(root))if(e.path().extension()==".txt"){std::ifstream f(e.path());auto text=std::string(std::istreambuf_iterator<char>(f),{});if(text.find("\"frame\":"+std::to_string(frame)+",")!=std::string::npos)return text;}return std::string{};};
+  assert(drains==2);auto text=read(10);assert(text.find("\"op\":\"close\"")!=std::string::npos);assert(text.find("\"frame\":10")!=std::string::npos);assert(text.find("\"truncated\":false")!=std::string::npos);assert(text.find("\\u000a")!=std::string::npos);assert(text.find("\"queue\":123")!=std::string::npos);
+  assert(text.find("\"same_payload\":true,\"same_generation\":true")!=std::string::npos);
++ assert(text.find("\"version\":1,\"logical_stage\":7,\"shader\":0,\"write\":true,\"unknown\":false,\"source\":\"occlusion_snapshot\"")!=std::string::npos);
+  assert(text.find("\"packet\":\"dump_const_ram\",\"constant_offset\":768")!=std::string::npos);
+  assert(text.find("\"packet\":\"graphics_write_data\",\"constant_offset\":null")!=std::string::npos);
+  assert(text.find("\"packet\":\"compute_write_data\",\"constant_offset\":null")!=std::string::npos);

@@ -1,0 +1,110 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_occlusion.mm
+@@ -186,6 +186,9 @@
+     [encoder setBytes:&push length:sizeof(push) atIndex:4];
+     [encoder setBuffer:NativeBuffer(*scales.buffer) offset:scales.offset atIndex:5];
+     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
++    // Snapshot owns the compute ordering below. It bypasses Runtime::AccessBuffer,
++    // so notify the source-copy version separately without duplicating its fences.
++    impl->runtime.NoteOrderedGuestBufferWrite();
+     if (VideoCore::FrameCapture::NativeRecording()) {
+         // The query resolver writes one u64 every 16 bytes. Record its enclosing
+         // guest/native interval conservatively; the snapshot below preserves the
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.h
+@@ -253,6 +253,9 @@
+     void SetImageViewName(const VideoCore::ImageView& view, std::string_view name) override;
+ 
+     u64 BufferWriteEpoch() const noexcept override { return buffer_write_epoch; }
++    // Host-compute paths which establish ordering themselves still invalidate source-copy
++    // reuse when they write guest buffers. This records no command or extra barrier.
++    void NoteOrderedGuestBufferWrite() noexcept;
+ 
+     // Optional memory paths
+     bool GuestMemoryUsable() override;
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -1001,6 +1001,14 @@
+         access |= BufferAccessTracker::Read;
+     }
+     return tracker.Find(handle, offset, end, access);
++}
++
++void Runtime::NoteOrderedGuestBufferWrite() noexcept {
++    static const bool enabled = [] {
++        const char* value = std::getenv("BB_MTL_QUERY_WRITE_EPOCH");
++        return !value || value[0] != '0'; // diagnostic old-behavior reference only
++    }();
++    if (enabled) ++buffer_write_epoch;
+ }
+ 
+ void Runtime::AccessGlobal(vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1514,7 +1514,52 @@
+ }
+ 
+ 
++static void TestQuerySnapshotInvalidatesGather(Fixture& f) {
++    std::puts("query writes invalidate same-packet gathered snapshots");
++    constexpr VAddr Start = 0x7100000000;
++    constexpr u64 Size = 64;
++    auto source = MakeBuffer(f.runtime, 4096, MemoryType::HostCached, "query memo source");
++    std::memset(source->mapped_data.data(), 0, source->SizeBytes());
++    StreamBuffer ring{f.runtime, MemoryType::Stream, 64_KB};
++    GuestReadSnapshots memo;
++    const auto stamp = [&] {
++        return GuestReadEpoch{7, f.runtime.CurrentTick(), ring.WrapGeneration(),
++                              0, 0, 0, f.runtime.BufferWriteEpoch()};
++    };
++    const auto resolve = [&](VAddr at, u64 remaining) -> std::optional<GuestReadPiece> {
++        return GuestReadPiece{source.get(), at - Start, remaining};
++    };
++    const auto no_sync = [](const GuestReadPiece&, VAddr) {};
++    const auto initial = stamp();
++    auto first = GatherGuestRead(f.runtime, ring, Start, Size, resolve, no_sync);
++    CHECK(first);
++    if (!first) return;
++    memo.Remember(Start, Size, first->second, initial, stamp());
++    CHECK(memo.Find(ring, Start, Size, 16, stamp()));
++
++    // The real resolver bypasses AccessBuffer. No packet/tick boundary may be
++    // relied upon to invalidate its earlier copy; both query chains write here.
++    Metal::OcclusionQueries queries{f.device, f.scheduler, f.runtime};
++    const auto before = stamp();
++    queries.Snapshot(source.get(), 0, 0xe000, 4);
++    const auto after = stamp();
++    CHECK(after.tick == before.tick);
++    CHECK(after.gpu > before.gpu);
++    CHECK(!memo.Find(ring, Start, Size, 16, after));
++    auto fresh = GatherGuestRead(f.runtime, ring, Start, Size, resolve, no_sync);
++    CHECK(fresh);
++    if (!fresh) return;
++    Settle(f);
++    const std::array<u64, 8> zero{};
++    const std::array<u64, 8> expected{1ull << 63, 0, 1ull << 63, 0,
++                                     1ull << 63, 0, 1ull << 63, 0};
++    CHECK(std::memcmp(ring.mapped_data.data() + first->second, zero.data(), Size) == 0);
++    CHECK(std::memcmp(ring.mapped_data.data() + fresh->second, expected.data(), Size) == 0);
++    CHECK(!f.scheduler.HasFailed());
++}
++
+ static void TestOcclusion(Fixture& f) {
++    TestQuerySnapshotInvalidatesGather(f);
+     std::printf("native Metal occlusion queries\n");
+     NSString* shaders = @R"MSL(
+ #include <metal_stdlib>
+@@ -1604,9 +1649,13 @@
+         return samples;
+     };
+     const auto interval = [&](bool visible, u64 expected=1920ull*1080) {
++        const u64 before_begin = f.runtime.BufferWriteEpoch();
+         queries.Snapshot(&output, 0, 0x1000, 4);
++        CHECK(f.runtime.BufferWriteEpoch() > before_begin);
+         draw(visible);
++        const u64 before_end = f.runtime.BufferWriteEpoch();
+         queries.Snapshot(&output, 8, 0x1008, 4);
++        CHECK(f.runtime.BufferWriteEpoch() > before_end);
+         // No CPU/GPU wait before the fragment consumer: it must see complete query writes
+         // through the kept compute encoder's fence, including all four valid pairs.
+         auto* consume_pass=[MTLRenderPassDescriptor renderPassDescriptor];

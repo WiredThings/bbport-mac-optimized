@@ -522,3 +522,22 @@
 "iCloud transfer paused: %@" = "iCloud transfer paused: %@";
 "macOS confirmed the save files uploaded." = "macOS confirmed the save files uploaded.";
 "iCloud Drive has not confirmed these files. Local copies are preserved." = "iCloud Drive has not confirmed these files. Local copies are preserved.";
+
+/* Retained performance experiments, default off. */
+"Continue the pass after a consumed clear" = "Continue the pass after a consumed clear";
+"Retains attachment and feedback guards. About 2% faster in one matched chalice comparison; no extra cache." = "Retains attachment and feedback guards. About 2% faster in one matched chalice comparison; no extra cache.";
+"Batch native-resolution color clears" = "Batch native-resolution color clears";
+"Combines compatible clears. Two comparison orders showed no repeatable FPS benefit; no new GPU resources." = "Combines compatible clears. Two comparison orders showed no repeatable FPS benefit; no new GPU resources.";
+"Merge presentation and overlay passes" = "Merge presentation and overlay passes";
+"Pixel comparison passed; gameplay benefit is unconfirmed. One comparison measured higher memory, with no new GPU allocations." = "Pixel comparison passed; gameplay benefit is unconfirmed. One comparison measured higher memory, with no new GPU allocations.";
+"Fill repeated small parameter values natively" = "Fill repeated small parameter values natively";
+"Preserves every write. No FPS gain in the M4 comparison; takes priority over compute and in-pass updates for repeated-byte values." = "Preserves every write. No FPS gain in the M4 comparison; takes priority over compute and in-pass updates for repeated-byte values.";
+"Memoize conservative residency bookkeeping" = "Memoize conservative residency bookkeeping";
+"Keeps full resource ranges and invalidates on demotion. Correctness checks passed; the earlier M4 comparison was 3.3% slower." = "Keeps full resource ranges and invalidates on demotion. Correctness checks passed; the earlier M4 comparison was 3.3% slower.";
+"Merge identical physical copy stores" = "Merge identical physical copy stores";
+"Skips the second store only when both resolved pointers match. Correctness checks passed; the earlier M4 comparison was 1% slower." = "Skips the second store only when both resolved pointers match. Correctness checks passed; the earlier M4 comparison was 1% slower.";
+"Write small parameters within the render pass" = "Write small parameters within the render pass";
+"Retains all writes and barriers; unknown fragment conflicts fall back. The earlier M4 comparison was 8.6% slower; adds a small host pipeline." = "Retains all writes and barriers; unknown fragment conflicts fall back. The earlier M4 comparison was 8.6% slower; adds a small host pipeline.";
+
+"Preserve heap release history" = "Preserve heap release history";
+"Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit." = "Prioritizes heap release records within the existing capacity. M4 tests found no confirmed performance or net memory benefit.";

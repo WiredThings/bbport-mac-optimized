@@ -1,0 +1,214 @@
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -64,6 +64,7 @@
+ // only on CPU, never exported or read back from GPU; reset at both capture boundaries.
+ struct DependencyAudit {
+     struct Watch { u64 address=0, resource=0, native=0, offset=0, generation=0, version=0;
++        bool active=false, has_payload=false;
+         std::array<unsigned char,192> payload{}; };
+     std::array<Watch,8> watches{};
+     u64 sequence=0, uses=0;
+@@ -78,6 +79,16 @@
+     std::scoped_lock lock{dependency_mutex};
+     if(allocate && !dependency_audit)dependency_audit=std::make_unique<DependencyAudit>();
+     if(dependency_audit)*dependency_audit={};
++    if(allocate && dependency_audit) {
++        // A requested fixed range is observed before its first command write too. No
++        // contents or GPU allocation; malformed/unbounded watches remain disabled.
++        const char* input=std::getenv("BB_WATCH");char* end=nullptr;
++        const u64 address=input?std::strtoull(input,&end,0):0;
++        const u64 size=end && *end==','?std::strtoull(end+1,&end,0):0;
++        if(end && !*end && address && address<(u64{1}<<40) && size==192 && size<=(u64{1}<<40)-address) {
++            auto& w=dependency_audit->watches[0];w.address=address;w.active=true;
++        }
++    }
+ }
+ 
+ void* native_boundary_owner=nullptr;
+@@ -216,19 +227,21 @@
+     if(!NativeRecording() || !dependency_audit)return;
+     auto& a=*dependency_audit;
+     auto* slot=static_cast<DependencyAudit::Watch*>(nullptr);
+-    for(auto& w:a.watches)if(w.version && w.address==address){slot=&w;break;}
+-    if(!slot)for(auto& w:a.watches)if(!w.version){slot=&w;break;}
++    for(auto& w:a.watches)if(w.active && w.address==address){slot=&w;break;}
++    if(!slot)for(auto& w:a.watches)if(!w.active){slot=&w;break;}
+     if(!slot) {
+         if(!a.overflow)Native("{\"op\":\"dependency_audit_overflow\",\"kind\":\"watch_slots\"}");
+         a.overflow=true;return;
+     }
+-    auto& w=*slot;const bool previous=w.version!=0;
++    auto& w=*slot;const bool previous=w.has_payload;
+     const bool same=previous && !std::memcmp(w.payload.data(),data,size);
+     const bool same_generation=previous && generation && generation==w.generation;
+     w.address=address;w.resource=resource;w.native=native;w.offset=offset;w.generation=generation;
+-    std::memcpy(w.payload.data(),data,size);++w.version;
+-    Native(std::format("{{\"op\":\"command_write\",\"seq\":{},\"address\":{},\"size\":192,\"resource\":{},\"native\":{},\"offset\":{},\"generation\":{},\"version\":{},\"previous\":{},\"same_payload\":{},\"same_generation\":{}}}",
+-        ++a.sequence,address,resource,native,offset,generation,w.version,previous,same,same_generation));
++    std::memcpy(w.payload.data(),data,size);++w.version;w.active=w.has_payload=true;
++    unsigned zero_words=0, float_one_words=0;
++    for(unsigned i=0;i<48;++i){u32 word;std::memcpy(&word,w.payload.data()+4*i,4);zero_words+=word==0;float_one_words+=word==0x3f800000u;}
++    Native(std::format("{{\"op\":\"command_write\",\"seq\":{},\"address\":{},\"size\":192,\"resource\":{},\"native\":{},\"offset\":{},\"generation\":{},\"version\":{},\"previous\":{},\"same_payload\":{},\"same_generation\":{},\"zero_words\":{},\"float_one_words\":{}}}",
++        ++a.sequence,address,resource,native,offset,generation,w.version,previous,same,same_generation,zero_words,float_one_words));
+ }
+ void FrameCapture::NativeBufferUse(u64 resource, u64 native, u64 offset, u64 size,
+                                    VAddr address, u32 stage, u64 shader, bool write,
+@@ -243,7 +256,7 @@
+         Native(std::format("{{\"op\":\"buffer_use\",\"seq\":{},\"resource\":{},\"native\":{},\"offset\":{},\"size\":{},\"address\":{},\"logical_stage\":{},\"shader\":{},\"write\":{},\"source\":\"{}\",\"caller_stage\":{}}}",seq,resource,native,offset,size,address,stage,shader,write,source,caller_stage));
+     else if(a.uses==1025)Native("{\"op\":\"dependency_audit_overflow\",\"kind\":\"general_uses\"}");
+     for(const auto& w:a.watches) {
+-        if(!w.version)continue;
++        if(!w.active)continue;
+         const bool unknown=!resource && !address;
+         const bool hit=unknown || (address && DependencyAudit::Overlap(address,size,w.address,192)) ||
+             (native && native==w.native && DependencyAudit::Overlap(offset,size,w.offset,192));
+@@ -255,7 +268,7 @@
+     std::scoped_lock lock{dependency_mutex};
+     if(!NativeRecording() || !dependency_audit)return;
+     auto& a=*dependency_audit;
+-    for(const auto& w:a.watches)if(w.version && DependencyAudit::Overlap(address,size,w.address,192))
++    for(const auto& w:a.watches)if(w.active && DependencyAudit::Overlap(address,size,w.address,192))
+         Native(std::format("{{\"op\":\"watch_cpu\",\"seq\":{},\"watch\":{},\"version\":{},\"address\":{},\"size\":{},\"write\":{}}}",++a.sequence,w.address,w.version,address,size,write));
+ }
+ 
+--- a/gpu/shadps4/video_core/rasterizer_core.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core.cpp
+@@ -373,6 +373,10 @@
+     for (u64 i = 0; i < count; ++i) {
+         const Control entry = list[i];
+         const u64 size = (u64(entry.end) + 1) * stride;
++        if(FrameCapture::NativeRecording()) {
++            FrameCapture::NativeBufferUse(0,0,0,size,src.base_address+entry.src_idx*stride,5,cs.pgm_hash,false,"copy_control");
++            FrameCapture::NativeBufferUse(0,0,0,size,dst.base_address+entry.dst_idx*stride,5,cs.pgm_hash,true,"copy_control");
++        }
+         pending_accesses.push_back({src.base_address + entry.src_idx * stride, size, false});
+         pending_accesses.push_back({dst.base_address + entry.dst_idx * stride, size, true});
+     }
+@@ -1961,6 +1965,9 @@
+             buffer_cache.ObtainBuffer(range.base_address, size, false);
+         needs_barrier |= backend.IsBufferAccessed(range.buffer, range.offset, size);
+         NoteGuestAccess(range.base_address, size, false);
++        if(FrameCapture::NativeRecording())FrameCapture::NativeBufferUse(uintptr_t(range.buffer),
++            uintptr_t(range.buffer->buffer.native),range.offset,size,range.base_address,3,
++            pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,false,"vertex_fetch");
+     }
+ 
+     // Bind vertex buffers
+@@ -2052,6 +2059,8 @@
+                                  Shader::Backend::Bindings& binding,
+                                  Shader::PushData& push_data, u32& write_index) {
+     BB_SECTION(BindBuffers);
++    if(FrameCapture::NativeRecording() && stage.uses_dma)FrameCapture::NativeBufferUse(
++        0,0,0,0,0,u32(stage.sw_stage),stage.pgm_hash,false,"bda_unbounded");
+     const u64 alignment = backend.Limits().storage_min_alignment;
+     boost::container::static_vector<BufferBinding, Shader::NUM_BUFFERS> infos;
+     for (u32 buffer_index = 0; buffer_index < stage.buffers.size(); ++buffer_index) {
+@@ -2067,6 +2076,8 @@
+                 push_data.AddOffset(binding.buffer, 0);
+             }
+             infos.push_back({nullptr, ring->offset, ring->size, true});
++            if(FrameCapture::NativeRecording() && ring->address)FrameCapture::NativeBufferUse(
++                0,0,ring->offset,ring->size,ring->address,u32(stage.sw_stage),stage.pgm_hash,false,"ring_binding");
+         } else if (desc.IsSpecial()) {
+             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {
+                 const auto* gds_buf = buffer_cache.GetGdsBuffer();
+--- a/gpu/shadps4/video_core/rasterizer_core_memory.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_memory.cpp
+@@ -139,6 +139,8 @@
+ 
+ void RasterizerCore::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
+     DrainDrawPipe();
++    if(FrameCapture::NativeRecording() && !is_gds)FrameCapture::NativeBufferUse(
++        0,0,0,num_bytes,address,7,0,true,"dma_fill");
+     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
+                "FillBuffer address and size must be a multiple of 4 bytes");
+     if (!is_gds) {
+@@ -182,6 +184,10 @@
+ 
+ void RasterizerCore::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
+     DrainDrawPipe();
++    if(FrameCapture::NativeRecording()) {
++        if(!src_gds)FrameCapture::NativeBufferUse(0,0,0,num_bytes,src,7,0,false,"dma_copy");
++        if(!dst_gds)FrameCapture::NativeBufferUse(0,0,0,num_bytes,dst,7,0,true,"dma_copy");
++    }
+     // bbport BB_GUEST_IN_PLACE: see FillBuffer (in place: the GPU, in stream order).
+     if (!dst_gds && !buffer_cache.IsAnyInPlace(dst, num_bytes) &&
+         !buffer_cache.IsRegionGpuModified(dst, num_bytes) &&
+--- a/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_pipe.cpp
+@@ -241,6 +241,8 @@
+         if (source) {
+             std::memcpy(dst, source, size);
+         } else {
++            if(FrameCapture::NativeRecording())FrameCapture::NativeBufferUse(
++                0,0,*offset,size,address,u32(stage.sw_stage),stage.pgm_hash,false,"ring_cpu_snapshot");
+             memory->CopySparseMemory(address, dst, size);
+         }
+         constant_ring->Flush(*offset, size);
+@@ -1451,6 +1453,9 @@
+     if (diag) {
+         why[0].fetch_add(1, std::memory_order_relaxed);
+     }
++    if(FrameCapture::NativeRecording())for(const auto& b:bound_buffers)
++        FrameCapture::NativeBufferUse(uintptr_t(b.buffer),b.buffer?uintptr_t(b.buffer->buffer.native):0,
++            b.offset,b.size,b.guest_address,b.logical_stage,b.shader,b.is_written,"hoisted_shader");
+     RecordHoistedDispatch(pipeline, cs, cs_program);
+     DebugState.IncDispatch();
+     static std::atomic<u64> hoisted{0};
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -73,7 +73,15 @@
+  std::ofstream(trigger)<<"1";FrameCapture::OnFlip(456);FrameCapture::FrameBoundary(30);
+  for(unsigned i=0;i<10000;++i)FrameCapture::Native(std::string(600,'x'));
+  FrameCapture::FrameBoundary(31);assert(drains==6);text=read(30);assert(text.find("\"truncated\":true")!=std::string::npos);assert(text.size()<2200000);
+- assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==3);
++ setenv("BB_WATCH","0x1000,192",1);
++ std::ofstream(trigger)<<"1";FrameCapture::OnFlip(789);FrameCapture::FrameBoundary(40);
++ FrameCapture::NativeBufferUse(0,0,0,192,4096,5,555,false,"seed_before_write");
++ FrameCapture::NativeCpuAccess(4096,192,false);
++ payload.fill(0);FrameCapture::NativeCommandWrite(4096,payload.data(),192,100,200,128,10);
++ FrameCapture::FrameBoundary(41);assert(drains==8);text=read(40);unsetenv("BB_WATCH");
++ assert(text.find("\"version\":0,\"logical_stage\":5,\"shader\":555")!=std::string::npos);
++ assert(text.find("\"version\":1,\"previous\":false,\"same_payload\":false,\"same_generation\":false,\"zero_words\":48,\"float_one_words\":0")!=std::string::npos);
++ assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==4);
+  FrameCapture::ClearNativeBoundaryDrain(&drains);
+  std::filesystem::remove_all(root);puts("metadata boundaries, buffer non-read, escaping, bounded dependency versions, aliases, stages, reset and capacity passed");
+ }
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -851,6 +851,8 @@
+ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, ViewMemo* memo,
+                                      bool refresh) {
+     Image& image = slot_images[image_id];
++    if(FrameCapture::NativeRecording())FrameCapture::NativeBufferUse(image.image_uid,0,0,
++        image.info.guest_size,image.guest_begin,7,0,desc.type==BindingType::Storage,"texture_binding");
+     WatchImage(image, refresh ? "texture (refresh)" : "texture (no refresh)");
+     if (desc.type == BindingType::Storage) {
+         image.flags |= ImageFlagBits::GpuModified;
+@@ -889,6 +891,8 @@
+ 
+ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& desc) {
+     Image& image = slot_images[image_id];
++    if(FrameCapture::NativeRecording())FrameCapture::NativeBufferUse(image.image_uid,0,0,
++        image.info.guest_size,image.guest_begin,7,0,true,"color_target");
+     WatchImage(image, "render target");
+     image.flags |= ImageFlagBits::GpuModified;
+     image.gpu_write_tick = backend.CurrentTick();
+@@ -918,6 +922,8 @@
+ 
+ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc) {
+     Image& image = slot_images[image_id];
++    if(FrameCapture::NativeRecording())FrameCapture::NativeBufferUse(image.image_uid,0,0,
++        image.info.guest_size,image.guest_begin,7,0,true,"depth_target");
+     WatchImage(image, "depth target");
+     image.flags |= ImageFlagBits::GpuModified;
+     image.gpu_write_tick = backend.CurrentTick();
+@@ -1592,7 +1598,7 @@
+             for(const auto& backing:image.backing_images) {
+                 if(!backing.image.native)continue;
+                 if(++count>2048)break;
+-                FrameCapture::Native(std::format("{{\"op\":\"texture_lifetime\",\"uid\":{},\"native\":{},\"bytes\":{},\"retired\":{},\"guest\":{},\"generation\":{},\"flags\":{},\"target\":{},\"proxy\":{},\"tick\":{},\"write_tick\":{},\"gpu_complete\":{},\"lru_age\":{},\"current_tick\":{},\"tag_state\":{},\"current_owner\":{},\"safe_guest_release\":{},\"safe_invalid_release\":{}}}",image.image_uid,uintptr_t(backing.image.native),backing.image.size_bytes,backing.retired,image.guest_begin,tag.generation,u32(image.flags),bool(image.usage.render_target||image.usage.depth_target),unsigned(image.scene_proxy),image.tick_accessed_last,image.gpu_write_tick,backend.IsFreeKnown(image.tick_accessed_last)&&(!image.gpu_write_tick||backend.IsFreeKnown(image.gpu_write_tick)),gc_tick-image.lru_touched_tick,backend.CurrentTick(),unsigned(BbResourceLifetime::Get().Status(tag)),BbResourceLifetime::Get().Owner(image.guest_begin,image.info.guest_size).generation,image.CanReleaseGuestBacking(),image.CanReleaseInvalidBacking()));
++                FrameCapture::Native(std::format("{{\"op\":\"texture_lifetime\",\"uid\":{},\"native\":{},\"bytes\":{},\"retired\":{},\"guest\":{},\"generation\":{},\"flags\":{},\"target\":{},\"proxy\":{},\"tick\":{},\"write_tick\":{},\"gpu_complete\":{},\"lru_age\":{},\"current_tick\":{},\"tag_state\":{},\"tag_address\":{},\"tag_bytes\":{},\"tag_domain\":{},\"guest_bytes\":{},\"current_owner\":{},\"safe_guest_release\":{},\"safe_invalid_release\":{}}}",image.image_uid,uintptr_t(backing.image.native),backing.image.size_bytes,backing.retired,image.guest_begin,tag.generation,u32(image.flags),bool(image.usage.render_target||image.usage.depth_target),unsigned(image.scene_proxy),image.tick_accessed_last,image.gpu_write_tick,backend.IsFreeKnown(image.tick_accessed_last)&&(!image.gpu_write_tick||backend.IsFreeKnown(image.gpu_write_tick)),gc_tick-image.lru_touched_tick,backend.CurrentTick(),unsigned(BbResourceLifetime::Get().Status(tag)),tag.address,tag.size,unsigned(tag.domain),image.info.guest_size,BbResourceLifetime::Get().Owner(image.guest_begin,image.info.guest_size).generation,image.CanReleaseGuestBacking(),image.CanReleaseInvalidBacking()));
+             }
+             if(count>2048)break;
+         }

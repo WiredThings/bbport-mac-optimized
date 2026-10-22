@@ -1,0 +1,97 @@
+--- a/gpu/shim/bbport_guest_hooks.cpp
++++ b/gpu/shim/bbport_guest_hooks.cpp
+@@ -93,6 +93,36 @@
+ HeapAlignedFn original_heap_aligned{};
+ bool heap_entry_hooks = false;
+ thread_local unsigned heap_alloc_depth{};
++struct HeapWatch {u64 address{},size{};};
++HeapWatch ParseHeapWatch(const char* input,bool diagnostic) {
++    if(!diagnostic || !input)return {};
++    char* end=nullptr;const u64 address=std::strtoull(input,&end,0);
++    const u64 size=end && *end==','?std::strtoull(end+1,&end,0):0;
++    if(!end || *end || !address || address>=(u64{1}<<40) || size!=192 ||
++        size>(u64{1}<<40)-address)return {};
++    return {address,size};
++}
++bool CoversHeapWatch(HeapWatch watch,u64 address,u64 size) {
++    return watch.size && address && address<=watch.address && size>=watch.size &&
++        watch.address-address<=size-watch.size;
++}
++std::atomic<unsigned> heap_watch_records{0};
++void TraceWatchedHeap(const char* action,const char* kind,BbResourceLifetime::Tag tag,
++                      u64 alignment,u64 caller,bool accepted=true) {
++    static const HeapWatch watch=[] {
++        const char* flag=std::getenv("BB_CAPTURE_NATIVE");
++        return ParseHeapWatch(std::getenv("BB_WATCH"),flag && flag[0]=='1');
++    }();
++    if(!CoversHeapWatch(watch,tag.address,tag.size))return;
++    if(heap_watch_records.fetch_add(1,std::memory_order_relaxed)>=16)return;
++    // Metadata only: the original return address is supplied by the entry wrapper.
++    // No guest stack walk or payload read. A relative offset is arithmetic only;
++    // the offline ELF segment map must prove whether it belongs to executable code.
++    std::printf("Watched heap: {\"action\":\"%s\",\"kind\":\"%s\",\"address\":%llu,\"bytes\":%llu,\"generation\":%llu,\"alignment\":%llu,\"caller\":%llu,\"image_base\":%llu,\"accepted\":%s}\n",
++        action,kind,(unsigned long long)tag.address,(unsigned long long)tag.size,
++        (unsigned long long)tag.generation,(unsigned long long)alignment,
++        (unsigned long long)caller,(unsigned long long)ImageBase,accepted?"true":"false");
++}
+ using ScopeQueryFn = int (*)(uintptr_t,int*,int*,uintptr_t*);
+ ScopeQueryFn scope_query=&runtime_memory_vma_info;
+ const uint64_t* (*generation_query)()=&runtime_memory_generation;
+@@ -270,22 +300,27 @@
+     auto tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,address);
+     if (!tag) tag={address,0,0,BbResourceLifetime::Domain::Heap};
+     original_heap_free(allocator,address);
+-    BbResourceLifetime::Get().Release(tag);
++    const bool released=BbResourceLifetime::Get().Release(tag);
++    TraceWatchedHeap("free","heap",tag,0,u64(__builtin_return_address(0)),released);
+ }
+ u64 HeapPlainHook(u64 allocator,u64 size) {
+     const bool top=heap_alloc_depth++==0;
+     const u64 address=original_heap_plain(allocator,size);
+     --heap_alloc_depth;
+-    if(top && address && GpuScope(address))
+-        BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++    if(top && address && GpuScope(address)) {
++        const auto tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++        TraceWatchedHeap("allocate","plain",tag,0,u64(__builtin_return_address(0)));
++    }
+     return address;
+ }
+ u64 HeapAlignedHook(u64 allocator,u64 size,u64 alignment) {
+     const bool top=heap_alloc_depth++==0;
+     const u64 address=original_heap_aligned(allocator,size,alignment);
+     --heap_alloc_depth;
+-    if(top && address && GpuScope(address))
+-        BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++    if(top && address && GpuScope(address)) {
++        const auto tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
++        TraceWatchedHeap("allocate","aligned",tag,alignment,u64(__builtin_return_address(0)));
++    }
+     return address;
+ }
+ 
+--- a/tests/test_guest_resource_hooks.cpp
++++ b/tests/test_guest_resource_hooks.cpp
+@@ -13,6 +13,14 @@
+ int main() {
+   using namespace BbGuestHooks;
+   setenv("BB_GPU_LIFETIME", "1", 1);
++  setenv("BB_CAPTURE_NATIVE","1",1);setenv("BB_WATCH","0x300000,192",1);
++  assert(ParseHeapWatch("0x300000,192",true).address==0x300000);
++  assert(!ParseHeapWatch("0x300000,192",false).size);
++  for(const char* bad:{"0,192","0x10000000000,192","0x300000,191","0x300000,192x","bad"})
++      assert(!ParseHeapWatch(bad,true).size);
++  assert(CoversHeapWatch({0x300000,192},0x2ffff0,208));
++  assert(!CoversHeapWatch({0x300000,192},0x300001,256));
++  assert(!CoversHeapWatch({0x300000,192},0x300000,191));
+   scope_query=&FakeScope;generation_query=&FakeGeneration;
+   assert(GpuScope(0x2000));const int before=scope_calls;
+   assert(GpuScope(0x2010) && scope_calls==before);
+@@ -104,6 +112,7 @@
+   assert(reinterpret_cast<HeapPlainFn>(plain_code)(reinterpret_cast<u64>(heap),4096)==heap[0]);
+   auto plain_tag=BbResourceLifetime::Get().Find(BbResourceLifetime::Domain::Heap,heap[0]);
+   assert(plain_tag && plain_tag.size==4096);
++  assert(heap_watch_records.load()==1); // real detoured allocation still returns and pairs normally
+   assert(BbResourceLifetime::Get().Release(plain_tag));
+   heap[0]=0x400000;
+   assert(reinterpret_cast<HeapAlignedFn>(aligned_code)(reinterpret_cast<u64>(heap),8192,256)==heap[0]);

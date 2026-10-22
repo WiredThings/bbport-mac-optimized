@@ -1,0 +1,107 @@
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -1,3 +1,4 @@
++#include "bbport_reclaim_mapping.h"
+ // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+@@ -1550,12 +1551,24 @@
+         // Both allocator domains must have no replacement overlap. A dropped record disables
+         // reclamation. Keep the generation locked through unregistration; never wait for GPU.
+         u64 removed_bytes=0;
+-        const bool removed=lifetimes.WithReleased(tag,address,size,2000,[&]() -> BbResourceLifetime::u64 {
+-            u64 bytes=0;for(const auto& backing:image.backing_images)bytes+=backing.image.size_bytes;
+-            removed_bytes=bytes;
+-            FreeImage(id); // normal unwatch/unregister/deferred destruction; same GPU safety rules
+-            return bytes;
+-        });
++        const auto commit=[&] {
++            return lifetimes.WithReleased(tag,address,size,2000,[&]() -> BbResourceLifetime::u64 {
++                u64 bytes=0;for(const auto& backing:image.backing_images)bytes+=backing.image.size_bytes;
++                removed_bytes=bytes;
++                FreeImage(id); // normal unwatch/unregister/deferred destruction; no GPU wait
++                return bytes;
++            });
++        };
++        bool removed=false;
++        if(storage) {
++            // Virtual heap ownership alone does not exclude another guest mapping of
++            // the same physical bytes. Keep mapping and allocation proof through removal.
++            struct Context {const decltype(commit)* action;};
++            Context context{&commit};
++            removed=BbReclaimMapping::WithUnaliasedMapping(address,size,[](void* opaque) noexcept {
++                return (*static_cast<Context*>(opaque)->action)() ? 1 : 0;
++            },&context);
++        } else removed=commit();
+         if(removed && storage) {++storage_images;storage_bytes+=removed_bytes;}
+     }
+     if(storage_images)std::printf("Released storage reclaim: images=%llu capacity=%llu bytes; explicit dead heap, GPU-complete, no live overlap, no writeback\n",
+--- /dev/null
++++ b/gpu/shim/bbport_reclaim_mapping.h
+@@ -0,0 +1,19 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cstdint>
++// v2 requires first-map history; old runtimes without this proof fail closed.
++#if defined(__APPLE__)
++extern "C" int runtime_memory_reclaim_if_unaliased_v2(uintptr_t,uint64_t,int(*)(void*),void*) __attribute__((weak_import));
++#elif !defined(_WIN32)
++extern "C" int runtime_memory_reclaim_if_unaliased_v2(uintptr_t,uint64_t,int(*)(void*),void*) __attribute__((weak));
++#endif
++namespace BbReclaimMapping {
++inline bool WithUnaliasedMapping(uintptr_t a,uint64_t n,int(*callback)(void*),void* context) {
++#if defined(_WIN32)
++    (void)a; (void)n; (void)callback; (void)context;
++    return false;
++#else
++    return runtime_memory_reclaim_if_unaliased_v2 && runtime_memory_reclaim_if_unaliased_v2(a,n,callback,context);
++#endif
++}
++}
+--- a/tests/test_texture_cache_views.mm
++++ b/tests/test_texture_cache_views.mm
+@@ -32,6 +32,17 @@
+ #undef runtime_memory_set_write_watch
+ #undef runtime_memory_region
+ static uintptr_t test_base;
++// Controlled mapping model for the cache/Metal integration. The separate real-runtime
++// mapping-retirement test proves physical alias exclusion and concurrent map serialization.
++static bool test_mapping_alias;
++static unsigned test_mapping_callbacks;
++extern "C" int runtime_memory_reclaim_if_unaliased_v2(uintptr_t a,uint64_t n,int(*callback)(void*),void* context) {
++    assert(a>=test_base && a+n<=test_base+0x800000);
++    if(test_mapping_alias)return 0;
++    ++test_mapping_callbacks;
++    return callback(context);
++}
++
+ extern "C" {
+ int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped) {
+     assert(address>=test_base && address<test_base+0x800000);
+@@ -163,6 +174,15 @@
+     assert(lifetime.Release(overlap));
+     collect_for(2300);
+     unchanged_cpu();
++    if(enabled && test_mapping_alias) {
++        assert(f.textures.TryGetImage(image_id,uid)==image && image->IsTracked());
++        assert(f.textures.RegistryGeneration()==generation && test_mapping_callbacks==0);
++        verify_pixels(image->backing->image.native,true);
++        test_mapping_alias=false; // only the controlled guard changes, not the heap proof
++        collect_for(1200);
++        unchanged_cpu();
++        std::puts("Released storage: denied mapping lease retains the exact GPU contents and registry; fresh proof required");
++    }
+     if (!enabled) {
+         assert(f.textures.TryGetImage(image_id,uid)==image && image->IsTracked());
+         assert(f.textures.RegistryGeneration()==generation);
+@@ -209,7 +229,9 @@
+     const bool baseline=argc>1 && std::string_view(argv[1])=="baseline";
+     const bool abort_view=argc>1 && std::string_view(argv[1])=="abort-view";
+     setenv("BB_GUEST_IN_PLACE","0",1);
+-    const bool released_on=argc>1 && std::string_view(argv[1])=="released-storage";
++    const bool alias_case=argc>1 && std::string_view(argv[1])=="released-storage-alias";
++    test_mapping_alias=alias_case;
++    const bool released_on=alias_case || (argc>1 && std::string_view(argv[1])=="released-storage");
+     const bool released_off=argc>1 && std::string_view(argv[1])=="released-storage-off";
+     if (released_on || released_off) {
+         setenv("BB_GPU_LIFETIME","1",1);

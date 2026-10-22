@@ -1,0 +1,48 @@
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_rasterizer.mm
+@@ -1045,6 +1045,45 @@
+     // A pass re-opened after a tessellation draw's kernels is the loading variant of the same
+     // state (WithoutClears): the draws after it continue it instead of clearing again.
+     if (!scheduler.IsRenderingWith(state) && !scheduler.IsRenderingWith(WithoutClears(state))) {
++        if(VideoCore::FrameCapture::NativeRecording())if(const auto* old=scheduler.OpenRenderState()) {
++            // Metadata on the recording thread: this is a requested split, not a timed
++            // GPU pass or proof that merging would preserve texture feedback/queries.
++            unsigned changes=0;
++            if(old->width!=state.width || old->height!=state.height || old->num_layers!=state.num_layers)changes|=1;
++            if(old->num_color_attachments!=state.num_color_attachments)changes|=2;
++            for(unsigned slot=0;slot<state.color_attachments.size();++slot) {
++                const auto& a=old->color_attachments[slot];const auto& b=state.color_attachments[slot];
++                if(a.image_view!=b.image_view)changes|=4;
++                if(a.image_layout!=b.image_layout)changes|=64;
++                if(a.is_clear!=b.is_clear)changes|=32;
++                if(a.clear_value!=b.clear_value)changes|=128;
++            }
++            const auto& a=old->depth_stencil_attachment;const auto& b=state.depth_stencil_attachment;
++            if(a.image_view!=b.image_view)changes|=8;
++            if(a.has_depth!=b.has_depth || a.has_stencil!=b.has_stencil)changes|=16;
++            if(a.depth_clear!=b.depth_clear || a.stencil_clear!=b.stencil_clear)changes|=32;
++            if(a.image_layout!=b.image_layout)changes|=64;
++            if(a.clear_value!=b.clear_value)changes|=128;
++            static std::atomic<u64> split_sequence{};
++            const u64 observation=++split_sequence;
++            VideoCore::FrameCapture::Native(std::format(
++                "{{\"op\":\"render_pass_state_split\",\"queue\":{},\"observation\":{},\"changes\":{},\"old_to_load_matches\":{},\"old_colors\":{},\"new_colors\":{},\"width\":{},\"height\":{},\"layers\":{},\"samples\":{}}}",
++                uintptr_t(&scheduler),observation,changes,WithoutClears(*old)==state,old->num_color_attachments,
++                state.num_color_attachments,state.width,state.height,state.num_layers,r.sample_count));
++            if(!(changes&15)) {
++                const auto slot_state=[&](int slot,const RenderAttachment& a,const RenderAttachment& b) {
++                    if(a.image_layout==b.image_layout && a.is_clear==b.is_clear && a.clear_value==b.clear_value)return;
++                    VideoCore::FrameCapture::Native(std::format(
++                        "{{\"op\":\"render_pass_slot_state\",\"queue\":{},\"observation\":{},\"slot\":{},\"view\":{},\"old_layout\":{},\"new_layout\":{},\"old_flags\":{},\"new_flags\":{},\"old_value\":[{},{},{},{}],\"new_value\":[{},{},{},{}]}}",
++                        uintptr_t(&scheduler),observation,slot,a.image_view,unsigned(a.image_layout),unsigned(b.image_layout),
++                        a.is_clear,b.is_clear,a.clear_value[0],a.clear_value[1],a.clear_value[2],a.clear_value[3],
++                        b.clear_value[0],b.clear_value[1],b.clear_value[2],b.clear_value[3]));
++                };
++                for(unsigned slot=0;slot<state.color_attachments.size();++slot)
++                    slot_state(int(slot),old->color_attachments[slot],state.color_attachments[slot]);
++                slot_state(-1,old->depth_stencil_attachment,state.depth_stencil_attachment);
++            }
++        }
+         MTLRenderPassDescriptor* desc = MakePassDescriptor(state, pipeline.Render());
+         NoteAttachmentContent(state,MemoryStats::Content::Clear,true);
+         scheduler.RenderEncoder((__bridge const void*)desc, state, !impl->velocity_replaying, bound_only);

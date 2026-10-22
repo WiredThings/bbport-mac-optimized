@@ -1,0 +1,89 @@
+diff --git a/gpu/shadps4/video_core/amdgpu/liverpool.cpp b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+--- a/gpu/shadps4/video_core/amdgpu/liverpool.cpp
++++ b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+@@ -2003,6 +2003,16 @@
+                 ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
+                 ASSERT(!write_data->wr_one_addr.Value());
+                 if (rasterizer) {
++                    // The decoder may own a whole-submission snapshot already. Record
++                    // the existing mapping before RunInOrder makes its task copy; do
++                    // not retain pointers or inspect original guest command contents.
++                    if (VideoCore::FrameCapture::NativeRecording() && count == 51) {
++                        VideoCore::FrameCapture::NativeSubmittedPacket(bool(copy),
++                            reinterpret_cast<uintptr_t>(header),208,
++                            copy ? reinterpret_cast<uintptr_t>(copy->data.data()) : base_addr,
++                            (copy ? copy->dcb_dwords : dcb_dwords)*sizeof(u32),
++                            copy ? reinterpret_cast<uintptr_t>(copy->guest_dcb) : base_addr,seq);
++                    }
+                     // In order with the draws (on the draw recording thread when in use).
+                     if (BbCeStats::Enabled()) {
+                         BbCeStats::NoteWrite(BbCeStats::WriteData, write_data->Address<VAddr>(),
+diff --git a/gpu/shadps4/video_core/frame_capture.cpp b/gpu/shadps4/video_core/frame_capture.cpp
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -9,6 +9,7 @@
+ #include <mutex>
+ #include <memory>
+ #include <cstring>
++#include <limits>
+ 
+ #include "video_core/renderer_vulkan/vk_common.h"
+ #include "video_core/texture_cache/image_info.h"
+@@ -261,6 +262,16 @@
+         source ? std::to_string(reinterpret_cast<uintptr_t>(source)) : "null",
+         reinterpret_cast<uintptr_t>(payload)));
+ }
++void FrameCapture::NativeSubmittedPacket(bool copied, u64 packet, u32 bytes, u64 begin,
++                                        u64 range_bytes, u64 guest_begin, u64 submission) {
++    if(!NativeRecording() || bytes!=208)return;
++    constexpr u64 Max=std::numeric_limits<u64>::max();
++    const bool valid=packet && begin && guest_begin && range_bytes>=bytes &&
++        range_bytes<=Max-begin && packet>=begin && packet-begin<=range_bytes-bytes &&
++        packet-begin<=Max-guest_begin && bytes<=Max-(guest_begin+(packet-begin));
++    Native(std::format("{{\"op\":\"submitted_packet\",\"decoder_packet\":{},\"bytes\":208,\"copied\":{},\"submission\":{},\"mapping_valid\":{},\"guest_packet\":{}}}",
++        packet,copied,submission,valid,valid ? std::to_string(guest_begin+(packet-begin)) : "null"));
++}
+ void FrameCapture::NativeCommandWrite(VAddr address, const void* data, u64 size,
+                                       u64 resource, u64 native, u64 offset, u64 generation) {
+     if(!NativeRecording() || size!=192 || !data)return;
+diff --git a/gpu/shadps4/video_core/frame_capture.h b/gpu/shadps4/video_core/frame_capture.h
+--- a/gpu/shadps4/video_core/frame_capture.h
++++ b/gpu/shadps4/video_core/frame_capture.h
+@@ -63,6 +63,10 @@
+     // Queue position is monotonic; a ring address alone can be reused after wrapping.
+     static void NativeTaskPacket(bool copied, u64 queue, u64 position,
+                                  const void* source, const void* payload, u32 size);
++    // Resolve a decoder packet within an existing submission snapshot, without
++    // reading either buffer. Missing/invalid ranges remain explicit observations.
++    static void NativeSubmittedPacket(bool copied, u64 packet, u32 bytes, u64 begin,
++                                      u64 range_bytes, u64 guest_begin, u64 submission);
+     static void NativeBufferUse(u64 resource, u64 native, u64 offset, u64 size,
+                                 VAddr address, u32 stage, u64 shader, bool write,
+                                 const char* source, u64 caller_stage = 0);
+diff --git a/tests/test_frame_capture_metadata.cpp b/tests/test_frame_capture_metadata.cpp
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -28,6 +28,12 @@
+  FrameCapture::NativeTaskPacket(false,7,8192,nullptr,reinterpret_cast<void*>(2),208);
+  FrameCapture::NativeTaskPacket(true,7,9000,reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),207);
+  FrameCapture::NativeTaskPacket(true,7,16384,reinterpret_cast<void*>(3),reinterpret_cast<void*>(2),208); // same ring pointer, new position
++ FrameCapture::NativeSubmittedPacket(true,1024,208,1000,232,4096,71); // exact end, no dereference
++ FrameCapture::NativeSubmittedPacket(true,1025,208,1000,232,4096,72); // one byte outside
++ FrameCapture::NativeSubmittedPacket(true,1024,208,1000,232,~uint64_t{0}-10,73); // translated overflow
++ FrameCapture::NativeSubmittedPacket(true,1024,208,1000,~uint64_t{0},4096,74); // source overflow
++ FrameCapture::NativeSubmittedPacket(false,1024,208,1024,208,1024,75);
++ FrameCapture::NativeSubmittedPacket(true,1024,207,1000,232,4096,76); // wrong class
+  FrameCapture::NativeWriteOrigin(1,191,FrameCapture::WriteOrigin::ConstantRam,999);
+  FrameCapture::NativeWriteOrigin(1,192,static_cast<FrameCapture::WriteOrigin>(99),999);
+  std::array<unsigned char,192> payload{};
+@@ -67,6 +73,10 @@
+  assert(text.find("\"position\":16384,\"source\":3,\"payload\":2")!=std::string::npos);
+  assert(text.find("\"position\":9000")==std::string::npos);
+  assert(text.find("\"payload_address\":")!=std::string::npos);
++ assert(text.find("\"submission\":71,\"mapping_valid\":true,\"guest_packet\":4120")!=std::string::npos);
++ for(unsigned seq:{72,73,74})assert(text.find("\"submission\":"+std::to_string(seq)+",\"mapping_valid\":false,\"guest_packet\":null")!=std::string::npos);
++ assert(text.find("\"copied\":false,\"submission\":75,\"mapping_valid\":true,\"guest_packet\":1024")!=std::string::npos);
++ assert(text.find("\"submission\":76,")==std::string::npos);
+  assert(text.find("\"constant_offset\":999")==std::string::npos);
+  assert(text.find("\"constant_offset\":998")==std::string::npos);
+  assert(text.find("\"same_payload\":false,\"same_generation\":false")!=std::string::npos);

@@ -1,0 +1,161 @@
+--- a/gpu/shim/bbport_resource_lifetime.h
++++ b/gpu/shim/bbport_resource_lifetime.h
+@@ -26,6 +26,12 @@
+   u64 generation{}, reclaimed_images{}, reclaimed_bytes{}, gc_scans{},
+       gc_waiting{}, gc_protected{};
+ };
++struct RangeInspection {
++  State tag_state{}, recorded_state{};
++  Tag covering_owner{};
++  std::array<u64,unsigned(Domain::Count)> overlaps{}, overlap_bytes{};
++  bool valid{}, covered_by_tag{}, history_dropped{}, truncated{};
++};
+ // Bounded diagnostics: never tracks general malloc or unbounded call stacks.
+ // Unknown/missing/overlapping histories cannot authorize reclamation.
+ class Tracker {
+@@ -44,6 +50,9 @@
+   // Read-only preflight can avoid an unnecessary encoder break. It is NOT
+   // authorization: WithReleased must revalidate under the lock before removal.
+   bool ReleasedRangeUnused(Tag, u64 address, u64 size, u64 min_age_ms) const;
++  // Bounded read-only diagnostic, not permission to reclaim. Distinguishes a
++  // covering owner from partial live overlaps and observed frees from replacements.
++  RangeInspection InspectRange(Tag,u64 address,u64 size) const;
+   Snapshot Read() const;
+   void NoteScan(u64 waiting, u64 protected_images);
+ 
+--- a/gpu/shim/bbport_resource_lifetime.cpp
++++ b/gpu/shim/bbport_resource_lifetime.cpp
+@@ -174,6 +174,35 @@
+ bool Tracker::ReleasedRangeUnused(Tag tag,u64 address,u64 size,u64 age) const {
+   std::scoped_lock lock{mutex};return ReleasedRangeUnusedLocked(tag,address,size,age);
+ }
++RangeInspection Tracker::InspectRange(Tag tag,u64 address,u64 size) const {
++  RangeInspection out;
++  if(!Valid(address,size))return out;
++  std::scoped_lock lock{mutex};
++  out.valid=true;out.tag_state=StatusLocked(tag);
++  out.covered_by_tag=Valid(tag.address,tag.size) && address>=tag.address &&
++      size<=tag.size && address-tag.address<=tag.size-size;
++  if(const auto old=retired.find(tag.generation);old!=retired.end() && old->second.tag==tag)
++    out.recorded_state=old->second.state;
++  for(unsigned d=0;d<unsigned(Domain::Count);++d) {
++    out.history_dropped|=counters.domains[d].dropped!=0;
++    const auto& entries=live[d];auto it=entries.lower_bound(address);
++    if(it!=entries.begin()) {
++      const auto before=std::prev(it);
++      if(Overlap(address,size,before->second.address,before->second.size))it=before;
++    }
++    unsigned visited=0;
++    for(;it!=entries.end() && it->first<address+size;++it) {
++      if(visited++>=256) {out.truncated=true;break;}
++      const auto t=it->second;
++      if(!Overlap(address,size,t.address,t.size))continue;
++      ++out.overlaps[d];
++      out.overlap_bytes[d]+=std::min(address+size,t.address+t.size)-std::max(address,t.address);
++      if(t.address<=address && size<=t.size && address-t.address<=t.size-size &&
++          (!out.covering_owner || t.size<out.covering_owner.size))out.covering_owner=t;
++    }
++  }
++  return out;
++}
+ bool Tracker::WithReleased(Tag tag, u64 address, u64 size, u64 age,
+                            const std::function<u64()> &reclaim) {
+   std::scoped_lock lock{mutex};
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
+@@ -1617,10 +1617,11 @@
+         for(const auto& [index,tag]:guest_image_owners) {
+             const auto& image=slot_images[ImageId{index}];
+             if(False(image.flags&ImageFlagBits::Registered))continue;
++            const auto overlap=BbResourceLifetime::Get().InspectRange(tag,image.guest_begin,image.info.guest_size);
+             for(const auto& backing:image.backing_images) {
+                 if(!backing.image.native)continue;
+                 if(++count>2048)break;
+-                FrameCapture::Native(std::format("{{\"op\":\"texture_lifetime\",\"uid\":{},\"native\":{},\"bytes\":{},\"retired\":{},\"guest\":{},\"generation\":{},\"flags\":{},\"target\":{},\"proxy\":{},\"tick\":{},\"write_tick\":{},\"gpu_complete\":{},\"lru_age\":{},\"current_tick\":{},\"tag_state\":{},\"tag_address\":{},\"tag_bytes\":{},\"tag_domain\":{},\"guest_bytes\":{},\"current_owner\":{},\"safe_guest_release\":{},\"safe_invalid_release\":{}}}",image.image_uid,uintptr_t(backing.image.native),backing.image.size_bytes,backing.retired,image.guest_begin,tag.generation,u32(image.flags),bool(image.usage.render_target||image.usage.depth_target),unsigned(image.scene_proxy),image.tick_accessed_last,image.gpu_write_tick,backend.IsFreeKnown(image.tick_accessed_last)&&(!image.gpu_write_tick||backend.IsFreeKnown(image.gpu_write_tick)),gc_tick-image.lru_touched_tick,backend.CurrentTick(),unsigned(BbResourceLifetime::Get().Status(tag)),tag.address,tag.size,unsigned(tag.domain),image.info.guest_size,BbResourceLifetime::Get().Owner(image.guest_begin,image.info.guest_size).generation,image.CanReleaseGuestBacking(),image.CanReleaseInvalidBacking()));
++                FrameCapture::Native(std::format("{{\"op\":\"texture_lifetime\",\"uid\":{},\"native\":{},\"bytes\":{},\"retired\":{},\"guest\":{},\"generation\":{},\"flags\":{},\"target\":{},\"proxy\":{},\"tick\":{},\"write_tick\":{},\"gpu_complete\":{},\"lru_age\":{},\"current_tick\":{},\"tag_state\":{},\"tag_address\":{},\"tag_bytes\":{},\"tag_domain\":{},\"guest_bytes\":{},\"current_owner\":{},\"safe_guest_release\":{},\"safe_invalid_release\":{},\"recorded_state\":{},\"tag_covered\":{},\"overlap_valid\":{},\"range_live_overlaps\":{},\"range_live_bytes\":{},\"heap_live_overlaps\":{},\"heap_live_bytes\":{},\"overlap_truncated\":{},\"history_dropped\":{}}}",image.image_uid,uintptr_t(backing.image.native),backing.image.size_bytes,backing.retired,image.guest_begin,tag.generation,u32(image.flags),bool(image.usage.render_target||image.usage.depth_target),unsigned(image.scene_proxy),image.tick_accessed_last,image.gpu_write_tick,backend.IsFreeKnown(image.tick_accessed_last)&&(!image.gpu_write_tick||backend.IsFreeKnown(image.gpu_write_tick)),gc_tick-image.lru_touched_tick,backend.CurrentTick(),unsigned(overlap.tag_state),tag.address,tag.size,unsigned(tag.domain),image.info.guest_size,overlap.covering_owner.generation,image.CanReleaseGuestBacking(),image.CanReleaseInvalidBacking(),unsigned(overlap.recorded_state),overlap.covered_by_tag,overlap.valid,overlap.overlaps[0],overlap.overlap_bytes[0],overlap.overlaps[1],overlap.overlap_bytes[1],overlap.truncated,overlap.history_dropped));
+             }
+             if(count>2048)break;
+         }
+--- a/tests/test_guest_resource_lifetime.cpp
++++ b/tests/test_guest_resource_lifetime.cpp
+@@ -55,6 +55,35 @@
+   assert(preflight.Release(old));
+   assert(!preflight.ReleasedRangeUnused(old,0x80000,4096,60000));
+   assert(preflight.ReleasedRangeUnused(old,0x80000,4096,0));
++  // No covering allocation does NOT mean that every byte is unowned.
++  Tracker inspected;
++  const auto inspected_old=inspected.Allocate(Domain::Heap,0x100000,4096);
++  assert(inspected.Release(inspected_old));
++  const auto partial=inspected.Allocate(Domain::Heap,0x100100,128);
++  auto view=inspected.InspectRange(inspected_old,0x100000,1024);
++  assert(view.valid && view.covered_by_tag && !view.covering_owner && !view.truncated);
++  assert(view.tag_state==State::Reused && view.recorded_state==State::Released);
++  assert(view.overlaps[unsigned(Domain::Heap)]==1 && view.overlap_bytes[unsigned(Domain::Heap)]==128);
++  assert(inspected.Release(partial));
++  const auto outside=inspected.Allocate(Domain::Range,0x100f00,128);
++  view=inspected.InspectRange(inspected_old,0x100000,1024);
++  assert(view.tag_state==State::Reused && view.recorded_state==State::Released);
++  assert(!view.covering_owner && !view.overlaps[0] && !view.overlaps[1]);
++  assert(!inspected.WithReleased(inspected_old,0x100000,1024,0,[]{return 1024;})); // policy unchanged
++  assert(inspected.Release(outside));
++  assert(inspected.Read().reclaimed_images==0); // diagnostics do not reclaim
++  const auto unfreed=inspected.Allocate(Domain::Heap,0x200000,4096);
++  const auto replacement=inspected.Allocate(Domain::Heap,0x200100,128);
++  assert(inspected.Release(replacement));
++  view=inspected.InspectRange(unfreed,0x200000,1024);
++  assert(view.recorded_state==State::Reused && !view.overlaps[0] && !view.overlaps[1]);
++  assert(!inspected.WithReleased(unfreed,0x200000,1024,0,[]{return 1024;}));
++  assert(!inspected.InspectRange(unfreed,(u64{1}<<40)-1,2).valid);
++  Tracker dense;
++  for(unsigned i=0;i<300;++i)assert(dense.Allocate(Domain::Heap,0x300000+i*32,16));
++  view=dense.InspectRange({},0x300000,10000);
++  assert(view.truncated && view.overlaps[1]==256 && view.overlap_bytes[1]==4096);
++  assert(limited.InspectRange(y,0x1000,16).history_dropped);
+   assert(preflight.Read().reclaimed_images==0); // inspection is not a fake reclaim
+   auto raced=preflight.Allocate(Domain::Range,0x80100,32);
+   bool deleted=false;
+--- a/gpu/shadps4/video_core/rasterizer_core_memory.cpp
++++ b/gpu/shadps4/video_core/rasterizer_core_memory.cpp
+@@ -43,6 +43,20 @@
+ 
+ namespace VideoCore {
+ 
++static void CaptureCommandLifetime(VAddr address,const void* data,u32 size,
++                                   const Buffer* buffer,u64 offset) {
++    if(size!=192)return;
++    const bool enabled=BbResourceLifetime::Enabled();
++    const auto span=enabled?BbResourceLifetime::Get().InspectRange({},address,size)
++                           :BbResourceLifetime::RangeInspection{};
++    const auto& tag=span.covering_owner;
++    FrameCapture::NativeCommandWrite(address,data,size,uintptr_t(buffer),
++        uintptr_t(buffer->buffer.native),offset,tag.generation);
++    FrameCapture::Native(std::format("{{\"op\":\"command_allocation\",\"address\":{},\"size\":192,\"tracker_enabled\":{},\"allocation_address\":{},\"allocation_bytes\":{},\"generation\":{},\"domain\":{},\"range_live_overlaps\":{},\"heap_live_overlaps\":{},\"overlap_truncated\":{},\"history_dropped\":{}}}",
++        address,enabled,tag.address,tag.size,tag.generation,unsigned(tag.domain),
++        span.overlaps[0],span.overlaps[1],span.truncated,span.history_dropped));
++}
++
+ bool RasterizerCore::WriteGuestMemory(VAddr address, const void* data, u32 size) {
+     if (!VideoCore::GuestInPlace() || size == 0 || (address | size) % 4 != 0) {
+         return false;
+@@ -51,9 +65,7 @@
+     if (!buffer_cache.IsInPlace(address, size)) {
+         return false;
+     }
+-    if(FrameCapture::NativeRecording())FrameCapture::NativeCommandWrite(address,data,size,
+-        uintptr_t(buffer),uintptr_t(buffer->buffer.native),offset,
+-        BbResourceLifetime::Enabled()?BbResourceLifetime::Get().Owner(address,size).generation:0);
++    if(FrameCapture::NativeRecording())CaptureCommandLifetime(address,data,size,buffer,offset);
+     backend.UpdateBuffer(buffer, offset, {static_cast<const u8*>(data), size});
+     return true;
+ }
+@@ -76,9 +88,7 @@
+     if (mirror) {
+         backend.UpdateBuffer(mirror->first, mirror->second, {static_cast<const u8*>(data), size});
+     }
+-    if(FrameCapture::NativeRecording())FrameCapture::NativeCommandWrite(address,data,size,
+-        uintptr_t(target->first),uintptr_t(target->first->buffer.native),target->second,
+-        BbResourceLifetime::Enabled()?BbResourceLifetime::Get().Owner(address,size).generation:0);
++    if(FrameCapture::NativeRecording())CaptureCommandLifetime(address,data,size,target->first,target->second);
+     backend.UpdateBuffer(target->first, target->second, {static_cast<const u8*>(data), size});
+     if (size <= sizeof(u64) && HonestLabels()) {
+         u64 value = 0;

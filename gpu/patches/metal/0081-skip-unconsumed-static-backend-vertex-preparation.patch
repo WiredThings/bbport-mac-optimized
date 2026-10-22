@@ -1,0 +1,49 @@
+--- a/gpu/shadps4/video_core/pipeline_cache_core.h
++++ b/gpu/shadps4/video_core/pipeline_cache_core.h
+@@ -164,6 +164,12 @@
+     static std::string GetShaderName(Shader::HwStage stage, u64 hash,
+                                      std::optional<size_t> perm = {});
+ 
++    /// Prepared dynamic vertex inputs are consumed only by a dynamic-input backend.
++    /// Static-input backends (including Metal) bind the ordered packet's V# snapshot.
++    [[nodiscard]] bool UsesDynamicVertexInputs() const noexcept {
++        return caps.vertex_input_dynamic_state;
++    }
++
+     auto& GetProfile() const {
+         return profile;
+     }
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.cpp
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.cpp
+@@ -490,7 +490,9 @@
+                     }
+                     draw.vertex.valid = false;
+                     const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
+-                    if (vs && sel.fetch_shader) {
++                    // The consumer rejects these arrays for static-input backends. Avoid
++                    // raw descriptor rereads, sorting, hashing and arena copies it cannot use.
++                    if (pipeline_cache.UsesDynamicVertexInputs() && vs && sel.fetch_shader) {
+                         PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
+                     }
+                     draw.state.store(PreparedDraw::Ready, std::memory_order_release);
+--- a/tests/test_speculative_descriptor.cpp
++++ b/tests/test_speculative_descriptor.cpp
+@@ -47,7 +47,9 @@
+ public:
+     explicit TestCache(bool dynamic_vertex = false)
+         : PipelineCacheCore(nullptr, {}, {.vertex_input_dynamic_state = dynamic_vertex},
+-                            16, "descriptor-test") {}
++                            16, "descriptor-test") {
++        assert(UsesDynamicVertexInputs() == dynamic_vertex);
++    }
+ private:
+     VideoCore::ShaderModuleHandle CreateShaderModule(std::span<const u32>, std::string_view, bool) override { std::abort(); }
+     void DestroyShaderModule(VideoCore::ShaderModuleHandle) override { std::abort(); }
+@@ -69,6 +71,7 @@
+     using namespace Shader;
+     using namespace VideoCore;
+     TestCache cache;
++    assert(!cache.UsesDynamicVertexInputs());
+     Info info{};
+     info.sw_stage = SwStage::Vertex;
+     info.pgm_hash = 0x135;

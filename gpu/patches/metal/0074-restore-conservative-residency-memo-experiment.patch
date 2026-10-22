@@ -1,0 +1,193 @@
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -298,6 +298,10 @@
+ endif()
+ 
+ # Explicit test targets; neither launches the game nor needs a Vulkan device.
++add_executable(residency-use-memo-test EXCLUDE_FROM_ALL ../tests/test_residency_use_memo.cpp)
++target_compile_options(residency-use-memo-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(residency-use-memo-test PRIVATE shadps4)
++
+ add_executable(copy-ring-scope-test EXCLUDE_FROM_ALL ../tests/test_copy_ring_scope.cpp)
+ add_executable(fragment-access-guard-test EXCLUDE_FROM_ALL ../tests/test_fragment_access_guard.cpp)
+ target_compile_options(fragment-access-guard-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
+@@ -23,6 +23,7 @@
+ #include "video_core/buffer_cache/bda_page_table.h"
+ #include "video_core/buffer_cache/fault_manager.h"
+ #include "video_core/buffer_cache/range_set.h"
++#include "video_core/buffer_cache/residency_use_memo.h"
+ #include "video_core/cache_backend.h"
+ 
+ namespace AmdGpu {
+@@ -595,6 +596,7 @@
+     /// go back to the driver (ProcessIdleBlocks). Blocks of unmapped memory leave VRAM too.
+     static constexpr u64 USE_GROUP_BITS = 21;
+     std::vector<u32> group_use;
++    ResidencyUseMemo residency_use_memo; ///< same recording-thread ownership as group_use
+     /// Groups with blocks moved in place for idleness, and those blocks: bound again, they get a
+     /// VRAM copy again (QueuePromotions). Else the GPU kept reading them over PCIe (FPS 90 -> 55).
+     std::vector<u8> group_demoted;
+--- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
++++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
+@@ -24,6 +24,8 @@
+ #include "video_core/amdgpu/liverpool.h"
+ #include "video_core/buffer_cache/buffer.h"
+ #include "video_core/buffer_cache/buffer_cache.h"
++#include "video_core/frame_capture.h"
++#include <format>
+ #include "video_core/buffer_cache/guest_read_gather.h"
+ #include "video_core/buffer_cache/memory_tracker.h"
+ #include "video_core/cache_backend.h"
+@@ -450,6 +452,7 @@
+     blocks_per_arena_page = ARENA_PAGE_SIZE / block_size;
+     blocks_per_arena_page_shift = ARENA_PAGE_BITS - block_shift;
+     BbLayer::GpuMemory::Get().SetBlockShift(static_cast<u32>(block_shift));
++    residency_use_memo.Invalidate();
+     group_use.assign(u64{1} << (ADDRESS_SPACE_BITS - USE_GROUP_BITS), 0);
+     group_demoted.assign(group_use.size(), 0);
+     layer_group_use.assign(group_use.size(), 0);
+@@ -1657,7 +1660,37 @@
+ void BufferCache::NoteUse(VAddr address, u64 size) {
+     const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
+     const u64 last = std::min<u64>((address + size - 1) >> USE_GROUP_BITS, group_use.size() - 1);
+-    for (u64 group = address >> USE_GROUP_BITS; group <= last; ++group) {
++    const u64 first_group = address >> USE_GROUP_BITS;
++    static const bool enabled = [] {
++        const char* env = std::getenv("BB_LAYER_USE_CACHE");
++        return env && env[0] == '1';
++    }();
++    const bool large = first_group <= last && last - first_group >= 8;
++    const u64 memo_epoch = enabled ? residency_use_memo.BeginSecond(now) : 0;
++    if (enabled) {
++        // Advance on every call, including small bindings and backwards clock steps.
++        if (large) {
++            const bool hit = residency_use_memo.Seen(first_group, last);
++            if (FrameCapture::NativeRecording()) {
++                FrameCapture::Native(std::format(
++                    "{{\"op\":\"residency_use_memo\",\"address\":{},\"size\":{},"
++                    "\"first_group\":{},\"last_group\":{},\"second\":{},\"hit\":{}}}",
++                    address, size, first_group, last, now, hit));
++            }
++            if (hit) {
++                // One lightweight startup breadcrumb avoids enabling full resource capture
++                // just to confirm this CPU-only fast path is exercised.
++                static thread_local bool reported = false;
++                if (!reported) {
++                    reported = true;
++                    std::printf("GPU: conservative residency-use memo hit groups %llu..%llu (full range retained)\n",
++                        (unsigned long long)first_group, (unsigned long long)last);
++                }
++                return;
++            }
++        }
++    }
++    for (u64 group = first_group; group <= last; ++group) {
+         if (group_use[group] != now) {
+             group_use[group] = now;
+         }
+@@ -1671,6 +1704,7 @@
+             idle_demoted.Subtract(first, end);
+         }
+     }
++    if (enabled && large) residency_use_memo.Record(first_group, last, memo_epoch);
+ }
+ 
+ void BufferCache::ReleaseResidencySlot(ArenaMemory memory, u64 offset) {
+@@ -2022,6 +2056,8 @@
+         memory_tracker->MarkRegionAsCpuModified(address, block_size);
+         if (idle) {
+             BbStats::vram_idle_bytes.fetch_add(block_size, std::memory_order_relaxed);
++            // An identical later NoteUse must clear this new demotion and promote it.
++            residency_use_memo.Invalidate();
+             idle_demoted.Add({block, block + 1});
+             group_demoted[address >> USE_GROUP_BITS] = 1;
+         }
+--- /dev/null
++++ b/gpu/shadps4/video_core/buffer_cache/residency_use_memo.h
+@@ -0,0 +1,50 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <array>
++#include <cstdint>
++
++namespace VideoCore {
++// Recording-thread metadata only, like group_use/group_demoted. This memo never
++// changes ranges or timestamps. Record only after the complete legacy operation;
++// Invalidate whenever a demotion adds side effects that must be replayed.
++class ResidencyUseMemo {
++public:
++    explicit ResidencyUseMemo(std::uint64_t initial_epoch = 1) : epoch{initial_epoch} {}
++    std::uint64_t BeginSecond(std::uint32_t now) {
++        if (!has_second || second != now) {
++            Invalidate();
++            second = now;
++            has_second = true;
++        }
++        return epoch;
++    }
++    std::uint64_t Generation() const { return epoch; }
++    void Invalidate() {
++        if (++epoch == 0) {
++            epoch = 1;
++            for (auto& entry : entries) entry.valid = false;
++        }
++    }
++    bool Seen(std::uint64_t first, std::uint64_t last) const {
++        const auto& entry = entries[Slot(first, last)];
++        return entry.valid && entry.epoch == epoch && entry.first == first && entry.last == last;
++    }
++    void Record(std::uint64_t first, std::uint64_t last, std::uint64_t completed_epoch) {
++        // Do not memoize work whose operation observed an intervening invalidation.
++        if (completed_epoch != epoch) return;
++        entries[Slot(first, last)] = {first, last, epoch, true};
++    }
++private:
++    static std::size_t Slot(std::uint64_t first, std::uint64_t last) {
++        return ((first * 0x9e3779b97f4a7c15ull) ^ (last * 0xd6e8feb86659fd93ull)) >> 59;
++    }
++    struct Entry {
++        std::uint64_t first = 0, last = 0, epoch = 0;
++        bool valid = false;
++    };
++    std::array<Entry, 32> entries{};
++    std::uint64_t epoch = 1;
++    std::uint32_t second = 0;
++    bool has_second = false;
++};
++} // namespace VideoCore
+--- /dev/null
++++ b/tests/test_residency_use_memo.cpp
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "video_core/buffer_cache/residency_use_memo.h"
++#include <cassert>
++#include <cstdio>
++#include <limits>
++#include <random>
++#include <set>
++using VideoCore::ResidencyUseMemo;
++int main() {
++    static_assert(sizeof(ResidencyUseMemo) <= 1200);
++    ResidencyUseMemo memo;memo.BeginSecond(10);assert(!memo.Seen(1,1000));
++    memo.Record(1,1000,memo.Generation());assert(memo.Seen(1,1000));
++    assert(!memo.Seen(1,999) && !memo.Seen(2,1000));
++    memo.BeginSecond(10);assert(memo.Seen(1,1000));
++    memo.Invalidate();assert(!memo.Seen(1,1000));
++    memo.Record(1,1000,memo.Generation());memo.BeginSecond(11);assert(!memo.Seen(1,1000));
++    memo.Record(1,1000,memo.Generation());memo.BeginSecond(10);assert(!memo.Seen(1,1000));
++    auto stale=memo.BeginSecond(12);memo.Invalidate();memo.Record(5,500,stale);assert(!memo.Seen(5,500));
++    // Cache collisions may miss, but can never claim another range is recorded.
++    std::mt19937_64 random(64);std::set<std::pair<uint64_t,uint64_t>> known;
++    for(unsigned n=0;n<100000;++n){
++        if(n%137==0){memo.Invalidate();known.clear();}
++        auto key=std::pair{random()%10000,random()%10000};if(key.first>key.second)std::swap(key.first,key.second);
++        if(memo.Seen(key.first,key.second))assert(known.contains(key));
++        memo.Record(key.first,key.second,memo.Generation());known.insert(key);assert(memo.Seen(key.first,key.second));
++    }
++    ResidencyUseMemo wrap(std::numeric_limits<uint64_t>::max()-1);
++    wrap.BeginSecond(1);wrap.Record(0,100,wrap.Generation());assert(wrap.Seen(0,100));
++    wrap.Invalidate();assert(!wrap.Seen(0,100));wrap.Record(0,100,wrap.Generation());assert(wrap.Seen(0,100));
++    std::printf("residency use memo: time, rollback, demotion, collisions, wrap and 100000 randomized operations passed; bytes=%zu\n",sizeof(memo));
++}

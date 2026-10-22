@@ -1,6 +1,6 @@
-# Metal optimization controls — 0.2.35
+# Metal optimization controls
 
-The launcher exposes 25 runtime controls under **Advanced → Metal optimizations**, in English,
+The 0.2.48 launcher exposes 33 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. The displayed badges are **Verified**,
 **Experimental**, **Adopted bundle**, and **Higher memory use**; stored/source keys may retain
 older badge wording for localization compatibility. Existing object-motion and occlusion controls stay
@@ -8,7 +8,7 @@ in their current sections. No resolution, effects, save state or cache capacity 
 
 ## Defaults and evidence
 
-The 20 already adopted controls retain their current ON defaults. A missing preference uses
+The 20 previously adopted controls retain their ON defaults; consumed-clear continuation adds one default-ON control. Six restored alternatives and the heap-history candidate add default-OFF experimental controls (21 ON / 12 OFF total). Included in 0.2.48. A missing preference uses
 the current runtime default; existing explicit preferences remain authoritative.
 
 - The two-level address table, direct scene-copy clear and idle/startup object reclamation
@@ -19,7 +19,7 @@ the current runtime default; existing explicit preferences remain authoritative.
 - The ten accepted clear/copy/staging/residency/tiling/barrier/query controls are marked
   **Adopted bundle**. Their ON defaults preserve the owner's previous choice
   and accepted bundle memory tradeoff; the badge does not claim an isolated gain per flag.
-- Five optional experiments remain OFF: same-packet cross-chunk snapshot reuse,
+- The five existing optional experiments remain OFF: same-packet cross-chunk snapshot reuse,
   fragment-parameter specialization, inline small writes,
   relaxed fragment/compute math and binary pipeline persistence. Notes describe uncertain
   benefit, possible numeric changes and the observed memory costs. Binary persistence has a
@@ -35,6 +35,41 @@ developer environment entries are imported once when no optimization dictionary 
 Thereafter visible controls override matching developer entries; old file-based A/B selectors
 are excluded so they cannot silently override checkboxes. Vulkan receives none of the managed
 Metal flags. Reset affects this section's controls only; game quality and saves are retained.
+
+## Restored experimental alternatives (2026-10-22)
+
+A neutral or slower M4 result does not establish that a method is useless on another GPU,
+CPU bottleneck or workload. These six candidates are retained as **Experimental**, OFF by
+default. The three removed implementations were restored as patches 0074–0076, rebased after
+0071/0073 rather than replacing their synchronization and query-write fixes.
+
+| Control | Prior evidence and effective dependencies |
+| --- | --- |
+| `BB_MTL_NATIVE_CLEAR_BATCH` | Exact-pixel clear checks passed; ABBA/BAAB pooled FPS −0.06%, no established saving. Requires color-clear batching. |
+| `BB_MTL_MERGE_OVERLAY` | 114,688 pixel bytes matched; one M4 ABBA −1.38% with a higher measured footprint. No additional texture allocation; memory benefit unproven. |
+| `BB_MTL_FILL_UPDATES` | Preserves all writes using native repeated-byte fill; M4 ABBA −1.25%. This path takes priority for eligible repeated-byte payloads. |
+| `BB_LAYER_USE_CACHE` | Full-range bookkeeping memo; randomized/differential tests passed, M4 −3.34%. 1,040-byte CPU memo, unchanged resource budgets and write clocks. |
+| `BB_MTL_COPY_PAIR` | 112 GPU configurations passed; M4 −1.00%. Only the second store to the same resolved physical pointer is omitted; distinct pointers retain both. |
+| `BB_MTL_RENDER_UPDATES` | Runtime pixel/ordering/conflict tests passed; M4 −8.63%. Requires inline updates; unknown fragment/alias cases retain the original fallback. A small lazy host pipeline and bounded CPU metadata are added when enabled. |
+
+The latter three results are historical comparisons, not new performance results for the
+restored combination. Do not attribute a combined test's FPS to an individual option. No
+resolution, effects, texture quality, cache capacity or retirement deadline is reduced.
+The notes retain measured slowdowns and memory uncertainty instead of promising a benefit.
+
+`BB_MTL_CONTINUE_CLEARS` exposes the already retained consumed-clear continuation (0071),
+ON by default, with attachment/layout/feedback guards. One matched chalice ABBA measured
+about +2%; it does not eliminate any of the 35 parameter writes per frame. Query-write epoch
+fix 0073 stays enabled independently, including when users toggle snapshot reuse.
+
+The rejected alias/write-clock narrowing, precheck-only upload deletion, historical
+GpuModified clearing and first-fault-only upload masks have concrete correctness counterexamples.
+They are not offered as optimization checkboxes. Released-storage retirement 0052 remains a
+development-only candidate until actual admission/alias/lifecycle proof is complete. The
+host-fragment fence prototype recorded no eligible waits in the measured native scene and
+lacks complete handoff validation; it is not exposed. Diagnostic capture controls do not
+become performance options. The separately owner-removed offline-library experiment stays
+removed; restoring it was not part of this inventory.
 
 ## Binary archive OFF now means no disk use
 
@@ -125,3 +160,13 @@ The new files are `pipelines-v2.binaryarchive` / `pipelines-relaxed-math-v2.bina
 The old files remain in place and may supply first-upgrade lookup hits; no cache clearing is
 required. Existing SPIR-V/MSL file formats, capacity and paths are unchanged. This repair
 addresses archive persistence, not a claimed gameplay FPS gain.
+
+## Same-capacity heap history candidate (0078, validation in progress)
+
+`BB_LIFETIME_HEAP_HISTORY_PRIORITY` is exposed as **Preserve heap release history**,
+Experimental and OFF by default. It prioritizes heap release evidence over transient Range
+history while retaining the same 32,768-record total limit. It does not change cache capacity,
+resource roles, GPU completion, mapping/alias checks or release authorization. Native tests
+reproduce the original history displacement and retain reuse/overlap rejection; five actual
+runtime/Metal cases pass. Paired map travel and clean ABBA are pending, so no memory or FPS
+benefit is claimed. The installed application has not been replaced.

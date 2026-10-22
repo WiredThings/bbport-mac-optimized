@@ -1,0 +1,255 @@
+diff --git a/gpu/shadps4/core/libraries/videoout/driver.cpp b/gpu/shadps4/core/libraries/videoout/driver.cpp
+--- a/gpu/shadps4/core/libraries/videoout/driver.cpp
++++ b/gpu/shadps4/core/libraries/videoout/driver.cpp
+@@ -403,11 +403,17 @@
+     static const bool frame_stats = EmulatorSettingsImpl::Flag("BB_FRAME_STATS", false);
+     // Opt-in lightweight benchmark telemetry: leave all BB_FRAME_STATS timers disabled.
+     static const bool log_only=EmulatorSettingsImpl::Flag("BB_FRAME_LOG_ONLY",false);
++    // Read existing cumulative counters; do not enable the per-operation stats timers.
++    static const bool timing_only=EmulatorSettingsImpl::Flag("BB_FRAME_TIMING",false);
+     if(log_only && !frame_stats) {
+         using Clock=std::chrono::steady_clock;
+         static FILE* const file=[] {
+             const char* path=std::getenv("BB_FRAME_LOG");FILE* f=path&&*path?std::fopen(path,"w"):nullptr;
+-            if(f)std::fprintf(f,"t_s,frame_ms,draws,dispatches,compiles,cam_x,cam_y,cam_z,gpu_ms\n");
++            if(f) {
++                std::fprintf(f,"t_s,frame_ms,draws,dispatches,compiles,cam_x,cam_y,cam_z,gpu_ms");
++                if(timing_only)std::fprintf(f,",rec_busy_ms,gpu_wait_ms,replay_wait_ms,present_wait_ms,gnm_wait_ms,submit_age_ms,ready_age_ms,guest_age_ms,find_images");
++                std::fputc('\n',f);
++            }
+             return f;
+         }();
+         if(file) {
+@@ -421,12 +427,33 @@
+                 for(unsigned i=0;i<3;++i){const auto bits=BbStats::camera_position_bits[i].load(std::memory_order_relaxed);std::memcpy(p+i,&bits,4);}
+                 std::snprintf(camera,sizeof(camera),"%.3f,%.3f,%.3f",p[0],p[1],p[2]);
+             }
+-            std::fprintf(file,"%.4f,%.2f,%llu,%llu,%llu,%s,%.2f\n",
++            std::fprintf(file,"%.4f,%.2f,%llu,%llu,%llu,%s,%.2f",
+                 std::chrono::duration<double>(now-start).count(),std::chrono::duration<double,std::milli>(now-last).count(),
+                 (unsigned long long)delta(BbStats::draws.load(std::memory_order_relaxed),last_draws),
+                 (unsigned long long)delta(BbStats::dispatches.load(std::memory_order_relaxed),last_dispatches),
+                 (unsigned long long)delta(Vulkan::g_bb_compiles.load(std::memory_order_relaxed),last_compiles),camera,
+                 delta(BbStats::gpu_busy_ns.load(std::memory_order_relaxed),last_gpu)/1e6);
++            if(timing_only) {
++                static u64 old_tsc=0,old_cycles=0,old_wait=0,old_replay=0,old_present=0,old_gnm=0,old_find=0;
++                const u64 tsc=__rdtsc();
++                const double elapsed_ms=std::chrono::duration<double,std::milli>(now-last).count();
++                const double tsc_per_ms=old_tsc && elapsed_ms>0 ? (tsc-old_tsc)/elapsed_ms : 0;
++                old_tsc=tsc;
++                const auto cycles=delta(BbStats::rec_busy_cycles.load(std::memory_order_relaxed),old_cycles);
++                const s64 now_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
++                const s64 guest=BbStats::guest_flip_call_ns.load(std::memory_order_relaxed);
++                std::fprintf(file,",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llu",
++                    tsc_per_ms>0 ? cycles/tsc_per_ms : 0,
++                    delta(BbStats::rec_gpu_wait_ns.load(std::memory_order_relaxed),old_wait)/1e6,
++                    delta(BbStats::rec_replay_wait_ns.load(std::memory_order_relaxed),old_replay)/1e6,
++                    delta(BbStats::present_wait_ns.load(std::memory_order_relaxed),old_present)/1e6,
++                    delta(BbStats::gnm_frame_wait_ns.load(std::memory_order_relaxed),old_gnm)/1e6,
++                    req.submit_ns ? (now_ns-req.submit_ns)/1e6 : 0,
++                    req.ready_ns ? (now_ns-req.ready_ns)/1e6 : 0,
++                    guest ? (now_ns-guest)/1e6 : 0,
++                    (unsigned long long)delta(BbStats::find_image_calls.load(std::memory_order_relaxed),old_find));
++            }
++            std::fputc('\n',file);
+             last=now;static unsigned pending=0;if(++pending>=120){std::fflush(file);pending=0;}
+         }
+     }
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -8,6 +8,8 @@
+ #include "video_core/frame_capture.h"
+ 
+ #include "bbport_toggles.h"
++#include "bbport_submit_timing.h"
++#import <QuartzCore/CABase.h>
+ #include "bbport_flush_reason.h"
+ #include "common/assert.h"
+ #include "common/logging/log.h"
+@@ -1066,12 +1068,19 @@
+         id<MTLCommandBuffer> cmdbuf = impl->EnsureCommandBuffer();
+         [cmdbuf encodeSignalEvent:impl->event value:tick];
+         NSString* label = cmdbuf.label;
++        const unsigned timing_frame=BbStats::frame_number.load(std::memory_order_relaxed);
++        const unsigned timing_index=BbSubmitTiming::Begin(timing_frame);
++        const double timing_commit=timing_index<BbSubmitTiming::Capacity ? CACurrentMediaTime() : 0;
++        const auto timing_queue=reinterpret_cast<std::uintptr_t>(this);
+         handlers_in_flight.fetch_add(1, std::memory_order_acq_rel);
+         [cmdbuf addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+             if (completed.status == MTLCommandBufferStatusError) {
+                 ReportFailure(tick, label.UTF8String, DescribeError(completed.error));
+             }
+             BbStats::NoteGpuInterval(completed.GPUStartTime, completed.GPUEndTime);
++            BbSubmitTiming::Complete(timing_index,{timing_queue,tick,timing_frame,0,timing_commit,
++                                                  completed.GPUStartTime,completed.GPUEndTime,
++                                                  timing_index<BbSubmitTiming::Capacity ? CACurrentMediaTime() : 0});
+             AdvanceTo(retired_tick, tick);
+             handlers_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+         }];
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm b/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_presenter.mm
+@@ -17,6 +17,7 @@
+ #include "core/emulator_settings.h"
+ #include "bbport_game_menu.h"
+ #include "bbport_toggles.h"
++#include "bbport_submit_timing.h"
+ #include "bbport_flush_reason.h"
+ #include "sdl_window.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+@@ -709,12 +710,19 @@
+                 frame_stats->OnPresented(presented.presentedTime, is_interpolated, latency_start);
+             }];
+             presents_in_flight.fetch_add(1, std::memory_order_acq_rel);
++            const unsigned timing_frame=BbStats::frame_number.load(std::memory_order_relaxed);
++            const unsigned timing_index=BbSubmitTiming::Begin(timing_frame);
++            const double timing_commit=timing_index<BbSubmitTiming::Capacity ? CACurrentMediaTime() : 0;
++            const auto timing_queue=reinterpret_cast<std::uintptr_t>(this);
+             [cmdbuf addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                 if (completed.status == MTLCommandBufferStatusError) {
+                     LOG_ERROR(Render, "Metal present command buffer failed: {}",
+                               ErrorText(completed.error));
+                 }
+                 BbStats::NoteGpuInterval(completed.GPUStartTime, completed.GPUEndTime);
++                BbSubmitTiming::Complete(timing_index,{timing_queue,tick,timing_frame,1,timing_commit,
++                                                      completed.GPUStartTime,completed.GPUEndTime,
++                                                      timing_index<BbSubmitTiming::Capacity ? CACurrentMediaTime() : 0});
+                 if (pending->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                     release_frame();
+                 }
+diff --git a/gpu/CMakeLists.txt b/gpu/CMakeLists.txt
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -788,6 +788,10 @@
+     ../tests/test_guest_resource_lifetime.cpp shim/bbport_resource_lifetime.cpp)
+ target_compile_options(guest-resource-lifetime-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+ target_include_directories(guest-resource-lifetime-test PRIVATE shim)
++
++add_executable(submit-timing-test EXCLUDE_FROM_ALL ../tests/test_submit_timing.cpp)
++target_compile_options(submit-timing-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
++target_include_directories(submit-timing-test PRIVATE shim)
+ if(APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+     enable_language(ASM)
+     add_executable(guest-resource-hooks-test EXCLUDE_FROM_ALL
+diff --git a/gpu/shim/bbport_submit_timing.h b/gpu/shim/bbport_submit_timing.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/shim/bbport_submit_timing.h
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <memory>
++#include <string>
++#include <unistd.h>
++
++namespace BbSubmitTiming {
++// Private, bounded metadata only. Never enabled by a normal launch. All timestamps use
++// CACurrentMediaTime / MTLCommandBuffer GPU time (seconds), not translated x86 TSC values.
++constexpr unsigned Capacity = 2048;
++struct Entry {
++    std::uint64_t queue, tick;
++    unsigned frame, role;
++    double commit, start, end, callback;
++};
++struct State {
++    const char* path = std::getenv("BB_MTL_SUBMIT_AUDIT");
++    const char* trigger = std::getenv("BB_MTL_SUBMIT_TRIGGER");
++    std::unique_ptr<std::array<Entry, Capacity>> entries = path && trigger
++        ? std::make_unique<std::array<Entry, Capacity>>() : nullptr;
++    std::atomic<bool> active{false};
++    std::atomic<unsigned> issued{0}, completed{0};
++    // Only the first caller for a frame polls the trigger, across both queue roles.
++    std::atomic<unsigned> checked_frame{~0u};
++};
++inline State& Get() { static State s; return s; }
++inline unsigned Begin(unsigned frame) {
++    auto& s = Get();
++    if (!s.entries) return Capacity;
++    if (!s.active.load(std::memory_order_acquire)) {
++        if (s.checked_frame.exchange(frame, std::memory_order_relaxed) == frame ||
++            access(s.trigger, F_OK) != 0) return Capacity;
++        s.active.store(true, std::memory_order_release);
++    }
++    // Saturate; diagnostics cannot overflow a counter during a long session.
++    unsigned i=s.issued.load(std::memory_order_relaxed);
++    while(i<Capacity && !s.issued.compare_exchange_weak(i,i+1,std::memory_order_relaxed)) {}
++    return i;
++}
++inline void Complete(unsigned index, const Entry& entry) {
++    if (index>=Capacity) return;
++    auto& s=Get();
++    (*s.entries)[index]=entry;
++    // The release sequence publishes every completed slot before the final writer reads it.
++    if(s.completed.fetch_add(1,std::memory_order_acq_rel)+1 != Capacity) return;
++    const std::string pending=std::string{s.path}+".tmp";
++    if(FILE* f=std::fopen(pending.c_str(),"w")) {
++        std::fprintf(f,"queue,tick,frame,role,commit_s,start_s,end_s,callback_s\n");
++        for(const auto& e:*s.entries)
++            std::fprintf(f,"%llu,%llu,%u,%u,%.9f,%.9f,%.9f,%.9f\n",
++                (unsigned long long)e.queue,(unsigned long long)e.tick,e.frame,e.role,e.commit,e.start,e.end,e.callback);
++        if(std::fclose(f)==0)std::rename(pending.c_str(),s.path);
++    }
++}
++} // namespace BbSubmitTiming
+diff --git a/tests/test_submit_timing.cpp b/tests/test_submit_timing.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/test_submit_timing.cpp
+@@ -0,0 +1,50 @@
++#include "bbport_submit_timing.h"
++#include "bbport_toggles.h"
++#include <cassert>
++#include <filesystem>
++#include <fstream>
++#include <thread>
++#include <vector>
++
++int main(int argc, char**) {
++    using namespace BbSubmitTiming;
++    if (argc==1) {
++        assert(Begin(1)==Capacity && !Get().entries);
++        // Actual legacy counter: a later-ended callback arriving first hides earlier work.
++        BbStats::NoteGpuInterval(20,25);
++        BbStats::NoteGpuInterval(10,21);
++        assert(BbStats::gpu_busy_ns.load()==5000000000ULL); // true interval union is 15 s
++        puts("disabled recorder allocates nothing; legacy out-of-order undercount reproduced");
++        return 0;
++    }
++    char temp[]="/private/tmp/bb-submit-timing-XXXXXX";
++    const auto* dir=mkdtemp(temp);assert(dir);
++    const std::filesystem::path root=dir, out=root/"trace.csv", trigger=root/"trigger";
++    setenv("BB_MTL_SUBMIT_AUDIT",out.c_str(),1);setenv("BB_MTL_SUBMIT_TRIGGER",trigger.c_str(),1);
++    assert(Begin(1)==Capacity && !Get().active);
++    { std::ofstream file{trigger};file<<1; }
++    std::vector<std::jthread> threads;
++    for(unsigned t=0;t<8;++t)threads.emplace_back([t] {
++        for(unsigned frame=2;frame<1026;++frame) {
++            const unsigned i=Begin(frame);if(i>=Capacity)continue;
++            if((i&7)==0)std::this_thread::yield();
++            Complete(i,{t,i,frame,t&1,1.+i,1.1+i,1.2+i,1.3+i});
++        }
++    });
++    threads.clear();
++    assert(Get().issued==Capacity && Get().completed==Capacity && Begin(1027)==Capacity);
++    assert(sizeof(std::array<Entry,Capacity>)<=128*1024);
++    std::ifstream file{out};std::string line;unsigned lines=0;
++    std::vector<bool> seen(Capacity,false);
++    while(std::getline(file,line)) {
++        if(lines++) {
++            unsigned long long queue,tick;unsigned frame,role;double commit,start,end,callback;
++            assert(std::sscanf(line.c_str(),"%llu,%llu,%u,%u,%lf,%lf,%lf,%lf",&queue,&tick,&frame,&role,&commit,&start,&end,&callback)==8);
++            assert(tick<Capacity && !seen[tick]);seen[tick]=true;
++            assert(commit<start && start<end && end<callback);
++        }
++    }
++    assert(lines==Capacity+1 && !std::filesystem::exists(out.string()+".tmp"));
++    std::filesystem::remove_all(root);
++    puts("concurrent completion: 2048 unique records, atomic publication and capacity saturation passed");
++}

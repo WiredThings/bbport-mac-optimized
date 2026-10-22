@@ -46,16 +46,24 @@ def summarize(path):
                 swap_growth_mib=swaps[-1]-swaps[0],swap_peak_growth_mib=max(swaps)-swaps[0],
                 score_swap_growth_mib=samples[-1]['pressure']['swap_mib']-samples[0]['pressure']['swap_mib'],
                 renderer=r['renderer_sha256'],probe=r['probe_sha256'],guard=r['guard_policy'],
-                fingerprint=r['cohort_fingerprint'],variants=r['variants'])
+                fingerprint=r['cohort_fingerprint'],variants=r['variants'],
+                visual_observation=r.get('visual_observation','unverified'))
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace',type=Path,required=True);p.add_argument('--app',type=Path,required=True)
     p.add_argument('--name',required=True)
     p.add_argument('--order',choices=('ABBA','BAAB'),default='ABBA')
-    p.add_argument('--candidate',action='append',choices=sorted(b.OVERRIDES-b.DIAGNOSTIC_OVERRIDES),help='Toggle only these flags; default is the accepted nine-flag bundle')
+    p.add_argument('--max-swap-growth-mib',type=int,default=b.DEFAULT_SWAP_GROWTH_MIB)
+    p.add_argument('--max-swap-total-mib',type=int,default=b.DEFAULT_SWAP_TOTAL_MIB)
+    p.add_argument('--swap-rapid-window-seconds',type=int,choices=(6,30),default=6)
+    p.add_argument('--stop-at',type=b.authorization_deadline,help='ISO-8601 test authorization deadline with timezone')
+    p.add_argument('--visual-observation',choices=('absent','unverified'),default='unverified',help='Operator declaration, forwarded unchanged to all A/B scoring windows; absent requires no visual capture/observation throughout the suite')
+    p.add_argument('--candidate',action='append',choices=sorted(b.OVERRIDES-b.DIAGNOSTIC_OVERRIDES-{'BB_FRAME_TIMING'}),help='Toggle only these flags; default is the accepted nine-flag bundle')
     p.add_argument('--fixed-env',action='append',default=[],help='Keep an allowed non-diagnostic KEY=0/1 constant in both groups')
     args=p.parse_args()
+    if not (256<=args.max_swap_growth_mib<=b.DEFAULT_SWAP_GROWTH_MIB and 10240<=args.max_swap_total_mib<=32768):
+        p.error('Use swap growth256..12288MiB and absolute ceiling10240..32768MiB')
     candidates=tuple(args.candidate) if args.candidate else CANDIDATES
     if len(set(candidates))!=len(candidates):p.error('Duplicate candidate')
     try:fixed=fixed_overrides(args.fixed_env,candidates)
@@ -63,21 +71,27 @@ def main():
     if not re.fullmatch('[A-Za-z0-9_-]{1,36}',args.name):p.error('Use a short name')
     out=args.workspace/(args.name+'.json')
     if out.exists():raise ValueError('Refusing to overwrite an existing suite')
+    b.check_authorization_deadline(args.stop_at)
     baseline_swap=b.pressure()['swap_mib']
-    report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),fixed_variants=fixed,runs=[],
+    report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),fixed_variants=fixed,runs=[],visual_observation=args.visual_observation,visual_observation_source='operator-declaration',max_swap_growth_mib=args.max_swap_growth_mib,max_swap_total_mib=args.max_swap_total_mib,swap_rapid_window_seconds=args.swap_rapid_window_seconds,stop_at=args.stop_at,shared_swap_budget_baseline_mib=baseline_swap,
                 installed_app_changed=False,notes=[f'Same-binary {args.order}; A is selected-OFF, B is selected-ON; all other launch defaults retained.',
                 'Warning pressure is recorded, not excluded. No frames trimmed.',
+                'Visual observation state is an operator declaration; external recorders are not detected. Unverified suites cannot establish capture-free performance.',
                 'When several flags are selected, the combined result cannot attribute gains to each flag.'])
     b.write_json(out,report)
     try:
         counts={'a':0,'b':0}
         for group in args.order.lower():
             counts[group]+=1;label=group+str(counts[group]);value='0' if group=='a' else '1'
-            if b.pressure()['swap_mib']-baseline_swap>2048:raise RuntimeError('Suite total swap growth exceeded 2 GiB')
+            b.check_authorization_deadline(args.stop_at)
+            current=b.pressure()
+            b.MemoryGuard(baseline_swap,args.max_swap_growth_mib,args.max_swap_total_mib,args.swap_rapid_window_seconds).check(current,time.monotonic())
             name=args.name+'-'+label
             report.update(active=name);b.write_json(out,report)
             cmd=[sys.executable,str(Path(__file__).with_name('benchmark.py')),'run','--workspace',str(args.workspace),
-                 '--app',str(args.app),'--name',name,'--mute','--minimal-stats']
+                 '--app',str(args.app),'--name',name,'--mute','--minimal-stats','--visual-observation',args.visual_observation,
+                 '--max-swap-growth-mib',str(args.max_swap_growth_mib),'--max-swap-total-mib',str(args.max_swap_total_mib),'--swap-budget-baseline-mib',str(baseline_swap),'--swap-rapid-window-seconds',str(args.swap_rapid_window_seconds)]
+            if args.stop_at is not None:cmd+=['--stop-at',b.datetime.fromtimestamp(args.stop_at).astimezone().isoformat()]
             for key in candidates:cmd+=['--env',key+'='+value]
             for key,value_ in fixed.items():cmd+=['--env',key+'='+value_]
             if 'BB_MTL_FRAGMENT_UNIFORMS' not in candidates and 'BB_MTL_FRAGMENT_UNIFORMS' not in fixed:cmd+=['--env','BB_MTL_FRAGMENT_UNIFORMS=0']

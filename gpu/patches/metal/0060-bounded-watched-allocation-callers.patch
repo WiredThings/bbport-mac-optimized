@@ -1,0 +1,106 @@
+--- a/gpu/shim/bbport_guest_hooks.cpp
++++ b/gpu/shim/bbport_guest_hooks.cpp
+@@ -107,21 +107,45 @@
+         watch.address-address<=size-watch.size;
+ }
+ std::atomic<unsigned> heap_watch_records{0};
++struct HeapCallers {std::array<u64,4> addresses{};unsigned count{};};
++bool ReadHeapFrame(u64 address,std::array<u64,2>& values) {
++    iovec local{values.data(),sizeof(values)},remote{reinterpret_cast<void*>(address),sizeof(values)};
++    return process_vm_readv(getpid(),&local,1,&remote,1,0)==ssize_t(sizeof(values));
++}
++HeapCallers GatherHeapCallers(u64 frame,u64 expected,
++                              bool (*read)(u64,std::array<u64,2>&)=&ReadHeapFrame) {
++    HeapCallers result;
++    for(unsigned depth=0;depth<result.addresses.size();++depth) {
++        // At most four readable frame records; no raw dereference or stack scan.
++        // A missing/omitted frame pointer terminates the chain. The first return
++        // must match the compiler-provided direct caller before following links.
++        if(frame<4096 || (frame&7) || frame>~u64{0}-16)break;
++        std::array<u64,2> values{};
++        if(!read(frame,values) || !values[1] || (!depth && values[1]!=expected))break;
++        result.addresses[result.count++]=values[1];
++        if(values[0]<=frame || values[0]-frame>65536)break;
++        frame=values[0];
++    }
++    return result;
++}
+ void TraceWatchedHeap(const char* action,const char* kind,BbResourceLifetime::Tag tag,
+-                      u64 alignment,u64 caller,bool accepted=true) {
++                      u64 alignment,u64 caller,u64 frame,bool accepted=true) {
+     static const HeapWatch watch=[] {
+         const char* flag=std::getenv("BB_CAPTURE_NATIVE");
+         return ParseHeapWatch(std::getenv("BB_WATCH"),flag && flag[0]=='1');
+     }();
+     if(!CoversHeapWatch(watch,tag.address,tag.size))return;
+     if(heap_watch_records.fetch_add(1,std::memory_order_relaxed)>=16)return;
+-    // Metadata only: the original return address is supplied by the entry wrapper.
+-    // No guest stack walk or payload read. A relative offset is arithmetic only;
+-    // the offline ELF segment map must prove whether it belongs to executable code.
+-    std::printf("Watched heap: {\"action\":\"%s\",\"kind\":\"%s\",\"address\":%llu,\"bytes\":%llu,\"generation\":%llu,\"alignment\":%llu,\"caller\":%llu,\"image_base\":%llu,\"accepted\":%s}\n",
++    // Only the opted-in watched allocation reaches the bounded frame reader.
++    // Return addresses are metadata, not an interpretation of resource payloads;
++    // the offline ELF map still has to establish executable-code membership.
++    const auto callers=GatherHeapCallers(frame,caller);
++    std::printf("Watched heap: {\"action\":\"%s\",\"kind\":\"%s\",\"address\":%llu,\"bytes\":%llu,\"generation\":%llu,\"alignment\":%llu,\"caller\":%llu,\"image_base\":%llu,\"accepted\":%s,\"caller_chain\":[%llu,%llu,%llu,%llu],\"caller_count\":%u}\n",
+         action,kind,(unsigned long long)tag.address,(unsigned long long)tag.size,
+         (unsigned long long)tag.generation,(unsigned long long)alignment,
+-        (unsigned long long)caller,(unsigned long long)ImageBase,accepted?"true":"false");
++        (unsigned long long)caller,(unsigned long long)ImageBase,accepted?"true":"false",
++        (unsigned long long)callers.addresses[0],(unsigned long long)callers.addresses[1],
++        (unsigned long long)callers.addresses[2],(unsigned long long)callers.addresses[3],callers.count);
+ }
+ using ScopeQueryFn = int (*)(uintptr_t,int*,int*,uintptr_t*);
+ ScopeQueryFn scope_query=&runtime_memory_vma_info;
+@@ -301,7 +325,8 @@
+     if (!tag) tag={address,0,0,BbResourceLifetime::Domain::Heap};
+     original_heap_free(allocator,address);
+     const bool released=BbResourceLifetime::Get().Release(tag);
+-    TraceWatchedHeap("free","heap",tag,0,u64(__builtin_return_address(0)),released);
++    TraceWatchedHeap("free","heap",tag,0,u64(__builtin_return_address(0)),
++                     u64(__builtin_frame_address(0)),released);
+ }
+ u64 HeapPlainHook(u64 allocator,u64 size) {
+     const bool top=heap_alloc_depth++==0;
+@@ -309,7 +334,8 @@
+     --heap_alloc_depth;
+     if(top && address && GpuScope(address)) {
+         const auto tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
+-        TraceWatchedHeap("allocate","plain",tag,0,u64(__builtin_return_address(0)));
++        TraceWatchedHeap("allocate","plain",tag,0,u64(__builtin_return_address(0)),
++                         u64(__builtin_frame_address(0)));
+     }
+     return address;
+ }
+@@ -319,7 +345,8 @@
+     --heap_alloc_depth;
+     if(top && address && GpuScope(address)) {
+         const auto tag=BbResourceLifetime::Get().Allocate(BbResourceLifetime::Domain::Heap,address,size);
+-        TraceWatchedHeap("allocate","aligned",tag,alignment,u64(__builtin_return_address(0)));
++        TraceWatchedHeap("allocate","aligned",tag,alignment,u64(__builtin_return_address(0)),
++                         u64(__builtin_frame_address(0)));
+     }
+     return address;
+ }
+--- a/tests/test_guest_resource_hooks.cpp
++++ b/tests/test_guest_resource_hooks.cpp
+@@ -21,6 +21,19 @@
+   assert(CoversHeapWatch({0x300000,192},0x2ffff0,208));
+   assert(!CoversHeapWatch({0x300000,192},0x300001,256));
+   assert(!CoversHeapWatch({0x300000,192},0x300000,191));
++  alignas(16) u64 frames[8]{};
++  for(unsigned n=0;n<4;++n){frames[n*2]=n<3?u64(&frames[n*2+2]):0;frames[n*2+1]=100+n;}
++  auto callers=GatherHeapCallers(u64(frames),100);
++  assert(callers.count==4 && callers.addresses[0]==100 && callers.addresses[3]==103);
++  assert(!GatherHeapCallers(u64(frames),999).count);
++  assert(!GatherHeapCallers(0,100).count && !GatherHeapCallers(1,100).count);
++  assert(!GatherHeapCallers(~u64{0}-7,100).count);
++  frames[0]=u64(frames);assert(GatherHeapCallers(u64(frames),100).count==1);
++  frames[0]=u64(frames)+65544;assert(GatherHeapCallers(u64(frames),100).count==1);
++  const long page_size=sysconf(_SC_PAGESIZE);
++  void* unreadable=mmap(nullptr,page_size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
++  assert(unreadable!=MAP_FAILED && !GatherHeapCallers(u64(unreadable),100).count);
++  assert(munmap(unreadable,page_size)==0);
+   scope_query=&FakeScope;generation_query=&FakeGeneration;
+   assert(GpuScope(0x2000));const int before=scope_calls;
+   assert(GpuScope(0x2010) && scope_calls==before);

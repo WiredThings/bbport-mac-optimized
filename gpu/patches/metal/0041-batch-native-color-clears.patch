@@ -1,0 +1,107 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_runtime.mm
+@@ -2233,6 +2233,23 @@
+             if (rgb_guest) {
+                 color.alpha = 1.0;
+             }
++            // Native-resolution clears can use the same bounded queue as proxy clears.
++            // Transit/FlushBarriers above preserve the old native/proxy coherence. The queue
++            // rejects aliased/shared/mipped/MSAA targets and flushes before another consumer.
++            static const bool batch_native = [] {
++                const char* e=std::getenv("BB_MTL_NATIVE_CLEAR_BATCH");
++                return e && e[0]=='1';
++            }();
++            if (batch_native && dst->info.pixel_format==format &&
++                dst->info.resources.levels==1 && dst->info.resources.layers==1 &&
++                range.base.level==0 && range.base.layer==0 &&
++                range.extent.levels==1 && range.extent.layers==1 &&
++                scheduler.QueueColorClear((__bridge void*)texture,
++                                         {color.red,color.green,color.blue,color.alpha})) {
++                dst->flags |= ImageFlagBits::GpuModified;
++                dst->flags &= ~ImageFlagBits::Dirty;
++                return;
++            }
+             for (u32 level = range.base.level; level < range.base.level + levels; ++level) {
+                 const u32 planes = is_3d ? std::max<u32>(u32(texture.depth) >> level, 1u)
+                                          : std::min<u32>(range.extent.layers,
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -748,9 +748,9 @@
+     impl->pending_clears=nil;impl->pending_clear_count=0;
+     const bool after=std::exchange(impl->pending_clear_barrier,false);
+     OpenPhysical(EncoderKind::Render,(__bridge const void*)pass,std::exchange(need_fence_wait,false),false,true);
+-    impl->render.label=@"Scene proxy clear batch";
+-    VideoCore::FrameCapture::NativeLabel("Scene proxy clear batch",(uintptr_t)this);
+-    impl->profile->Label("Scene proxy clear batch");
++    impl->render.label=@"Scene color clear batch";
++    VideoCore::FrameCapture::NativeLabel("Scene color clear batch",(uintptr_t)this);
++    impl->profile->Label("Scene color clear batch");
+     CloseNative(EncoderKind::Render);++impl->clear_passes;
+     if(after)need_fence_wait=true;
+ }
+diff --git a/tests/test_mtl_runtime.mm b/tests/test_mtl_runtime.mm
+--- a/tests/test_mtl_runtime.mm
++++ b/tests/test_mtl_runtime.mm
+@@ -1856,10 +1856,60 @@
+     std::printf("adaptive staging=%d: 8 in-flight blocks, allocated=%llu bytes; reused after GPU completion and idle backing discard, no new objects\n",int(adaptive),(unsigned long long)(warm.bytes-initial.bytes));
+ }
+ 
++static void TestNativeColorClearBatch(Fixture& f) {
++    using F=vk::Format;
++    const std::array formats{F::eR8G8B8A8Unorm,F::eR8G8B8A8Srgb,F::eR16G16B16A16Sfloat,
++        F::eB10G11R11UfloatPack32,F::eR16G16B16A16Sfloat,F::eR16G16B16A16Sfloat,
++        F::eB10G11R11UfloatPack32,F::eR16G16B16A16Sfloat};
++    const auto before=Metal::MemoryStats::Read();
++    std::vector<u8> pixels;
++    {
++        std::vector<std::unique_ptr<Img>> images;
++        for(auto format:formats) images.push_back(std::make_unique<Img>(f.runtime,MakeInfo(format,8,8)));
++        for(unsigned i=0;i<images.size();++i) {
++            vk::ClearValue value{};
++            value.color=vk::ClearColorValue{std::array<float,4>{.1f+float(i)/10,.5001f,.9999f,.3333f}};
++            f.runtime.ClearImage(images[i]->image.get(),SubresourceRange{},value);
++        }
++        // Downloading the first member must materialize the entire pending clear batch.
++        for(unsigned i=0;i<images.size();++i) {
++            const auto data=Download(f,*images[i]->image,std::array{WholeCopy(8,8)},8*8*vk::blockSize(formats[i]));
++            pixels.insert(pixels.end(),data.begin(),data.end());
++        }
++        vk::ClearValue red{},green{};
++        red.color=vk::ClearColorValue{std::array<float,4>{1,0,0,1}};
++        green.color=vk::ClearColorValue{std::array<float,4>{0,1,0,1}};
++        f.runtime.ClearImage(images[0]->image.get(),SubresourceRange{},red);
++        f.runtime.ClearImage(images[0]->image.get(),SubresourceRange{},green);
++        auto data=Download(f,*images[0]->image,std::array{WholeCopy(8,8)},256);
++        for(unsigned i=0;i<64;++i) CHECK(data[i*4]==0 && data[i*4+1]==255 && data[i*4+2]==0 && data[i*4+3]==255);
++        pixels.insert(pixels.end(),data.begin(),data.end());
++        f.runtime.ClearImage(images[0]->image.get(),SubresourceRange{},red);
++        f.runtime.CopyImage(images[0]->image.get(),images[1]->image.get());
++        data=Download(f,*images[1]->image,std::array{WholeCopy(8,8)},256);
++        CHECK(data[0]==255 && data[1]==0 && data[2]==0 && data[3]==255);
++        pixels.insert(pixels.end(),data.begin(),data.end());
++    }
++    Settle(f);
++    const auto after=Metal::MemoryStats::Read();
++    for(auto kind:{Metal::MemoryStats::Kind::Texture,Metal::MemoryStats::Kind::Target,Metal::MemoryStats::Kind::SceneProxy}) {
++        CHECK(after[unsigned(kind)].objects==before[unsigned(kind)].objects);
++        CHECK(after[unsigned(kind)].bytes==before[unsigned(kind)].bytes);
++        CHECK(after[unsigned(kind)].retired==before[unsigned(kind)].retired);
++    }
++    if(const char* path=std::getenv("BB_TEST_CLEAR_BYTES")) {
++        auto* output=std::fopen(path,"wb");CHECK(output);
++        if(output) {CHECK(std::fwrite(pixels.data(),1,pixels.size(),output)==pixels.size());std::fclose(output);}
++    }
++    TestImageCopies(f); // integer clears, arrays, mips, copies, partial ranges and depth retain fallback
++    puts("native color clear batching: mixed formats, repeated target, read/copy visibility and complete target retirement passed");
++}
++
+ int main() {
+     g_backing = nullptr;
+     @autoreleasepool {
+         Fixture f;
++        if(std::getenv("BB_TEST_NATIVE_CLEAR_BATCH_ONLY")) {TestNativeColorClearBatch(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_INLINE_UPDATES_ONLY")) {TestInlineUpdates(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_QUERY_CHAIN_ONLY")) {TestSmallComputeFills(f);TestOcclusion(f);Settle(f);return failures?1:0;}
+         if(std::getenv("BB_TEST_BUFFER_RANGE_AUDIT_ONLY")) {TestBufferRangeAudit();Settle(f);return failures?1:0;}

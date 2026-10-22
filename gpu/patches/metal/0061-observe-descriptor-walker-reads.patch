@@ -1,0 +1,439 @@
+--- a/gpu/CMakeLists.txt
++++ b/gpu/CMakeLists.txt
+@@ -853,6 +853,13 @@
+     target_link_options(speculative-descriptor-test PRIVATE -Wl,-export_dynamic)
+ endif()
+ target_link_libraries(speculative-descriptor-test PRIVATE bbgpu)
++add_executable(srt-watch-test EXCLUDE_FROM_ALL ../tests/test_srt_watch.cpp ../tests/test_gpu_runtime_stubs.cpp)
++target_compile_options(srt-watch-test PRIVATE -UNDEBUG -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/bbport_platform.h)
++target_include_directories(srt-watch-test PRIVATE shim shadps4 third_party/gcn/include)
++target_link_libraries(srt-watch-test PRIVATE bbgpu)
++if(APPLE)
++    target_link_options(srt-watch-test PRIVATE -Wl,-export_dynamic)
++endif()
+ 
+ if(APPLE)
+     add_executable(texture-cache-views-test EXCLUDE_FROM_ALL ../tests/test_texture_cache_views.mm)
+--- a/gpu/shadps4/shader_recompiler/info.h
++++ b/gpu/shadps4/shader_recompiler/info.h
+@@ -243,7 +243,8 @@
+         flattened_ud_buf.resize(srt_info.flattened_bufsize_dw);
+         ASSERT(user_data.size() <= NUM_USER_DATA_REGS);
+         std::memcpy(flattened_ud_buf.data(), user_data.data(), user_data.size_bytes());
+-        if (srt_info.walker_func) {
++        if (srt_info.walker_func &&
++            !TryRunWatchedSrt(srt_info,user_data.data(),flattened_ud_buf.data(),pgm_hash,u32(sw_stage))) {
+             srt_info.walker_func(user_data.data(), flattened_ud_buf.data());
+         }
+     }
+--- a/gpu/shadps4/shader_recompiler/ir/passes/srt.h
++++ b/gpu/shadps4/shader_recompiler/ir/passes/srt.h
+@@ -15,6 +15,11 @@
+ 
+ using PFN_SrtWalker = void PS4_SYSV_ABI (*)(const u32* /*user_data*/, u32* /*flat_dst*/);
+ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size);
++struct PersistentSrtInfo;
++// Opt-in CPU-read diagnostics; never replaces the serialized original walker.
++bool TryRunWatchedSrt(const PersistentSrtInfo&, const u32*, u32*, u64 shader, u32 stage);
++bool IsSrtWatchCode(const void* code);
++void EnsureSrtAccessHandler();
+ 
+ struct PersistentSrtInfo {
+     // Special case when fetch shader uses step rates.
+--- a/gpu/shadps4/shader_recompiler/ir/passes/flatten_extended_userdata_pass.cpp
++++ b/gpu/shadps4/shader_recompiler/ir/passes/flatten_extended_userdata_pass.cpp
+@@ -4,6 +4,7 @@
+ #include <unordered_map>
+ #include <boost/container/flat_map.hpp>
+ #include <queue>
++#include <mutex>
+ #include <xbyak/xbyak.h>
+ #include <xbyak/xbyak_util.h>
+ #include "common/arch.h"
+@@ -28,7 +29,6 @@
+ using namespace Xbyak::util;
+ 
+ static Xbyak::CodeGenerator g_srt_codegen(32_MB);
+-static const u8* g_srt_codegen_start = nullptr;
+ 
+ namespace Shader {
+ 
+@@ -70,10 +70,10 @@
+ 
+ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
+     // Only handle if the fault address is within the SRT code range
+-    const u8* code_start = g_srt_codegen_start;
++    const u8* code_start = g_srt_codegen.getCode();
+     const u8* code_end = code_start + g_srt_codegen.getSize();
+     const void* code = Common::GetRip(context);
+-    if (code < code_start || code >= code_end) {
++    if ((code < code_start || code >= code_end) && !Shader::IsSrtWatchCode(code)) {
+         return false; // Not in SRT code range
+     }
+ 
+@@ -188,6 +188,15 @@
+ };
+ } // namespace
+ 
++namespace Shader {
++void EnsureSrtAccessHandler() {
++    static std::once_flag once;
++    std::call_once(once,[] {
++        Core::Signals::Instance()->RegisterAccessViolationHandler(SrtWalkerSignalHandler,2);
++    });
++}
++}
++
+ namespace Shader::Optimization {
+ 
+ namespace {
+@@ -641,13 +650,7 @@
+     }
+ 
+     // Register the signal handler for SRT walker, if not already registered
+-    if (g_srt_codegen_start == nullptr) {
+-        g_srt_codegen_start = c.getCurr();
+-        auto* signals = Core::Signals::Instance();
+-        // Call after the memory invalidation handler
+-        constexpr u32 priority = 2;
+-        signals->RegisterAccessViolationHandler(SrtWalkerSignalHandler, priority);
+-    }
++    EnsureSrtAccessHandler();
+ 
+     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
+     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
+@@ -867,6 +870,7 @@
+ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
+     UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
+ }
++void EnsureSrtAccessHandler() {}
+ 
+ namespace Optimization {
+ 
+--- a/gpu/shadps4/video_core/frame_capture.h
++++ b/gpu/shadps4/video_core/frame_capture.h
+@@ -61,6 +61,7 @@
+                                 VAddr address, u32 stage, u64 shader, bool write,
+                                 const char* source, u64 caller_stage = 0);
+     static void NativeCpuAccess(VAddr address, u64 size, bool write);
++    static void NativeSrtWalk(bool covered, u32 encoded_reads);
+     static u64 NativeCaptureSequence();
+ 
+ 
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -70,6 +70,7 @@
+     std::array<Watch,8> watches{};
+     std::array<u64,7> command_read_sources{};
+     u64 sequence=0, uses=0;
++    u64 srt_calls=0, srt_covered=0, srt_encoded_reads=0;
+     bool overflow=false;
+     static bool Overlap(u64 a,u64 size,u64 b,u64 bytes) {
+         return size && bytes && (a<=b ? b-a<size : a-b<bytes);
+@@ -101,6 +102,9 @@
+     const auto& n=dependency_audit->command_read_sources;
+     FrameCapture::Native(std::format("{{\"op\":\"command_read_source_counts\",\"cp_vo_wait\":{},\"cp_graphics_wait\":{},\"cp_compute_wait\":{},\"cp_cond_exec\":{},\"indirect_geometry_args\":{},\"indirect_draw_args\":{},\"indirect_dispatch_args\":{}}}",
+         n[0],n[1],n[2],n[3],n[4],n[5],n[6]));
++    const auto& a=*dependency_audit;
++    FrameCapture::Native(std::format("{{\"op\":\"srt_walk_coverage\",\"calls\":{},\"covered\":{},\"uncovered\":{},\"encoded_read_sites\":{}}}",
++        a.srt_calls,a.srt_covered,a.srt_calls-a.srt_covered,a.srt_encoded_reads));
+ }
+ 
+ void* native_boundary_owner=nullptr;
+@@ -298,6 +302,13 @@
+     auto& a=*dependency_audit;
+     for(const auto& w:a.watches)if(w.active && DependencyAudit::Overlap(address,size,w.address,192))
+         Native(std::format("{{\"op\":\"watch_cpu\",\"seq\":{},\"watch\":{},\"version\":{},\"address\":{},\"size\":{},\"write\":{}}}",++a.sequence,w.address,w.version,address,size,write));
++}
++void FrameCapture::NativeSrtWalk(bool covered,u32 encoded_reads) {
++    if(!NativeRecording())return;
++    std::scoped_lock lock{dependency_mutex};
++    if(!NativeRecording() || !dependency_audit)return;
++    auto& a=*dependency_audit;++a.srt_calls;
++    if(covered){++a.srt_covered;a.srt_encoded_reads+=encoded_reads;}
+ }
+ 
+ void FrameCapture::SetNativeBoundaryDrain(void* owner, void (*drain)(void*)) {
+--- /dev/null
++++ b/gpu/shadps4/shader_recompiler/ir/passes/srt_watch.h
+@@ -0,0 +1,10 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include "shader_recompiler/ir/passes/srt.h"
++namespace Xbyak {class CodeGenerator;}
++namespace Shader {
++// Bounded, branch-free SRT programs only. Unsupported input emits nothing.
++// The original code, program pointer and serialization bytes remain unchanged.
++PFN_SrtWalker BuildSrtWatchClone(Xbyak::CodeGenerator&,const u8*,size_t,
++    u64 watch,u64 bytes,void (*observer)(u64,u64),u32& encoded_reads,size_t capacity);
++}
+--- /dev/null
++++ b/gpu/shadps4/shader_recompiler/ir/passes/srt_watch.cpp
+@@ -0,0 +1,165 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "shader_recompiler/ir/passes/srt_watch.h"
++#include "common/arch.h"
++#include "video_core/frame_capture.h"
++#include <array>
++#include <atomic>
++#include <cstdlib>
++#include <memory>
++#include <mutex>
++#include <vector>
++#include <xbyak/xbyak.h>
++#include "common/decoder.h"
++
++namespace Shader {
++#ifdef ARCH_X86_64
++namespace {
++using namespace Xbyak::util;
++constexpr size_t PoolBytes=1024*1024;
++struct Load {size_t offset{},length{};u32 bytes{};s64 displacement{};bool indexed{};u32 scale{1};};
++std::atomic<uintptr_t> pool_begin{},pool_end{};
++thread_local u64 current_shader{};
++thread_local u32 current_stage{};
++void Observe(u64 address,u64 bytes) {
++    VideoCore::FrameCapture::NativeCpuAccess(address,bytes,false);
++    VideoCore::FrameCapture::NativeBufferUse(0,0,0,bytes,address,current_stage,current_shader,
++                                            false,"srt_cpu");
++}
++void EmitObserver(Xbyak::CodeGenerator& c,const Load& load,u64 watch,u64 bytes,
++                  void (*observer)(u64,u64)) {
++    // Save flags and the filter temporaries. Relative overlap is unsigned and
++    // includes reads beginning just before the watched interval.
++    Xbyak::Label skip;
++    c.pushfq();c.push(rax);c.push(r11);
++    if(load.indexed)c.lea(rax,ptr[rdi+r10*load.scale+load.displacement]);
++    else c.lea(rax,ptr[rdi+load.displacement]);
++    c.mov(r11,watch-(load.bytes-1));c.sub(rax,r11);
++    c.cmp(rax,bytes+load.bytes-2);c.ja(skip,c.T_NEAR);
++    // Protect every other caller-saved GPR used by the original straight-line
++    // walker. It has no live vector state; the declared SysV function ABI makes
++    // vector registers caller-saved. Align independently of its pointer stack.
++    c.push(rcx);c.push(rdx);c.push(rdi);c.push(rsi);
++    c.push(r8);c.push(r9);c.push(r10);c.push(rbp);
++    c.mov(rbp,rsp);c.and_(rsp,-16);
++    if(load.indexed)c.lea(rdi,ptr[rdi+r10*load.scale+load.displacement]);
++    else c.lea(rdi,ptr[rdi+load.displacement]);
++    c.mov(rsi,load.bytes);c.mov(rax,reinterpret_cast<u64>(observer));c.call(rax);
++    c.mov(rsp,rbp);c.pop(rbp);c.pop(r10);c.pop(r9);c.pop(r8);
++    c.pop(rsi);c.pop(rdi);c.pop(rdx);c.pop(rcx);
++    c.L(skip);c.pop(r11);c.pop(rax);c.popfq();
++}
++}
++
++PFN_SrtWalker BuildSrtWatchClone(Xbyak::CodeGenerator& c,const u8* source,size_t size,
++    u64 watch,u64 bytes,void (*observer)(u64,u64),u32& encoded_reads,size_t capacity) {
++    encoded_reads=0;
++    if(!source || !size || size>16384 || !observer || watch<8 || !bytes ||
++       bytes>192 || watch>~u64{0}-bytes)return nullptr;
++    std::vector<Load> instructions;
++    for(size_t at=0;at<size;) {
++        ZydisDecodedInstruction ins{};ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT]{};
++        if(!ZYAN_SUCCESS(Common::Decoder::Instance()->decodeInstruction(ins,ops,
++                const_cast<u8*>(source+at),std::min<size_t>(15,size-at))) ||
++           !ins.length || at+ins.length>size)return nullptr;
++        // The walker generator uses integer/stack operations only. A closed
++        // mnemonic set also rules out hidden vector state, system operations
++        // and unfamiliar cached-code conventions instead of guessing liveness.
++        switch(ins.mnemonic) {
++        case ZYDIS_MNEMONIC_MOV:case ZYDIS_MNEMONIC_PUSH:case ZYDIS_MNEMONIC_POP:
++        case ZYDIS_MNEMONIC_RET:case ZYDIS_MNEMONIC_ADD:case ZYDIS_MNEMONIC_SUB:
++        case ZYDIS_MNEMONIC_SHL:case ZYDIS_MNEMONIC_SHR:case ZYDIS_MNEMONIC_AND:
++        case ZYDIS_MNEMONIC_OR:case ZYDIS_MNEMONIC_XOR:case ZYDIS_MNEMONIC_IMUL:
++        case ZYDIS_MNEMONIC_NEG:case ZYDIS_MNEMONIC_NOT:case ZYDIS_MNEMONIC_DEC:
++        case ZYDIS_MNEMONIC_CMP:case ZYDIS_MNEMONIC_CMOVB:case ZYDIS_MNEMONIC_CMOVNBE:
++        case ZYDIS_MNEMONIC_ADC:case ZYDIS_MNEMONIC_STC:case ZYDIS_MNEMONIC_LEA:break;
++        default:return nullptr;
++        }
++        if(ins.meta.category==ZYDIS_CATEGORY_CALL || ins.meta.category==ZYDIS_CATEGORY_COND_BR ||
++           ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR ||
++           (ins.mnemonic==ZYDIS_MNEMONIC_RET && (at+1!=size || source[at]!=0xc3)))return nullptr;
++        Load load{at,ins.length};
++        for(unsigned i=0;i<ins.operand_count;++i) {
++            const auto& op=ops[i];
++            if(op.type==ZYDIS_OPERAND_TYPE_IMMEDIATE && op.imm.is_relative)return nullptr;
++            if(op.type!=ZYDIS_OPERAND_TYPE_MEMORY)continue;
++            if(op.mem.base==ZYDIS_REGISTER_RIP || op.mem.base==ZYDIS_REGISTER_EIP)return nullptr;
++            if(op.mem.segment==ZYDIS_REGISTER_FS || op.mem.segment==ZYDIS_REGISTER_GS)return nullptr;
++            if(!(op.actions&(ZYDIS_OPERAND_ACTION_MASK_READ|ZYDIS_OPERAND_ACTION_MASK_WRITE)))continue;
++            // The generated walkers access only guest pointers, user data,
++            // the flattened output and their own stack. Reject other layouts.
++            if(op.mem.base==ZYDIS_REGISTER_RSP || op.mem.base==ZYDIS_REGISTER_RSI)continue;
++            if(op.mem.base!=ZYDIS_REGISTER_RDI || ins.mnemonic!=ZYDIS_MNEMONIC_MOV || i!=1 ||
++               (op.actions&ZYDIS_OPERAND_ACTION_MASK_WRITE) || load.bytes ||
++               (op.size!=32 && op.size!=64) || ops[0].type!=ZYDIS_OPERAND_TYPE_REGISTER ||
++               (ops[0].reg.value!=ZYDIS_REGISTER_RDI && ops[0].reg.value!=ZYDIS_REGISTER_R10D) ||
++               (op.mem.index!=ZYDIS_REGISTER_NONE && op.mem.index!=ZYDIS_REGISTER_R10))return nullptr;
++            load.bytes=op.size/8;load.displacement=op.mem.disp.value;
++            load.indexed=op.mem.index==ZYDIS_REGISTER_R10;load.scale=op.mem.scale;
++            if(load.indexed && load.scale!=1 && load.scale!=2 && load.scale!=4 && load.scale!=8)return nullptr;
++            ++encoded_reads;
++        }
++        instructions.push_back(load);if(instructions.size()>2048)return nullptr;
++        at+=ins.length;
++    }
++    if(source[size-1]!=0xc3 || encoded_reads>512 || c.getSize()>capacity ||
++       size+size_t(encoded_reads)*160>capacity-c.getSize())return nullptr;
++    const auto fn=c.getCurr<PFN_SrtWalker>();
++    for(const auto& load:instructions) {
++        if(load.bytes)EmitObserver(c,load,watch,bytes,observer);
++        c.db(source+load.offset,load.length);
++    }
++    c.ready();return fn;
++}
++
++bool IsSrtWatchCode(const void* code) {
++    const auto value=reinterpret_cast<uintptr_t>(code);
++    return value>=pool_begin.load(std::memory_order_acquire) &&
++           value<pool_end.load(std::memory_order_acquire);
++}
++bool TryRunWatchedSrt(const PersistentSrtInfo& info,const u32* ud,u32* flat,u64 shader,u32 stage) {
++    if(!VideoCore::FrameCapture::NativeRecording())return false;
++    struct Range {u64 address{},size{};};
++    static const Range watch=[] {
++        const auto* flag=std::getenv("BB_CAPTURE_SRT_READS");
++        const auto* text=std::getenv("BB_WATCH");
++        if(!flag || flag[0]!='1' || !text)return Range{};
++        char* end=nullptr;u64 address=std::strtoull(text,&end,0);
++        u64 size=end && *end==','?std::strtoull(end+1,&end,0):0;
++        return end && !*end && address>=8 && address<(u64{1}<<40) && size==192 &&
++            size<=(u64{1}<<40)-address?Range{address,size}:Range{};
++    }();
++    if(!watch.size)return false;
++    struct Entry {PFN_SrtWalker original{},clone{};size_t size{};u32 reads{};};
++    static std::mutex mutex;
++    static std::unique_ptr<Xbyak::CodeGenerator> pool;
++    static std::array<Entry,256> entries{};static size_t count{};
++    Entry selected{};
++    {
++        std::scoped_lock lock{mutex};
++        for(size_t i=0;i<count;++i)if(entries[i].original==info.walker_func &&
++            entries[i].size==info.walker_func_size){selected=entries[i];break;}
++        if(!selected.original && count<entries.size()) {
++            if(!pool) {
++                pool=std::make_unique<Xbyak::CodeGenerator>(PoolBytes);
++                pool_begin.store(reinterpret_cast<uintptr_t>(pool->getCode()),std::memory_order_release);
++            }
++            selected={info.walker_func,nullptr,info.walker_func_size,0};
++            selected.clone=BuildSrtWatchClone(*pool,reinterpret_cast<const u8*>(info.walker_func),
++                info.walker_func_size,watch.address,watch.size,&Observe,selected.reads,PoolBytes);
++            pool_end.store(reinterpret_cast<uintptr_t>(pool->getCurr()),std::memory_order_release);
++            entries[count++]=selected;
++        }
++    }
++    VideoCore::FrameCapture::NativeSrtWalk(bool(selected.clone),selected.clone?selected.reads:0);
++    if(selected.clone)EnsureSrtAccessHandler();
++    const auto old_shader=current_shader;const auto old_stage=current_stage;
++    current_shader=shader;current_stage=stage;
++    (selected.clone?selected.clone:info.walker_func)(ud,flat);
++    current_shader=old_shader;current_stage=old_stage;
++    return true;
++}
++#else
++bool IsSrtWatchCode(const void*) {return false;}
++bool TryRunWatchedSrt(const PersistentSrtInfo&,const u32*,u32*,u64,u32) {return false;}
++#endif
++}
+--- /dev/null
++++ b/tests/test_srt_watch.cpp
+@@ -0,0 +1,99 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++// Execute real cloned and cached-form SRT programs without a game or GPU.
++#include "shader_recompiler/ir/passes/srt_watch.h"
++#include "video_core/frame_capture.h"
++#include "core/signals.h"
++#include <xbyak/xbyak.h>
++#include <array>
++#include <cassert>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <vector>
++#include <sys/mman.h>
++#include <signal.h>
++using namespace Xbyak::util;
++static std::vector<std::pair<u64,u64>> reads;
++static void Observe(u64 a,u64 n) {reads.emplace_back(a,n);}
++static void Fault(int,siginfo_t* info,void* context) {
++    if(!Core::Signals::Instance()->DispatchAccessViolation(context,info->si_addr))_Exit(125);
++}
++int main() {
++    constexpr size_t capacity=65536;
++    auto* data=static_cast<u32*>(mmap(reinterpret_cast<void*>(0x900000000),4096,
++        PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0));
++    assert(data==reinterpret_cast<void*>(0x900000000));
++    for(unsigned i=0;i<1024;++i)data[i]=i*17+7;
++    alignas(16) u64 ud[8]={reinterpret_cast<u64>(data)};
++    Xbyak::CodeGenerator original(capacity),clones(capacity);
++    original.push(rdi);original.mov(rdi,ptr[rdi]);
++    original.mov(r10d,dword[rdi+4]);original.mov(dword[rsi],r10d);
++    original.stc();original.mov(r10d,dword[rdi+8]);original.adc(r10d,0);
++    original.mov(dword[rsi+4],r10d);
++    original.mov(r10d,12);original.mov(r10d,dword[rdi+r10]);original.mov(dword[rsi+8],r10d);
++    original.mov(r10d,dword[rdi+196]);original.mov(dword[rsi+12],r10d);
++    original.mov(r10d,dword[rdi+200]);original.mov(dword[rsi+16],r10d);
++    original.push(rdi);original.mov(rdi,qword[rdi+4]);original.mov(qword[rsi+32],rdi);original.pop(rdi);
++    original.pop(rdi);original.ret();original.ready();
++    const auto fn=original.getCode<Shader::PFN_SrtWalker>();
++    std::vector<u8> saved(original.getCode(),original.getCode()+original.getSize());
++    std::array<u32,32> expected,actual;expected.fill(0x12345678);actual=expected;
++    fn(reinterpret_cast<u32*>(ud),expected.data());
++    u32 sites=0;
++    const auto clone=Shader::BuildSrtWatchClone(clones,original.getCode(),original.getSize(),
++        0x900000008,192,&Observe,sites,capacity);
++    assert(clone && sites==7);
++    clone(reinterpret_cast<u32*>(ud),actual.data());
++    assert(actual==expected && actual[1]==data[2]+1);
++    const std::vector<std::pair<u64,u64>> wanted={{0x900000008,4},{0x90000000c,4},{0x9000000c4,4},{0x900000004,8}};
++    assert(reads==wanted);
++    assert(!std::memcmp(saved.data(),original.getCode(),saved.size()));
++    const auto before=clones.getSize();
++    for(const std::vector<u8> invalid: {std::vector<u8>{0xe8,0,0,0,0,0xc3},
++        {0x48,0x8b,0x00,0xc3},{0x48,0x89,0x07,0xc3},{0x48,0x8b,0x07}}) {
++        assert(!Shader::BuildSrtWatchClone(clones,invalid.data(),invalid.size(),
++            0x900000008,192,&Observe,sites,capacity));assert(clones.getSize()==before);
++    }
++    assert(!Shader::BuildSrtWatchClone(clones,original.getCode(),original.getSize(),
++        0x900000008,192,&Observe,sites,before+1));assert(clones.getSize()==before);
++
++    char temp[]="/private/tmp/bb-srt-watch-test-XXXXXX";const auto* root=mkdtemp(temp);assert(root);
++    const std::filesystem::path trigger=std::filesystem::path(root)/"trigger";
++    setenv("BB_CAPTURE_NATIVE","1",1);setenv("BB_CAPTURE_SRT_READS","1",1);
++    setenv("BB_WATCH","0x900000008,192",1);setenv("BB_CAPTURE_DIR",root,1);
++    setenv("BB_CAPTURE_TRIGGER",trigger.c_str(),1);
++    Shader::PersistentSrtInfo info{fn,original.getSize(),32};
++    assert(!Shader::TryRunWatchedSrt(info,reinterpret_cast<u32*>(ud),actual.data(),123,0));
++    std::ofstream(trigger)<<"1";
++    VideoCore::FrameCapture::OnFlip(123);VideoCore::FrameCapture::FrameBoundary(10);
++    actual.fill(0x12345678);
++    assert(Shader::TryRunWatchedSrt(info,reinterpret_cast<u32*>(ud),actual.data(),123,0));
++    assert(actual==expected && info.walker_func==fn && info.walker_func_size==saved.size());
++    assert(!std::memcmp(saved.data(),original.getCode(),saved.size()));
++
++    // The real access-violation dispatcher must still repair a bad guest load in
++    // the private clone. This prevents diagnostic-only faults becoming crashes.
++    struct sigaction action{},old{};action.sa_sigaction=&Fault;action.sa_flags=SA_SIGINFO;
++    sigemptyset(&action.sa_mask);assert(sigaction(SIGSEGV,&action,&old)==0);
++    Xbyak::CodeGenerator bad(capacity);bad.mov(rdi,ptr[rdi]);bad.mov(r10d,dword[rdi]);
++    bad.mov(dword[rsi],r10d);bad.ret();bad.ready();
++    Shader::PersistentSrtInfo bad_info{bad.getCode<Shader::PFN_SrtWalker>(),bad.getSize(),32};
++    ud[0]=0;actual[0]=~u32{0};
++    assert(Shader::TryRunWatchedSrt(bad_info,reinterpret_cast<u32*>(ud),actual.data(),124,3));
++    assert(actual[0]==0);assert(sigaction(SIGSEGV,&old,nullptr)==0);
++
++    Xbyak::CodeGenerator branch(capacity);Xbyak::Label end;
++    branch.jmp(end);branch.nop();branch.L(end);branch.ret();branch.ready();
++    Shader::PersistentSrtInfo unsupported{branch.getCode<Shader::PFN_SrtWalker>(),branch.getSize(),32};
++    assert(Shader::TryRunWatchedSrt(unsupported,reinterpret_cast<u32*>(ud),actual.data(),125,3));
++    VideoCore::FrameCapture::FrameBoundary(11);
++    std::string text;
++    for(const auto& file:std::filesystem::directory_iterator(root))if(file.path().extension()==".txt") {
++        std::ifstream in(file.path());text.append(std::istreambuf_iterator<char>(in),{});
++    }
++    assert(text.find("\"source\":\"srt_cpu\"")!=std::string::npos);
++    assert(text.find("\"op\":\"srt_walk_coverage\",\"calls\":3,\"covered\":2,\"uncovered\":1")!=std::string::npos);
++    assert(munmap(data,4096)==0);
++    std::puts("PASS: SRT clone matches output/canaries/flags, exact overlapping loads; cached original unchanged; real fault repair and uncovered fallback");
++}

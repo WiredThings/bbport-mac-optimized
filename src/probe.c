@@ -598,6 +598,11 @@ static int probe_main(int argc, char **argv) {
     }
 #endif
     if (!cpu_only) bbgpu_patch_image(image, size);
+#ifdef BB_DEV_WORLD_WARPER
+    /* Developer-only target. This call and the implementation are absent from release builds. */
+    extern int bb_dev_world_warper_install(unsigned char *, uint64_t);
+    if (!cpu_only && bb_dev_world_warper_install(image, size)) fail("development world warper rejected setup");
+#endif
     runtime_quicksave_bind(image,size);
     /* bbport (native GPU process, BB_NATIVE_GPU=1): the GPU reads some of the game's own data
      * (resource tables in its data segments), so those move into memory the GPU process shares.

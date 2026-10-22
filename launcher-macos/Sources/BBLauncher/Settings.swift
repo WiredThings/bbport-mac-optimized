@@ -331,14 +331,16 @@ struct LauncherPrefs: Equatable {
                 }
             }
         }
-        // This control was added after the original dictionary migration. Preserve an
-        // explicit legacy override until its own checkbox has been saved for the first time.
-        if p.metalOptimizations["BB_TEXTURE_INVALID_RECLAIM"] == nil {
-            for token in p.extraEnv.split(whereSeparator: { $0.isWhitespace }) {
-                let pair = token.split(separator: "=", maxSplits: 1)
-                if pair.count == 2, pair[0] == "BB_TEXTURE_INVALID_RECLAIM", ["0", "1"].contains(pair[1]) {
-                    p.metalOptimizations[String(pair[0])] = pair[1] == "1"
-                }
+        // New controls also import an existing developer choice, even if the original
+        // optimization dictionary already exists. A saved checkbox remains authoritative.
+        let laterControls: Set<String> = ["BB_TEXTURE_INVALID_RECLAIM", "BB_MTL_CONTINUE_CLEARS",
+            "BB_MTL_NATIVE_CLEAR_BATCH", "BB_MTL_MERGE_OVERLAY", "BB_MTL_FILL_UPDATES",
+            "BB_LAYER_USE_CACHE", "BB_MTL_COPY_PAIR", "BB_MTL_RENDER_UPDATES"]
+        for token in p.extraEnv.split(whereSeparator: { $0.isWhitespace }) {
+            let pair = token.split(separator: "=", maxSplits: 1)
+            if pair.count == 2, laterControls.contains(String(pair[0])),
+               p.metalOptimizations[String(pair[0])] == nil, ["0", "1"].contains(pair[1]) {
+                p.metalOptimizations[String(pair[0])] = pair[1] == "1"
             }
         }
         p.gameMenu = flag(Key.gameMenu, p.gameMenu)

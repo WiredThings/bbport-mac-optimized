@@ -95,6 +95,35 @@ static void read_unlock(void) { --read_depth; if (!exclusive_depth) pthread_rwlo
 int runtime_memory_lock_held(void) { return exclusive_depth || read_depth; }
 static Block blocks[LIMIT];
 static Vma *vmas; static size_t vma_count, vma_capacity;
+/* Optional storage-retirement proof: one first guest-page address per physical
+ * page, never forgotten on unmap/release. UINT32_MAX means a different address
+ * has existed. Initialize before the first direct map; late enablement cannot
+ * reconstruct history. Default OFF: no table allocation or per-page scan.
+ * At 5056 MiB this is 1.234375 MiB, at the 16 GiB pool limit exactly 4 MiB.
+ * This bounds runtime-managed guest mappings only, not raw host/GPU pointers. */
+static uint32_t *reclaim_mapping_origins;
+static int reclaim_mapping_history_state; /* 0 undecided, 1 disabled, 2 ready, -1 failed */
+static void reclaim_mapping_record(uintptr_t address,uint64_t size,uint64_t phys,int private_mem) {
+    if (!reclaim_mapping_history_state) {
+        const char* enabled=getenv("BB_TEXTURE_RELEASED_STORAGE");
+        reclaim_mapping_history_state=1;
+        if (enabled && !strcmp(enabled,"1")) {
+            reclaim_mapping_origins=calloc((size_t)(POOL_SIZE/PAGE),sizeof(*reclaim_mapping_origins));
+            reclaim_mapping_history_state=reclaim_mapping_origins ? 2 : -1;
+        }
+    }
+    if (reclaim_mapping_history_state!=2) return;
+    if (!size || address%PAGE || size%PAGE || phys%PAGE || address>=(UINT64_C(1)<<40) ||
+        size>(UINT64_C(1)<<40)-address || phys>=POOL_SIZE || size>POOL_SIZE-phys) {
+        reclaim_mapping_history_state=-1; return;
+    }
+    for (uint64_t page=0;page<size/PAGE;++page) {
+        uint32_t* origin=&reclaim_mapping_origins[phys/PAGE+page];
+        const uint32_t guest=(uint32_t)(address/PAGE+page+1);
+        if (private_mem || (*origin && *origin!=guest)) *origin=UINT32_MAX;
+        else *origin=guest;
+    }
+}
 static int pool_fd=-1;
 /* bbport: direct memory in GPU-visible system memory the GPU library allocates (dma-buf chunks,
  * BB_GUEST_GPU_MEMORY=1): the GPU reads the game's data in place instead of the CPU copying it
@@ -419,7 +448,7 @@ static void drop_range(uintptr_t start, uintptr_t end) {
     vma_erase(i,n);
 }
 /* bbport: write traps (runtime_memory_trap, below), kept across the game's own changes. */
-static void trap_reapply(uintptr_t start, uintptr_t end);
+static void trap_reapply(uintptr_t start, uintptr_t end, int prot);
 static void trap_forget(uintptr_t start, uintptr_t end);
 /* Places a host mapping; with MAP_FIXED it replaces what the guest had there. */
 static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t alignment,
@@ -444,6 +473,9 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
         ? map_phys(address,size,host_prot(prot),phys)
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     if (mapped==MAP_FAILED) return NO_MEMORY;
+    /* Record successful host mappings even if later table publication fails.
+     * Splits/protection changes preserve the original physical-to-guest relation. */
+    if (kind==KIND_DIRECT) reclaim_mapping_record(address,size,phys,private_exec);
     drop_range(address,address+size);
     trap_forget(address,address+size); /* a new mapping starts without traps */
     if (vma_insert(vma_index(address),(Vma){address,address+size,kind,prot,type,phys,private_exec})) return NO_MEMORY;
@@ -644,7 +676,7 @@ static int32_t protect_locked(uintptr_t start, uint64_t size, int prot, int type
     start&=~(uintptr_t)(PAGE-1);
     if ((prot & ~0x37) || !covered(start,end,0)) return INVALID;
     if (mprotect((void *)start,end-start,host_prot(prot))) return INVALID;
-    trap_reapply(start,end); /* pages with write traps stay read-only */
+    trap_reapply(start,end,host_prot(prot)); /* traps restrict the new guest permissions */
     int error; size_t i=carve(start,end,&error);
     if (error) return NO_MEMORY;
     for (; i<vma_count && vmas[i].start<end; ++i) { vmas[i].prot=prot; if (type>=0) vmas[i].type=type; }
@@ -973,19 +1005,19 @@ static void trap_forget(uintptr_t start, uintptr_t end) {
     memset(trap_reasons+(start>>12),0,((end+4095)>>12)-(start>>12));
     pthread_mutex_unlock(&trap_mutex);
 }
-/* Pages with traps in [start, end) read-only (or no access) again after the game changed their
- * protection (runtime lock held). */
-static void trap_reapply(uintptr_t start, uintptr_t end) {
+/* Reapply traps using the uniform new host protection of the validated range. The
+ * VMA permissions still contain the old value until carve/update below (runtime lock held). */
+static void trap_reapply(uintptr_t start, uintptr_t end, int prot) {
     if (!trap_reasons || start>=TRAP_LIMIT) return;
     if (end>TRAP_LIMIT) end=TRAP_LIMIT;
     pthread_mutex_lock(&trap_mutex);
     uintptr_t run=0; int run_level=0;
     for (uintptr_t p=start>>12; p<(end+4095)>>12; ++p) {
         const int level=trap_level(trap_reasons[p]);
-        if (run && level!=run_level) { trap_apply(run,p<<12,run_level); run=0; }
+        if (run && level!=run_level) { mprotect((void *)run,(p<<12)-run,run_level==2 ? PROT_NONE : (prot & ~PROT_WRITE)); run=0; }
         if (level && !run) { run=p<<12; run_level=level; }
     }
-    if (run) trap_apply(run,end,run_level);
+    if (run) mprotect((void *)run,end-run,run_level==2 ? PROT_NONE : (prot & ~PROT_WRITE));
     pthread_mutex_unlock(&trap_mutex);
 }
 void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on) {
@@ -1044,6 +1076,60 @@ int runtime_memory_direct_phys(uintptr_t address, uint64_t *phys, uintptr_t *end
     read_unlock();
     return ok;
 }
+/* Optional dead-storage retirement guard. The callback may retire metadata only:
+ * no GPU waits, guest reads/writes or mapping changes. Reject contention instead
+ * of waiting while a texture-cache mutex is held. The exclusive owner permits
+ * nested runtime protection/read calls and excludes new runtime-managed guest
+ * direct aliases until the callback and allocation transaction have finished.
+ * A first-map physical-page witness rejects even unmapped historical guest aliases.
+ * No claim about hidden raw host/GPU aliases; those still require separate proof. */
+static int reclaim_mapping_unique_locked(uintptr_t address, uint64_t size) {
+    const uint64_t guest_limit=UINT64_C(1)<<40;
+    if (!size || size>(UINT64_C(1)<<32) || address>=guest_limit ||
+        size>guest_limit-address || vma_count>8192 ||
+        reclaim_mapping_history_state!=2 || !reclaim_mapping_origins) return 0;
+    unsigned pieces=0;
+    for (uintptr_t at=address,end=address+size; at<end;) {
+        const size_t i=vma_index(at);
+        if (i==vma_count || vmas[i].start>at || vmas[i].kind!=KIND_DIRECT ||
+            vmas[i].private_mem || ++pieces>64) return 0;
+        const uint64_t n=(vmas[i].end<end ? vmas[i].end : end)-at;
+        const uint64_t phys=vmas[i].phys+at-vmas[i].start;
+        if (phys>=POOL_SIZE || n>POOL_SIZE-phys) return 0;
+        if (phys%PAGE!=at%PAGE) return 0;
+        const uint64_t first=phys/PAGE,last=(phys+n-1)/PAGE;
+        for (uint64_t p=first;p<=last;++p)
+            if (reclaim_mapping_origins[p]!=(uint32_t)(at/PAGE+(p-first)+1)) return 0;
+        for (size_t j=0; j<vma_count; ++j) {
+            const Vma* other=&vmas[j];
+            if (other->kind!=KIND_DIRECT) continue;
+            const uint64_t bytes=other->end-other->start;
+            if (other->phys>=POOL_SIZE || bytes>POOL_SIZE-other->phys) return 0;
+            const uint64_t lo=phys>other->phys ? phys : other->phys;
+            const uint64_t hi=phys+n<other->phys+bytes ? phys+n : other->phys+bytes;
+            if (lo<hi && other->start+lo-other->phys!=at+lo-phys) return 0;
+        }
+        at+=n;
+    }
+    return 1;
+}
+/* v2 requires history from the first direct mapping. Old runtimes exposing the
+ * current-VMA-only v1 function cannot satisfy a newer renderer's weak v2 import. */
+int runtime_memory_reclaim_if_unaliased_v2(uintptr_t address, uint64_t size,
+                                      int (*callback)(void*), void* context) {
+    if (!callback || read_depth || exclusive_depth) return 0;
+    if (pthread_rwlock_trywrlock(&lock)) return 0;
+    if (mirror_hook || !reclaim_mapping_unique_locked(address,size)) {
+        pthread_rwlock_unlock(&lock);
+        return 0;
+    }
+    exclusive_depth=1;
+    __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL);
+    const int result=callback(context);
+    write_unlock();
+    return result;
+}
+
 /* bbport: protection and direct memory type of the mapping at address (type -1: not direct
  * memory); 0 when nothing is mapped there. */
 int runtime_memory_vma_info(uintptr_t address, int *prot, int *type, uintptr_t *end) {
@@ -1225,5 +1311,6 @@ void runtime_memory_report(void) {
 void *runtime_low_map(size_t size, int prot) { (void)size; (void)prot; return NULL; }
 uintptr_t runtime_memory_resolve(const char *name) { (void)name; return 0; }
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size) { (void)address; (void)size; return 0; }
+int runtime_memory_reclaim_if_unaliased_v2(uintptr_t a,uint64_t n,int(*callback)(void*),void* context) { (void)a; (void)n; (void)callback; (void)context; return 0; }
 void runtime_memory_report(void) { puts("Runtime: Windows direct-memory backend not implemented"); }
 #endif

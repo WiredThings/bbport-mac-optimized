@@ -1,0 +1,354 @@
+--- a/gpu/shadps4/video_core/pipeline_cache_core.cpp
++++ b/gpu/shadps4/video_core/pipeline_cache_core.cpp
+@@ -983,18 +983,51 @@
+         return false;
+     }
+ 
++    return RefreshVertexInputFormats(sel);
++}
++
++bool PipelineCacheCore::RefreshVertexInputFormats(PipelineSelection& sel) {
++    auto& key = sel.graphics_key;
+     const auto* vs_info = sel.infos[static_cast<u32>(SwStage::Vertex)];
+     if (vs_info && sel.fetch_shader && !caps.vertex_input_dynamic_state) {
+         // Without vertex input dynamic state, the pipeline needs to specialize on format.
+         // Stride will still be handled outside the pipeline using dynamic state.
+         u32 vertex_binding = 0;
+         for (const auto& attrib : sel.fetch_shader->attributes) {
+-            const auto& buffer = attrib.GetSharp(*vs_info);
++            AmdGpu::Buffer buffer{};
++            if (sel.worker) {
++                // GetSharp dereferences a guest table, not the flattened snapshot.
++                // A speculative worker can race reuse/unmapping of that table.
++                if (!Vulkan::ReadSpeculativeVertexSharp(*vs_info, attrib, buffer)) {
++                    sel.worker->failed = true;
++                    return false;
++                }
++            } else {
++                buffer = attrib.GetSharp(*vs_info);
++            }
+             ASSERT_MSG(vertex_binding < MaxVertexBufferCount,
+                        "Vertex attribute binding count exceeded limit: {} >= {}", vertex_binding,
+                        MaxVertexBufferCount);
+-            key.vertex_buffer_formats[vertex_binding++] =
+-                LiverpoolToVK::SurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt());
++            vk::Format format;
++            if (sel.worker) {
++                format = LiverpoolToVK::TrySurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt());
++                if (format == vk::Format::eUndefined &&
++                    buffer.GetDataFmt() != AmdGpu::DataFormat::FormatInvalid) {
++                    static std::atomic<u32> reports{};
++                    if (reports.fetch_add(1, std::memory_order_relaxed) < 8) {
++                        LOG_WARNING(Render, "Speculative vertex format rejected: shader={:#x} "
++                                    "semantic={} data_fmt={} num_fmt={}; retry on ordered GPU thread",
++                                    vs_info->pgm_hash, attrib.semantic,
++                                    u32(buffer.GetDataFmt()), u32(buffer.GetNumberFmt()));
++                    }
++                    sel.worker->failed = true;
++                    return false;
++                }
++            } else {
++                // Do not replace a real unsupported format with a default or omit its draw.
++                format = LiverpoolToVK::SurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt());
++            }
++            key.vertex_buffer_formats[vertex_binding++] = format;
+         }
+     }
+ 
+--- a/gpu/shadps4/video_core/pipeline_cache_core.h
++++ b/gpu/shadps4/video_core/pipeline_cache_core.h
+@@ -221,6 +221,7 @@
+ 
+     bool RefreshGraphicsKey(PipelineSelection& sel);
+     bool RefreshGraphicsStages(PipelineSelection& sel);
++    bool RefreshVertexInputFormats(PipelineSelection& sel);
+     bool RefreshComputeKey();
+ 
+     void DumpShader(std::span<const u32> code, u64 hash, Shader::HwStage stage, size_t perm_idx,
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.cpp
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.cpp
+@@ -20,6 +20,22 @@
+ 
+ using VideoCore::PipelineSelection;
+ using VideoCore::PrepWorker;
++
++bool ReadSpeculativeVertexSharp(const Shader::Info& info,
++                                const Shader::Gcn::VertexAttribute& attribute,
++                                AmdGpu::Buffer& out) {
++    // No allocation/RAII is entered while this raw guest copy can fault.
++    sigjmp_buf recover;
++    auto* const previous_recover = runtime_fault_recover;
++    if (sigsetjmp(recover, 0)) {
++        runtime_fault_recover = previous_recover;
++        return false;
++    }
++    runtime_fault_recover = &recover;
++    out = attribute.GetSharp(info);
++    runtime_fault_recover = previous_recover;
++    return true;
++}
+ 
+ namespace {
+ 
+@@ -137,7 +153,11 @@
+     range_index.clear();
+     for (const auto& attrib : fetch.attributes) {
+         const auto step_rate = attrib.GetStepRate();
+-        const auto buffer = attrib.GetSharp(vs);
++        AmdGpu::Buffer buffer{};
++        if (!ReadSpeculativeVertexSharp(vs, attrib, buffer)) {
++            out.valid = false;
++            return;
++        }
+         // The V# may come from user data the guest is still writing: an unknown format leaves
+         // the inputs to the GPU thread, which reads them once the draw is submitted (the
+         // assertion in SurfaceFormat stopped the process here).
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.h
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_draw_prep.h
+@@ -29,6 +29,12 @@
+ #include "video_core/pipeline_cache_core.h"
+ 
+ namespace Vulkan {
++
++// Vertex fetch pointers can be reused while a worker runs ahead of the GPU.
++// Failure invalidates preparation only; the ordered draw keeps its normal path.
++bool ReadSpeculativeVertexSharp(const Shader::Info& info,
++                                const Shader::Gcn::VertexAttribute& attribute,
++                                AmdGpu::Buffer& out);
+ 
+ struct PreparedStage {
+     const VideoCore::Program* program;
+--- a/tests/test_speculative_descriptor.cpp
++++ b/tests/test_speculative_descriptor.cpp
+@@ -3,13 +3,26 @@
+ #include <cassert>
+ #include <cstdio>
+ #include <cstring>
++#include <csignal>
+ #include <string_view>
++#include <sys/mman.h>
++#include <pthread.h>
++#include <unistd.h>
++#include "bbport_toggles.h"
+ #include "shader_recompiler/specialization.h"
+ #include "video_core/pipeline_cache_core.h"
+ #include "video_core/amdgpu/regs.h"
++#include "video_core/renderer_vulkan/liverpool_to_vk.h"
+ 
+ namespace VideoCore {
+ struct PipelineCacheCoreTestAccess {
++    static bool VertexFormats(PipelineCacheCore& cache, PipelineSelection& sel) {
++        return cache.RefreshVertexInputFormats(sel);
++    }
++    static void CheckEmpty(PipelineCacheCore& cache) {
++        assert(cache.program_cache.empty() && cache.graphics_pipelines.empty() &&
++               cache.compute_pipelines.empty() && cache.num_new_pipelines == 0);
++    }
+     static void Seed(PipelineCacheCore& cache, PipelineSelection& sel,
+                      const Shader::Info& info, const Shader::ShaderParams& params) {
+         auto pgm = std::make_unique<Program>();
+@@ -32,7 +45,9 @@
+ 
+ class TestCache final : public VideoCore::PipelineCacheCore {
+ public:
+-    TestCache() : PipelineCacheCore(nullptr, {}, {}, 16, "descriptor-test") {}
++    explicit TestCache(bool dynamic_vertex = false)
++        : PipelineCacheCore(nullptr, {}, {.vertex_input_dynamic_state = dynamic_vertex},
++                            16, "descriptor-test") {}
+ private:
+     VideoCore::ShaderModuleHandle CreateShaderModule(std::span<const u32>, std::string_view, bool) override { std::abort(); }
+     void DestroyShaderModule(VideoCore::ShaderModuleHandle) override { std::abort(); }
+@@ -49,6 +64,171 @@
+         VideoCore::ComputePipelineKey, const Shader::Info&, VideoCore::ShaderModuleHandle,
+         VideoCore::PipelineSerialization&, bool) override { std::abort(); }
+ };
++
++static void TestVertexFormats(bool unsupported, bool speculative) {
++    using namespace Shader;
++    using namespace VideoCore;
++    TestCache cache;
++    Info info{};
++    info.sw_stage = SwStage::Vertex;
++    info.pgm_hash = 0x135;
++    std::array<u32, 16> words{};
++    info.user_data = words;
++    AmdGpu::Buffer buffer{};
++    buffer.base_address = 0x1000;
++    buffer.num_records = 16;
++    buffer.data_format = unsupported ? 6 : 11;
++    buffer.num_format = unsupported ? 5 : 7;
++    std::memcpy(words.data(), &buffer, sizeof(buffer));
++    PrepWorker worker{};
++    PipelineSelection selection{};
++    selection.worker = speculative ? &worker : nullptr;
++    selection.infos[static_cast<u32>(SwStage::Vertex)] = &info;
++    selection.fetch_shader.emplace();
++    selection.fetch_shader->attributes.push_back({
++        .semantic = 0, .dest_vgpr = 0, .num_elements = 2,
++        .sgpr_base = IR::NumScalarRegs, .dword_offset = 0,
++        .instance_data = 0, .inst_offset = 0,
++    });
++    const auto before = selection.graphics_key.vertex_buffer_formats;
++    const bool result = PipelineCacheCoreTestAccess::VertexFormats(cache, selection);
++    if (unsupported && speculative) {
++        assert(!result && worker.failed);
++        assert(selection.graphics_key.vertex_buffer_formats == before);
++        buffer.data_format = 11;
++        buffer.num_format = 7;
++        std::memcpy(words.data(), &buffer, sizeof(buffer));
++        selection.worker = nullptr;
++        assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection));
++        assert(selection.graphics_key.vertex_buffer_formats[0] == vk::Format::eR32G32Sfloat);
++        worker.failed = false;
++        selection.worker = &worker;
++        assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection) && !worker.failed);
++        std::puts("Malformed speculative vertex format rejected; ordered reread and next worker preserve exact valid format");
++    } else {
++        assert(result && !worker.failed);
++        assert(selection.graphics_key.vertex_buffer_formats[0] == vk::Format::eR32G32Sfloat);
++    }
++    PipelineCacheCoreTestAccess::CheckEmpty(cache);
++    if (speculative) {
++        unsigned accepted = 0, rejected = 0;
++        // V# fields are four data-format bits and three number-format bits.
++        for (u32 d = 0; d < 16; ++d) for (u32 n = 0; n < 8; ++n) {
++            buffer.data_format = d;
++            buffer.num_format = n;
++            std::memcpy(words.data(), &buffer, sizeof(buffer));
++            worker.failed = false;
++            selection.worker = &worker;
++            const auto format = Vulkan::LiverpoolToVK::TrySurfaceFormat(
++                buffer.GetDataFmt(), buffer.GetNumberFmt());
++            const bool valid = format != vk::Format::eUndefined ||
++                               buffer.GetDataFmt() == AmdGpu::DataFormat::FormatInvalid;
++            assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection) == valid);
++            assert(worker.failed == !valid);
++            if (valid) {
++                ++accepted;
++                const auto worker_format = selection.graphics_key.vertex_buffer_formats[0];
++                selection.worker = nullptr;
++                assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection));
++                assert(worker_format == format && selection.graphics_key.vertex_buffer_formats[0] == format);
++            } else {
++                ++rejected;
++            }
++        }
++        // Typed fetch instructions override the raw V# format on both paths.
++        buffer.data_format = 6;
++        buffer.num_format = 5;
++        std::memcpy(words.data(), &buffer, sizeof(buffer));
++        auto& attribute = selection.fetch_shader->attributes[0];
++        attribute.data_format = 11;
++        attribute.num_format = 7;
++        worker.failed = false;
++        selection.worker = &worker;
++        assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection) && !worker.failed);
++        assert(selection.graphics_key.vertex_buffer_formats[0] == vk::Format::eR32G32Sfloat);
++        selection.worker = nullptr;
++        assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection));
++        assert(selection.graphics_key.vertex_buffer_formats[0] == vk::Format::eR32G32Sfloat);
++        PipelineCacheCoreTestAccess::CheckEmpty(cache);
++        assert(accepted + rejected == 128 && accepted && rejected);
++        std::printf("VERTEX135 accepted=%u rejected=%u; typed override exact; caches unchanged\n", accepted, rejected);
++    }
++}
++
++static void VertexReadFault(int signal, siginfo_t*, void*) {
++    if (runtime_fault_recover) {
++        // Match probe.c: sigsetjmp(..., 0) needs explicit signal unblocking.
++        auto* recover = runtime_fault_recover;
++        runtime_fault_recover = nullptr;
++        sigset_t unblock;
++        sigemptyset(&unblock);
++        sigaddset(&unblock, signal);
++        pthread_sigmask(SIG_UNBLOCK, &unblock, nullptr);
++        siglongjmp(*recover, 1);
++    }
++    _exit(99);
++}
++
++static void TestVertexReadFault() {
++    using namespace Shader;
++    using namespace VideoCore;
++    const auto size = sysconf(_SC_PAGESIZE);
++    void* inaccessible = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    assert(inaccessible != MAP_FAILED);
++    struct sigaction action{}, old_segv{}, old_bus{};
++    action.sa_sigaction = VertexReadFault;
++    action.sa_flags = SA_SIGINFO;
++    sigemptyset(&action.sa_mask);
++    assert(sigaction(SIGSEGV, &action, &old_segv) == 0);
++    assert(sigaction(SIGBUS, &action, &old_bus) == 0);
++    TestCache cache;
++    Info info{};
++    std::array<u32, 16> words{};
++    std::memcpy(words.data(), &inaccessible, sizeof(inaccessible));
++    info.user_data = words;
++    PrepWorker worker{};
++    PipelineSelection selection{};
++    selection.worker = &worker;
++    selection.infos[static_cast<u32>(SwStage::Vertex)] = &info;
++    selection.fetch_shader.emplace();
++    selection.fetch_shader->attributes.push_back({
++        .semantic = 0, .dest_vgpr = 0, .num_elements = 2, .sgpr_base = 0,
++        .dword_offset = 0, .instance_data = 0, .inst_offset = 0,
++    });
++    sigjmp_buf outer;
++    assert(sigsetjmp(outer, 0) == 0); // the inner scope must recover the fault
++    runtime_fault_recover = &outer;
++    assert(!PipelineCacheCoreTestAccess::VertexFormats(cache, selection) && worker.failed);
++    assert(runtime_fault_recover == &outer);
++    sigset_t mask;
++    assert(pthread_sigmask(SIG_BLOCK, nullptr, &mask) == 0);
++    assert(!sigismember(&mask, SIGSEGV) && !sigismember(&mask, SIGBUS));
++    assert(mprotect(inaccessible, size, PROT_READ | PROT_WRITE) == 0);
++    AmdGpu::Buffer valid{};
++    valid.base_address = 0x1000;
++    valid.num_records = 16;
++    valid.data_format = 11;
++    valid.num_format = 7;
++    std::memcpy(inaccessible, &valid, sizeof(valid));
++    worker.failed = false;
++    assert(PipelineCacheCoreTestAccess::VertexFormats(cache, selection) && !worker.failed);
++    assert(runtime_fault_recover == &outer);
++    assert(selection.graphics_key.vertex_buffer_formats[0] == vk::Format::eR32G32Sfloat);
++    // Dynamic-input pipelines still ignore vertex formats at key construction.
++    TestCache dynamic_cache(true);
++    valid.data_format = 6;
++    valid.num_format = 5;
++    std::memcpy(inaccessible, &valid, sizeof(valid));
++    const auto before = selection.graphics_key.vertex_buffer_formats;
++    assert(PipelineCacheCoreTestAccess::VertexFormats(dynamic_cache, selection) && !worker.failed);
++    assert(selection.graphics_key.vertex_buffer_formats == before && runtime_fault_recover == &outer);
++    runtime_fault_recover = nullptr;
++    PipelineCacheCoreTestAccess::CheckEmpty(cache);
++    assert(sigaction(SIGSEGV, &old_segv, nullptr) == 0);
++    assert(sigaction(SIGBUS, &old_bus, nullptr) == 0);
++    assert(munmap(inaccessible, size) == 0);
++    std::puts("VERTEX135 inaccessible guest table rejected; outer recovery restored; caches unchanged");
++}
+ 
+ static void TestWorker(bool image) {
+     using namespace Shader;
+@@ -189,6 +369,10 @@
+ 
+ int main(int argc, char** argv) {
+     if (argc == 1) {
++        TestVertexFormats(false, false);
++        TestVertexFormats(false, true);
++        TestVertexFormats(true, true);
++        TestVertexReadFault();
+         for (bool image : {false, true}) {
+             TestSharp(image, true, false);
+             TestSharp(image, true, true);
+@@ -196,6 +380,10 @@
+             TestWorker(image);
+         }
+         std::puts("PASS: 1024 format combinations, speculative rejection, strict semantics, real worker fallback, unchanged program/module caches");
++    } else if (std::string_view(argv[1]) == "vertex-worker") {
++        TestVertexFormats(true, true);
++    } else if (std::string_view(argv[1]) == "vertex-ordered-invalid") {
++        TestVertexFormats(true, false);
+     } else if (std::string_view(argv[1]) == "worker") {
+         TestWorker(argc > 2 && std::string_view(argv[2]) == "image");
+     } else {

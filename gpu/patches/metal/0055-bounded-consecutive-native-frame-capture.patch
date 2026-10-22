@@ -1,0 +1,71 @@
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -59,6 +59,7 @@
+ size_t native_bytes=0;
+ bool native_truncated=false;
+ u64 native_frame=0;
++u32 native_remaining=1,native_series_count=1;
+ std::atomic<u64> native_capture_sequence{0};
+ // A bounded watcher for the observed small command-write range. The payload is compared
+ // only on CPU, never exported or read back from GPU; reset at both capture boundaries.
+@@ -168,8 +169,9 @@
+     }
+     {
+         std::scoped_lock lock{native_mutex};
+-        std::fprintf(f,"NATIVE {\"op\":\"frame\",\"frame\":%llu,\"truncated\":%s,\"bytes\":%zu}\n",
+-            (unsigned long long)native_frame,native_truncated?"true":"false",native_bytes);
++        std::fprintf(f,"NATIVE {\"op\":\"frame\",\"frame\":%llu,\"truncated\":%s,\"bytes\":%zu,\"series_count\":%u,\"series_member\":%u}\n",
++            (unsigned long long)native_frame,native_truncated?"true":"false",native_bytes,
++            native_series_count,native_series_count-native_remaining+1);
+         for(const auto& line:native_lines)std::fprintf(f,"NATIVE %s\n",line.c_str());
+     }
+     std::fclose(f);
+@@ -301,10 +303,23 @@
+         Write(last_presented.load(std::memory_order_relaxed));
+         ResetDependencyAudit(false);
+         entries.clear();pending_sampled.clear();pending_buffers.clear();pass_open=false;
+-        std::scoped_lock lock{native_mutex};native_lines.clear();native_lines.shrink_to_fit();
++        {std::scoped_lock lock{native_mutex};native_lines.clear();native_lines.shrink_to_fit();}
++        if(native_remaining<=1)return;
++        --native_remaining;
++        // Re-arm on this same encoding boundary, before the next pass starts. There
++        // is no host trigger/poll gap. Metadata remains bounded separately per frame.
++        ResetDependencyAudit(true);
++        {std::scoped_lock lock{native_mutex};native_bytes=0;native_truncated=false;native_frame=frame;}
++        native_capture_sequence.fetch_add(1,std::memory_order_relaxed);
++        state.store(Recording,std::memory_order_release);
+         return;
+     }
+     if(current==Armed){
++        const char* count=std::getenv("BB_CAPTURE_CONSECUTIVE_COUNT");char* end=nullptr;
++        const unsigned long requested=count?std::strtoul(count,&end,10):1;
++        native_series_count=native_remaining=count && end && !*end && requested>=1 && requested<=3
++            ? u32(requested) : 1;
++        if(native_series_count>1)std::printf("Frame capture: consecutive chain %u\n",native_series_count);
+         ResetDependencyAudit(true);
+         entries.clear();pending_sampled.clear();pending_buffers.clear();pass_open=false;
+         {std::scoped_lock lock{native_mutex};native_lines.clear();native_bytes=0;native_truncated=false;native_frame=frame;}
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -94,6 +94,21 @@
+  assert(text.find("\"version\":0,\"logical_stage\":5,\"shader\":555")!=std::string::npos);
+  assert(text.find("\"version\":1,\"previous\":false,\"same_payload\":false,\"same_generation\":false,\"zero_words\":48,\"float_one_words\":0")!=std::string::npos);
+  assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==4);
++ // One trigger must capture three consecutive encoding frames, not three later
++ // frames separated by host polling. Each member resets its own dependency versions.
++ setenv("BB_CAPTURE_CONSECUTIVE_COUNT","3",1);
++ std::ofstream(trigger)<<"1";FrameCapture::OnFlip(789);FrameCapture::FrameBoundary(50);
++ for(unsigned frame=50;frame<53;++frame) {
++     assert(FrameCapture::NativeRecording());
++     FrameCapture::NativeCommandWrite(4096,payload.data(),192,100,200,128,10);
++     FrameCapture::FrameBoundary(frame+1);
++     text=read(frame);
++     assert(text.find("\"series_count\":3,\"series_member\":"+std::to_string(frame-49))!=std::string::npos);
++     assert(text.find("\"version\":1,\"previous\":false")!=std::string::npos);
++ }
++ assert(!FrameCapture::Active());
++ unsetenv("BB_CAPTURE_CONSECUTIVE_COUNT");
++ assert(std::distance(std::filesystem::directory_iterator(root),std::filesystem::directory_iterator{})==7);
+  FrameCapture::ClearNativeBoundaryDrain(&drains);
+  std::filesystem::remove_all(root);puts("metadata boundaries, buffer non-read, escaping, bounded dependency versions, aliases, stages, reset and capacity passed");
+ }

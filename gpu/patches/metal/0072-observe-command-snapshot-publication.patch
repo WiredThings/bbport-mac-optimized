@@ -1,0 +1,103 @@
+--- a/gpu/shadps4/video_core/frame_capture.h
++++ b/gpu/shadps4/video_core/frame_capture.h
+@@ -65,6 +65,8 @@
+                                  const void* source, const void* payload, u32 size);
+     // Resolve a decoder packet within an existing submission snapshot, without
+     // reading either buffer. Missing/invalid ranges remain explicit observations.
++    // Publication-time identity of an existing command-buffer copy. Metadata only.
++    static void NativeCommandSnapshot(u64 snapshot, u64 bytes, u64 guest);
+     static void NativeSubmittedPacket(bool copied, u64 packet, u32 bytes, u64 begin,
+                                       u64 range_bytes, u64 guest_begin, u64 submission);
+     static void NativeBufferUse(u64 resource, u64 native, u64 offset, u64 size,
+--- a/gpu/shadps4/video_core/frame_capture.cpp
++++ b/gpu/shadps4/video_core/frame_capture.cpp
+@@ -262,6 +262,14 @@
+         source ? std::to_string(reinterpret_cast<uintptr_t>(source)) : "null",
+         reinterpret_cast<uintptr_t>(payload)));
+ }
++void FrameCapture::NativeCommandSnapshot(u64 snapshot, u64 bytes, u64 guest) {
++    if (!NativeRecording() || !bytes) return;
++    constexpr u64 Max = std::numeric_limits<u64>::max();
++    const bool valid = snapshot && guest && bytes <= Max - snapshot && bytes <= Max - guest;
++    static std::atomic<u64> sequence{};
++    Native(std::format("{{\"op\":\"command_snapshot\",\"sequence\":{},\"snapshot\":{},\"bytes\":{},\"guest\":{},\"valid\":{}}}",
++        ++sequence, snapshot, bytes, guest, valid));
++}
+ void FrameCapture::NativeSubmittedPacket(bool copied, u64 packet, u32 bytes, u64 begin,
+                                         u64 range_bytes, u64 guest_begin, u64 submission) {
+     if(!NativeRecording() || bytes!=208)return;
+@@ -269,8 +277,8 @@
+     const bool valid=packet && begin && guest_begin && range_bytes>=bytes &&
+         range_bytes<=Max-begin && packet>=begin && packet-begin<=range_bytes-bytes &&
+         packet-begin<=Max-guest_begin && bytes<=Max-(guest_begin+(packet-begin));
+-    Native(std::format("{{\"op\":\"submitted_packet\",\"decoder_packet\":{},\"bytes\":208,\"copied\":{},\"submission\":{},\"mapping_valid\":{},\"guest_packet\":{}}}",
+-        packet,copied,submission,valid,valid ? std::to_string(guest_begin+(packet-begin)) : "null"));
++    Native(std::format("{{\"op\":\"submitted_packet\",\"decoder_packet\":{},\"bytes\":208,\"copied\":{},\"submission\":{},\"mapping_valid\":{},\"guest_packet\":{},\"snapshot_begin\":{},\"range_bytes\":{}}}",
++        packet,copied,submission,valid,valid ? std::to_string(guest_begin+(packet-begin)) : "null",begin,range_bytes));
+ }
+ void FrameCapture::NativeCommandWrite(VAddr address, const void* data, u64 size,
+                                       u64 resource, u64 native, u64 offset, u64 generation) {
+--- a/gpu/shadps4/video_core/amdgpu/liverpool.cpp
++++ b/gpu/shadps4/video_core/amdgpu/liverpool.cpp
+@@ -2766,6 +2766,14 @@
+         copy->data.resize(dcb.size() + ccb.size());
+         std::memcpy(copy->data.data(), dcb.data(), dcb.size_bytes());
+         std::memcpy(copy->data.data() + dcb.size(), ccb.data(), ccb.size_bytes());
++        // At publication, before draw preparation or queueing can delay decoding. This
++        // identifies the exact existing snapshot generation without inspecting payloads.
++        VideoCore::FrameCapture::NativeCommandSnapshot(
++            reinterpret_cast<uintptr_t>(copy->data.data()), dcb.size_bytes(),
++            reinterpret_cast<uintptr_t>(dcb.data()));
++        VideoCore::FrameCapture::NativeCommandSnapshot(
++            reinterpret_cast<uintptr_t>(copy->data.data() + dcb.size()), ccb.size_bytes(),
++            reinterpret_cast<uintptr_t>(ccb.data()));
+         copy->guest_dcb = dcb.data();
+         copy->dcb_dwords = dcb.size();
+         copy->guest_ccb = ccb.data();
+--- a/tests/test_frame_capture_metadata.cpp
++++ b/tests/test_frame_capture_metadata.cpp
+@@ -28,6 +28,9 @@
+  FrameCapture::NativeTaskPacket(false,7,8192,nullptr,reinterpret_cast<void*>(2),208);
+  FrameCapture::NativeTaskPacket(true,7,9000,reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),207);
+  FrameCapture::NativeTaskPacket(true,7,16384,reinterpret_cast<void*>(3),reinterpret_cast<void*>(2),208); // same ring pointer, new position
++ FrameCapture::NativeCommandSnapshot(1000,232,4096); // fake pointers must not be dereferenced
++ FrameCapture::NativeCommandSnapshot(~uint64_t{0}-10,32,4096); // invalid range, explicit
++ FrameCapture::NativeCommandSnapshot(1000,0,4096); // empty streams do not publish
+  FrameCapture::NativeSubmittedPacket(true,1024,208,1000,232,4096,71); // exact end, no dereference
+  FrameCapture::NativeSubmittedPacket(true,1025,208,1000,232,4096,72); // one byte outside
+  FrameCapture::NativeSubmittedPacket(true,1024,208,1000,232,~uint64_t{0}-10,73); // translated overflow
+@@ -56,6 +59,7 @@
+  FrameCapture::NativeCommandWrite(0,reinterpret_cast<void*>(1),191,0,0,0,0);
+  FrameCapture::FrameBoundary(11);assert(!FrameCapture::Active());
+  FrameCapture::NativeCommandWrite(0,reinterpret_cast<void*>(1),192,0,0,0,0);
++ FrameCapture::NativeCommandSnapshot(42,208,84); // inactive must not publish or advance identity
+  FrameCapture::NativeWriteOrigin(1,192,FrameCapture::WriteOrigin::ConstantRam,998);
+  auto read=[&](unsigned frame){for(auto& e:std::filesystem::directory_iterator(root))if(e.path().extension()==".txt"){std::ifstream f(e.path());auto text=std::string(std::istreambuf_iterator<char>(f),{});if(text.find("\"frame\":"+std::to_string(frame)+",")!=std::string::npos)return text;}return std::string{};};
+  assert(drains==2);auto text=read(10);assert(text.find("\"op\":\"close\"")!=std::string::npos);assert(text.find("\"frame\":10")!=std::string::npos);assert(text.find("\"truncated\":false")!=std::string::npos);assert(text.find("\\u000a")!=std::string::npos);assert(text.find("\"queue\":123")!=std::string::npos);
+@@ -76,6 +80,10 @@
+  assert(text.find("\"submission\":71,\"mapping_valid\":true,\"guest_packet\":4120")!=std::string::npos);
+  for(unsigned seq:{72,73,74})assert(text.find("\"submission\":"+std::to_string(seq)+",\"mapping_valid\":false,\"guest_packet\":null")!=std::string::npos);
+  assert(text.find("\"copied\":false,\"submission\":75,\"mapping_valid\":true,\"guest_packet\":1024")!=std::string::npos);
++ assert(text.find("\"snapshot_begin\":1000,\"range_bytes\":232")!=std::string::npos);
++ assert(text.find("\"op\":\"command_snapshot\",\"sequence\":1,\"snapshot\":1000,\"bytes\":232,\"guest\":4096,\"valid\":true")!=std::string::npos);
++ assert(text.find("\"bytes\":32,\"guest\":4096,\"valid\":false")!=std::string::npos);
++ assert(text.find("\"op\":\"command_snapshot\",\"sequence\":3,")==std::string::npos);
+  assert(text.find("\"submission\":76,")==std::string::npos);
+  assert(text.find("\"constant_offset\":999")==std::string::npos);
+  assert(text.find("\"constant_offset\":998")==std::string::npos);
+@@ -94,12 +102,14 @@
+  assert(cpu_hits==2);
+  assert(text.find("\"unknown\":false,\"source\":\"nonoverlap\"")==std::string::npos);
+  std::ofstream(trigger)<<"1";FrameCapture::OnFlip(456);FrameCapture::FrameBoundary(20);
++ FrameCapture::NativeCommandSnapshot(2000,232,5000);
+  FrameCapture::NativeBufferUse(101,200,128,192,0,3,123,false,"reset");
+  FrameCapture::NativeCommandWrite(4096,payload.data(),192,100,200,128,10);
+  for(unsigned i=1;i<=8;++i)FrameCapture::NativeCommandWrite(4096+4096*i,payload.data(),192,100+i,200+i,128,10);
+  for(unsigned i=0;i<1030;++i)FrameCapture::NativeBufferUse(101,200,512,16,0,3,123,false,"overflow");
+  FrameCapture::NativeBufferUse(101,200,128,192,0,3,123,false,"overflow_after");
+- FrameCapture::FrameBoundary(21);text=read(20);
++ FrameCapture::FrameBoundary(21);
++ assert(read(20).find("\"op\":\"command_snapshot\",\"sequence\":3,")!=std::string::npos);text=read(20);
+  assert(text.find("\"version\":1,\"previous\":false")!=std::string::npos);
+  assert(text.find("\"source\":\"reset\"")!=std::string::npos);
+  assert(text.find("\"unknown\":false,\"source\":\"reset\"")==std::string::npos);
