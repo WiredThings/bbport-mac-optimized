@@ -54,6 +54,25 @@ if [[ $renderer == metal ]]; then
     export BB_MTL_PERSIST_WARM_ARCHIVE=${BB_MTL_PERSIST_WARM_ARCHIVE:-0}
     unset BB_GPU_PROCESS BB_GPU_DEPS VK_DRIVER_FILES VK_ICD_FILENAMES
     unset BB_VULKAN_LIBRARY SDL_VULKAN_LIBRARY DYLD_LIBRARY_PATH BB_MAC_UNIFIED_MEMORY
+    native_default=0
+    # This package's native dependency closure requires macOS 27; older systems
+    # retain the complete in-process Metal path without changing saved settings.
+    if [[ -f NATIVE-METAL.json ]]; then
+        native_min=$(/usr/bin/plutil -extract minimum_os_major raw -o - NATIVE-METAL.json 2>/dev/null || printf '999')
+        native_enabled=$(/usr/bin/plutil -extract default_enabled raw -o - NATIVE-METAL.json 2>/dev/null || true)
+        if [[ $native_min =~ ^[0-9]+$ && $native_enabled == true && $(sw_vers -productVersion | cut -d. -f1) -ge $native_min ]]; then native_default=1; fi
+    fi
+    export BB_METAL_ARM64=${BB_METAL_ARM64:-$native_default}
+    [[ $BB_METAL_ARM64 == 0 || $BB_METAL_ARM64 == 1 ]] || die "Invalid ARM64 Metal selection"
+    if [[ $BB_METAL_ARM64 == 1 ]]; then
+        [[ -f NATIVE-METAL.json || -f DEVELOPMENT-ARM64-METAL.json ]] || die "ARM64 Metal components are not included"
+        if [[ -f NATIVE-METAL.json && $native_default != 1 ]]; then die "ARM64 Metal is unavailable on this macOS version"; fi
+        gpu=$PWD/bin/gpu-metal-arm64/bb-gpu
+        native_app=$PWD/bin/Bloodborne\ Metal.app/Contents/MacOS/bb-gpu
+        [[ ! -x $native_app ]] || gpu=$native_app
+        [[ -x $gpu && -f $PWD/bin/gpu-metal-arm64/libbbgpu.dylib ]] || die "ARM64 Metal backend missing"
+        export BB_NATIVE_GPU=1 BB_GPU_PROCESS=$gpu BB_GPU_DEPS=$PWD/deps-metal-arm64
+    fi
 else
 if [[ -f .packaged ]]; then
     # Self-contained release: x86-64 game runtime and native arm64 renderer.
@@ -153,7 +172,11 @@ echo "Renderer: ${metal_lib:-$BB_GPU_PROCESS}"
 echo "Resolution patch: ${BB_PATCHES:-none (16:9)}"
 echo "Game language: ${BB_LANGUAGE:-1}; Chinese source: ${BB_CHINESE_SOURCE:-official} (community request: ${BB_CHINESE_LANGUAGE:-none})"
 if [[ $renderer == metal ]]; then
-    echo "Metal: direct Metal API, Rosetta host, no-copy guest buffers; cache=metal1"
+    if [[ ${BB_METAL_ARM64:-0} == 1 ]]; then
+        echo "Metal: direct Metal API, ARM64 host, Rosetta game, shared no-copy buffers"
+    else
+        echo "Metal: direct Metal API, Rosetta host, no-copy guest buffers; cache=metal1"
+    fi
     echo "Metal combined profile: clear=$BB_MTL_BATCH_CLEARS direct-copy=$BB_MTL_DIRECT_COPY staging=$BB_MTL_ADAPTIVE_STAGING tiling=$BB_MTL_TEXTURE_TILING residency=$BB_MTL_PRECISE_RESIDENCY barriers=$BB_MTL_COALESCE_BARRIERS query=$BB_MTL_QUERY_COMPUTE_CHAIN compute=$BB_MTL_PRECISE_COMPUTE half=$BB_MTL_TEXTURE_TILING_HALF fold-clears=$BB_MTL_FOLD_CLEARS"
 else
     echo "Renderer performance port 1: precision=$precision, compact-no-output=${BB_COMPACT_NO_OUTPUT:-1}"

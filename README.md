@@ -5,15 +5,20 @@
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current build is **0.2.49**, with a guarded depth/stencil pass-continuation experiment, safer speculative vertex preparation and less unused CPU work. Bounded save history and optional iCloud Drive syncing remain available. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
+The current build is **0.2.50**, with a separate ARM64 Metal renderer, synchronized resource lifetimes and a retained in-process fallback. The game itself still uses Rosetta. Eight matched M4 runs measured about 6% more FPS without lower quality or higher memory pressure. Bounded save history and optional iCloud Drive syncing remain available. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
 
 Version 0.2.36 defaults new configurations to the game's original model detail and warns
 about forced low LOD, which can hide walls or floors. If an existing configuration has
 missing geometry, select **Model detail → As in the game (0)** and restart.
 
-The launcher is native Apple Silicon. On the Metal path, the game and renderer host code are
-x86-64 and run through **Rosetta 2**. The project builds on bbport/shadPS4 and community renderer
+The launcher is native Apple Silicon. The game runs through **Rosetta 2**; supported
+packages run the Metal host natively in a separate ARM64 process. The old renderer
+fallback runs through Rosetta as well. The project builds on bbport/shadPS4 and community renderer
 work; it is not an official FromSoftware/Sony PC release.
+
+The ARM64 Metal host defaults on in supported macOS 27+ packages; macOS 26 retains
+the in-process renderer. Advanced options provide a fallback switch. See the
+[ownership, measurements and build notes](docs/release/ARM64-METAL-EXPERIMENT.md).
 
 ## Install and play
 
@@ -103,7 +108,7 @@ for game-file checks and [Chinese support](#chinese-game-text-and-community-patc
 | GPU address metadata | Two-level GPU address table with matching shader lookup, replacing the fixed 1 GiB flat table |
 | Metal stability | Rejects unusable speculative resource formats and retries on the ordered GPU path; failure-only thread/stack diagnostics |
 | Rendering efficiency | Sampler memoization; safe clear/load discard; direct scene-copy clears; alpha merge; compatible clear batching, copy/tiling, residency and synchronization refinements |
-| Launcher | 34 Metal optimization controls with dependencies and evidence labels; backend-appropriate options; corrected presentation/limit labels; credited macOS icon formatting |
+| Launcher | Up to 35 Metal optimization controls with dependencies and evidence labels; backend-appropriate options; corrected presentation/limit labels; credited macOS icon formatting |
 | Vulkan fallback | Retains earlier imported shader/command-memory fixes and separate caches; Vulkan-specific changes are not presented as Metal optimizations |
 
 The optimized standalone launcher, ultrawide UI management, patch system and quicksave foundation
@@ -143,7 +148,7 @@ and [patch credits](docs/THIRD_PARTY_CHANGES.md#game-language-and-community-patc
 
 - **Resolution** is the output size. **Advanced → Upscaler → Preset** controls MetalFX input size;
   the launcher displays the actual scene-render resolution. MetalFX is temporal, and Native AA is 1:1.
-- The source Metal section now has 34 controls: **21 ON / 13 optional experiments OFF**. Saved explicit
+- Supported native-host packages have 35 Metal controls: **22 ON / 13 optional experiments OFF** (34 / 21 ON without the native host). Saved explicit
   choices are retained. Object-motion vectors and experimental occlusion culling have separate controls.
 - The original five optional experiments are cross-chunk snapshot reuse, fragment-parameter specialization,
   compute-based small writes, relaxed math and binary pipeline-archive persistence. Their benefits
@@ -164,7 +169,7 @@ compilation. The discarded offline-library experiment is not part of this releas
 
 ## Experimental online play
 
-Version 0.2.49 includes an opt-in **Online** section for The Hunter’s Dream, using
+Version 0.2.50 includes an opt-in **Online** section for The Hunter’s Dream, using
 an optional bbnet module on the Metal backend. Website/device sign-in, the in-game server
 announcement and chalice **search → join** were exercised with an isolated client. Message
 write/list/delete was exercised in game; a second client has not verified delivery. Direct
@@ -198,13 +203,13 @@ softwareupdate --install-rosetta --agree-to-license
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.49-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.50-source1
 ```
 
-The script initializes submodules, builds the x86-64 libraries and arm64 Vulkan driver,
+The script initializes submodules, builds x86-64 and ARM64 Metal dependencies plus the arm64 Vulkan driver,
 installs pinned SPIRV-Cross/xbyak headers, builds the two Vulkan host architectures,
 Metal renderer, enhanced runtime and optional network module, tests the launcher, and packages a **complete app**
-with both backends, Python and relocated libraries. It applies all 37 Metal adapter patches
+with both backends, Python and relocated libraries. It applies the ordered Metal adapter patch series
 in order. Compilation is sequential across components, with two jobs inside each build;
 use `BB_BUILD_JOBS=1` on memory-constrained systems. Quit the game before building.
 A first build downloads and compiles substantial dependencies; reserve tens of GiB of disk
@@ -212,18 +217,18 @@ space. It never installs into `/Applications`, launches the game or edits saves/
 
 Outputs:
 
-- `out/source-release-0.2.49-source1/Blood Echoes.app`
-- `dist/Blood-Echoes-0.2.49-source1.zip` (complete Metal + Vulkan app)
-- `dist/blood-echoes-0.2.49-source1-source.tar.gz` (corresponding source/dependencies)
+- `out/source-release-0.2.50-source1/Blood Echoes.app`
+- `dist/Blood-Echoes-0.2.50-source1.zip` (complete Metal + Vulkan app)
+- `dist/blood-echoes-0.2.50-source1-source.tar.gz` (corresponding source/dependencies)
 - `dist/source-build-verification.json` (final packaging/signature/link checks)
 - `dist/source-build-SHA256SUMS.txt` (final app ZIP and source archive hashes)
 
 Build from a clean clone: the packager refuses uncommitted project files. Use a new version
 suffix for another final staging directory. With dependencies already prepared by this
-workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.49-source2`.
+workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.50-source2`.
 Keep the `.git` directories: GitHub's automatic source ZIP omits submodules, and the Release
 inspection source archive has no Git metadata required by the revision/patch guards.
-`v0.2.49` includes this build entry point; `optimized` also carries subsequent fixes.
+The `optimized` branch includes this build entry point and receives subsequent fixes.
 
 For an SDK/linker mismatch, set `SDKROOT` to an installed SDK supported by your active compiler;
 do not mix an old linker with a newer SDK. See [the detailed build guide](docs/release/BUILD-OPTIMIZED.md)
@@ -233,7 +238,7 @@ for individual commands, verification limits and troubleshooting.
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
 - [Full branch changes and third-party attribution](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.49 release notes](docs/release/0.2.49.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
+- [0.2.50 release notes](docs/release/0.2.50.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
 
 Built on **DiAvisoo's optimized launcher, bmy/bbport-mac, deadinside28's bbport, shadPS4,
 Huax-1839, IFreemz, Awakenchan, Wooloomooloo2/Mark Hall**, and the component contributors.

@@ -24,7 +24,7 @@ with the game closed; reserve tens of GiB for two-architecture dependency/build/
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.49-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.50-source1
 ```
 
 The script performs the steps below in order. It builds its own Vulkan base package before
@@ -45,6 +45,7 @@ git submodule update --init --recursive
 BB_ARCH=x86_64 BB_SKIP_KOSMICKRISP=1 bash tools/macos/setup_deps.sh
 BB_ARCH=arm64 bash tools/macos/setup_deps.sh
 bash tools/macos/setup_metal_deps.sh
+BB_METAL_ARCH=arm64 BB_METAL_DEPS="$PWD/deps-arm64" bash tools/macos/setup_metal_deps.sh
 bash tools/macos/setup_online_deps.sh
 brew install python@3.11
 export BB_PACKAGE_PYTHON="$(brew --prefix python@3.11)/Frameworks/Python.framework/Versions/3.11"
@@ -52,26 +53,28 @@ export BB_PACKAGE_PYTHON="$(brew --prefix python@3.11)/Frameworks/Python.framewo
 BB_SKIP_NATIVE_GPU=1 bash tools/macos/build.sh
 bash tools/macos/build_m2_native.command
 bash tools/macos/build_metal.sh
+bash tools/macos/build_metal_arm64.sh
 bash tools/macos/build_metal_probe.sh
 bash tools/macos/build_online.sh
 swift test --package-path launcher-macos --jobs "$BB_SWIFT_JOBS"
 
-python3 tools/macos/package_optimized.py 0.2.49-source1
+python3 tools/macos/package_optimized.py 0.2.50-source1
 python3 tools/macos/package_metal.py \
-  --baseline "$PWD/out/package-optimized/blood-echoes-0.2.49-source1/Blood Echoes.app" \
-  --launcher "$PWD/out/package-optimized/blood-echoes-0.2.49-source1/Blood Echoes.app" \
+  --baseline "$PWD/out/package-optimized/blood-echoes-0.2.50-source1/Blood Echoes.app" \
+  --launcher "$PWD/out/package-optimized/blood-echoes-0.2.50-source1/Blood Echoes.app" \
   --gpu-build "$PWD/out/gpu-metal" \
+  --arm64-build "$PWD/out/gpu-metal-arm64" --arm64-deps "$PWD/deps-arm64" \
   --metal-probe "$PWD/out/probe-metal/bb-probe-metal" \
   --online-build "$PWD/out/online" --online-deps "$PWD/deps-online-x86_64" \
   --spirv-cross-source "$PWD/deps-x86_64/src/SPIRV-Cross" \
-  --app "$PWD/out/source-release-0.2.49-source1/Blood Echoes.app" \
-  --output "$PWD/dist" --version 0.2.49-source1 --verification-name source-build
+  --app "$PWD/out/source-release-0.2.50-source1/Blood Echoes.app" \
+  --output "$PWD/dist" --version 0.2.50-source1 --verification-name source-build
 ```
 
 `package_optimized.py` exports the current pinned and patched project/dependency sources,
 licenses and a source manifest. Its preliminary ZIP is Vulkan-only; use the final
-`Blood-Echoes-0.2.49-source1.zip` from `package_metal.py` for the combined app.
-The source archive is `dist/blood-echoes-0.2.49-source1-source.tar.gz`.
+`Blood-Echoes-0.2.50-source1.zip` from `package_metal.py` for the combined app.
+The source archive is `dist/blood-echoes-0.2.50-source1-source.tar.gz`.
 The enhanced `bb-probe-metal` is rebuilt from the public root runtime source, rather than
 preserved from a previous App. Both backends' runtime/renderer libraries are relocated into
 the bundle and checked for non-system external loads. The icon and localization bundle are
@@ -122,3 +125,12 @@ Pinned source dependencies and license texts are exported with the source asset;
 [`gpu/bbnet/DEPENDENCIES.json`](../../gpu/bbnet/DEPENDENCIES.json) and [online notes](../ONLINE.md).
 
 The launcher embeds the full project Git revision in `BBSourceCommit`. About shows its first seven hexadecimal characters; `CFBundleVersion` remains numeric. Git-less source exports obtain the same identity from `SOURCE-MANIFEST.json`. Release launcher builds stop if neither source identity is available; an unrelated parent repository is never used.
+
+## Separate ARM64 Metal host (0.2.50)
+
+The complete build also compiles a native Metal child and its dependency closure.
+The packaged closure currently requires macOS 27 and is default ON there; macOS 26
+keeps in-process Metal. This does not change the game code’s Rosetta requirement.
+See [ownership and measured validation](ARM64-METAL-EXPERIMENT.md). The older clean-clone
+audit above predates this addition; the current host was built and tested in both
+architectures with isolated saves, not by repeating that entire historical audit.

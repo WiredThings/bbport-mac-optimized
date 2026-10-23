@@ -1,0 +1,41 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_scheduler.mm
+@@ -527,6 +527,7 @@
+     if (impl->compute) {
+         ClosePhysical(EncoderKind::Compute);
+     }
++    const bool preserve_hoist_order=hoisted;
+     if (hoisted || commands.HasBarrier()) {
+         need_fence_wait = true;
+     }
+@@ -534,6 +535,10 @@
+     OpenPhysical(EncoderKind::Render, (__bridge const void*)impl->held_pass,
+                  std::exchange(need_fence_wait, false), held_guest, held_bound_only);
+     impl->held_pass = nil;
++    // The render pass consumes the hoisted producer's fence, but its next
++    // encoder may still read the producer's indirect/untracked buffer. Carry
++    // that dependency through an empty render pass too; do not rely on CPU pace.
++    need_fence_wait |= preserve_hoist_order;
+     if (pass_labels && !held_label.empty()) {
+         impl->render.label = @(held_label.c_str());
+         VideoCore::FrameCapture::NativeLabel(held_label.c_str(),(uintptr_t)this);
+@@ -556,6 +561,7 @@
+     job.bound_only = held_bound_only;
+     job.close_compute = hoisted;
+     job.wait_all = std::exchange(need_fence_wait, false) || hoisted || commands.HasBarrier();
++    need_fence_wait = hoisted; // the following encoder also follows the producer
+     job.label = pass_labels ? held_label : std::string{};
+     holding = false;
+     hoisting = false;
+diff --git a/tests/test_mtl_scheduler.mm b/tests/test_mtl_scheduler.mm
+--- a/tests/test_mtl_scheduler.mm
++++ b/tests/test_mtl_scheduler.mm
+@@ -453,6 +453,7 @@
+             scheduler.Flush();
+         }
+         scheduler.Finish();
++        if(words[0]!=hoisted)std::printf("  held result round=%d actual=%#x expected=%#x\n",round,words[0],hoisted);
+         CHECK(words[0] == hoisted);
+     }
+     // A pass held and released by Flush with nothing in it.

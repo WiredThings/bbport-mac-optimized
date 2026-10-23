@@ -10,7 +10,7 @@ About shows `version (source Git short commit)`; the numeric macOS build number 
 ## Requirements and installation
 
 - Apple Silicon Mac, **macOS 26 or newer**, and **Rosetta 2**. The launcher is ARM64; Metal-path
-  game/renderer host code is x86-64 under Rosetta. Local validation focuses on the base M4 Mac mini
+  game code remains x86-64 under Rosetta. The separate Metal host is ARM64 on supported macOS 27+ packages; macOS 26 retains the x86 fallback. Local validation focuses on the base M4 Mac mini
   with 10 GPU cores and 16 GB RAM; other models do not inherit a frame-rate guarantee.
 - Your own decrypted Bloodborne installation, with **update 1.09 merged in**.
 - Python and runtime libraries are bundled. No Xcode, Homebrew or compilation is needed to play.
@@ -169,7 +169,7 @@ Unlocked uses a variable-timestep patch; 60/90 use fixed-timestep patches.
 
 ## Metal optimization controls
 
-**Advanced → Metal optimizations** exposes 34 controls: **21 ON by default**, **13 optional
+**Advanced → Metal optimizations** exposes up to 35 controls: **22 ON by default** with the native host (otherwise 21), **13 optional
 experiments OFF**. Saved explicit values override defaults. Hover for technical details.
 
 - **Verified**: adopted after the documented checks/measurements.
@@ -316,3 +316,7 @@ immutable build snapshot; current branch documentation can include later correct
 Blood Echoes was previously named Bloodborne Optimized. The app and repository names
 changed; bundle identifiers, preferences and existing save/data paths are retained.
 No migration is required.
+
+The **ARM64 renderer host** option (0.2.50) selects the separate native renderer. It defaults
+on when supported; turning it off returns to in-process Metal. The game still requires
+Rosetta. Existing save paths, language selection and cache capacities do not change.

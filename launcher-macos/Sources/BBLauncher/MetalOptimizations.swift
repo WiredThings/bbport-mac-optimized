@@ -22,7 +22,17 @@ struct MetalOptimization: Identifiable, Sendable {
 }
 
 enum MetalOptimizations {
-    static let all: [MetalOptimization] = [
+    static var nativeHostAvailable: Bool {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27,
+              let root = Bundle.main.resourceURL?.appendingPathComponent("bbport"),
+              let data = try? Data(contentsOf: root.appendingPathComponent("NATIVE-METAL.json")),
+              let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              value["schema"] as? Int == 1, value["default_enabled"] as? Bool == true,
+              ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= (value["minimum_os_major"] as? Int ?? 27) else { return false }
+        return FileManager.default.isExecutableFile(atPath: root.appendingPathComponent("bin/gpu-metal-arm64/bb-gpu").path)
+    }
+    static let all: [MetalOptimization] = {
+        let legacy: [MetalOptimization] = [
         .init(id: "BB_MTL_TWO_LEVEL_BDA", title: "Two-level GPU address table", note: "Saves about 0.9 GiB versus the flat table. Switching rebuilds the shader cache.", defaultOn: true, evidence: .adopted),
         .init(id: "BB_MTL_CLEAR_DISCARD", title: "Skip loading attachments before a full clear", note: "Keeps the clear result while avoiding an unnecessary previous-content load.", defaultOn: true, evidence: .adoptedExperimental),
         .init(id: "BB_MTL_OVERWRITE_DISCARD", title: "Skip loading fully overwritten copy targets", note: "Only discards previous contents when the copy replaces the complete target.", defaultOn: true, evidence: .adoptedExperimental),
@@ -57,7 +67,10 @@ enum MetalOptimizations {
         .init(id: "BB_MTL_INLINE_UPDATES", title: "Write small parameters with a compute kernel", note: "Removes tiny buffer copies, but adds compute transitions. No repeatable FPS gain; memory was about 37 MiB higher in one comparison.", defaultOn: false, evidence: .experimental),
         .init(id: "BB_MTL_RELAXED_MATH", title: "Use relaxed fragment and compute math", note: "V2 float profile: benefit is unconfirmed and floating-point results may change. Switching rebuilds the shader cache.", defaultOn: false, evidence: .experimental),
         .init(id: "BB_MTL_PERSIST_WARM_ARCHIVE", title: "Save and load binary pipeline archives", note: "Earlier archive loading used about 0.6 GiB more process memory. Default off; turning off ignores existing archive files without deleting them.", defaultOn: false, evidence: .memoryRisk),
-    ]
+        ]
+        guard nativeHostAvailable else { return legacy }
+        return [.init(id: "BB_METAL_ARM64", title: "ARM64 renderer host", note: "Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test.", defaultOn: true, evidence: .adoptedExperimental)] + legacy
+    }()
 
     static var adopted: [MetalOptimization] { all.filter { $0.defaultOn } }
     static var optionalExperiments: [MetalOptimization] { all.filter { !$0.defaultOn } }

@@ -1,0 +1,306 @@
+{
+  "schema": 1,
+  "date": "2026-10-23",
+  "hardware": "M4 Mac mini 16 GB",
+  "scene": "Central Yharnam fixed camera",
+  "resolution": "native 1920x1080; MetalFX off; existing effects flags unchanged",
+  "warmup_seconds": 45,
+  "score_seconds": 45,
+  "order": "ABBA+BAAB",
+  "guard_policy": "critical-sustained-swap-paired-session-v6",
+  "fixed_flags": {
+    "BB_MTL_FRAGMENT_UNIFORMS": "1",
+    "BB_TEXTURE_RELEASED_STORAGE": "0"
+  },
+  "means": {
+    "0": {
+      "fps": 44.64439851374699,
+      "low1": 34.28632625478213,
+      "p95": 23.9425,
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": -2.0,
+      "memory": {
+        "owned_median_mib": 1192.1730499267578,
+        "owned_peak_mib": 1256.1730499267578,
+        "metal-allocated_median_mib": 6000.10546875,
+        "metal-allocated_peak_mib": 6064.10546875,
+        "graphics-ledger_median_mib": 1482.26171875,
+        "graphics-ledger_peak_mib": 1545.95703125,
+        "renderer_process_footprint_median_mib": 5786.42712020874,
+        "renderer_process_footprint_peak_mib": 5835.919273376465,
+        "process_footprint_accounted_sum_median_mib": 5788.68200302124,
+        "process_footprint_accounted_sum_peak_mib": 5836.718101501465
+      }
+    },
+    "1": {
+      "fps": 47.26731578909609,
+      "low1": 39.52031672646347,
+      "p95": 23.0075,
+      "warning_fraction": 0.4,
+      "score_swap_growth_mib": -2.0,
+      "memory": {
+        "owned_median_mib": 1154.2742156982422,
+        "owned_peak_mib": 1218.2742156982422,
+        "metal-allocated_median_mib": 5923.6171875,
+        "metal-allocated_peak_mib": 5987.6171875,
+        "graphics-ledger_median_mib": 1415.37109375,
+        "graphics-ledger_peak_mib": 1480.765625,
+        "renderer_process_footprint_median_mib": 2428.9636726379395,
+        "renderer_process_footprint_peak_mib": 2486.8503913879395,
+        "process_footprint_accounted_sum_median_mib": 5519.029180526733,
+        "process_footprint_accounted_sum_peak_mib": 5570.494989395142
+      }
+    }
+  },
+  "runs": [
+    {
+      "label": "a1",
+      "fps": 45.019090080330386,
+      "low1": 33.23626234489744,
+      "p95": 23.67,
+      "draws": 1123.617156862745,
+      "memory": {
+        "owned_median_mib": 1220.4864654541016,
+        "owned_peak_mib": 1284.4864654541016,
+        "metal-allocated_median_mib": 6028.453125,
+        "metal-allocated_peak_mib": 6092.453125,
+        "graphics-ledger_median_mib": 1510.1875,
+        "graphics-ledger_peak_mib": 1573.640625,
+        "renderer_process_footprint_median_mib": 5837.209991455078,
+        "renderer_process_footprint_peak_mib": 5875.0459060668945,
+        "process_footprint_accounted_sum_median_mib": 5837.502960205078,
+        "process_footprint_accounted_sum_peak_mib": 5876.2099685668945
+      },
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "0",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "ABBA"
+    },
+    {
+      "label": "b1",
+      "fps": 44.428512128330446,
+      "low1": 34.1041964401715,
+      "p95": 26.57,
+      "draws": 1123.1303921568629,
+      "memory": {
+        "owned_median_mib": 1249.423355102539,
+        "owned_peak_mib": 1313.423355102539,
+        "metal-allocated_median_mib": 5897.0,
+        "metal-allocated_peak_mib": 5961.0,
+        "graphics-ledger_median_mib": 1444.3125,
+        "graphics-ledger_peak_mib": 1509.390625,
+        "renderer_process_footprint_median_mib": 2375.0964736938477,
+        "renderer_process_footprint_peak_mib": 2435.0183486938477,
+        "process_footprint_accounted_sum_median_mib": 5465.297775268555,
+        "process_footprint_accounted_sum_peak_mib": 5522.344650268555
+      },
+      "warning_fraction": 0.6,
+      "score_swap_growth_mib": -8.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "1",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "ABBA"
+    },
+    {
+      "label": "b2",
+      "fps": 47.673935893019596,
+      "low1": 41.26341060844774,
+      "p95": 22.22,
+      "draws": 1123.5595182955071,
+      "memory": {
+        "owned_median_mib": 1065.824722290039,
+        "owned_peak_mib": 1129.824722290039,
+        "metal-allocated_median_mib": 5875.65625,
+        "metal-allocated_peak_mib": 5939.65625,
+        "graphics-ledger_median_mib": 1350.03125,
+        "graphics-ledger_peak_mib": 1417.125,
+        "renderer_process_footprint_median_mib": 2332.924530029297,
+        "renderer_process_footprint_peak_mib": 2397.002655029297,
+        "process_footprint_accounted_sum_median_mib": 5424.907035827637,
+        "process_footprint_accounted_sum_peak_mib": 5480.207794189453
+      },
+      "warning_fraction": 0.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "1",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "ABBA"
+    },
+    {
+      "label": "a2",
+      "fps": 44.18446700011991,
+      "low1": 36.49168901782619,
+      "p95": 24.22,
+      "draws": 1123.393584521385,
+      "memory": {
+        "owned_median_mib": 1244.4854888916016,
+        "owned_peak_mib": 1308.4854888916016,
+        "metal-allocated_median_mib": 6052.453125,
+        "metal-allocated_peak_mib": 6116.453125,
+        "graphics-ledger_median_mib": 1532.953125,
+        "graphics-ledger_peak_mib": 1598.015625,
+        "renderer_process_footprint_median_mib": 5755.358955383301,
+        "renderer_process_footprint_peak_mib": 5815.202682495117,
+        "process_footprint_accounted_sum_median_mib": 5755.569892883301,
+        "process_footprint_accounted_sum_peak_mib": 5817.374557495117
+      },
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": -8.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "0",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "ABBA"
+    },
+    {
+      "label": "b1",
+      "fps": 47.59489273072335,
+      "low1": 40.82617328854826,
+      "p95": 22.24,
+      "draws": 1123.17878647522,
+      "memory": {
+        "owned_median_mib": 1228.049331665039,
+        "owned_peak_mib": 1292.049331665039,
+        "metal-allocated_median_mib": 6038.1875,
+        "metal-allocated_peak_mib": 6102.1875,
+        "graphics-ledger_median_mib": 1510.875,
+        "graphics-ledger_peak_mib": 1574.578125,
+        "renderer_process_footprint_median_mib": 2616.5496673583984,
+        "renderer_process_footprint_peak_mib": 2672.8309173583984,
+        "process_footprint_accounted_sum_median_mib": 5706.125877380371,
+        "process_footprint_accounted_sum_peak_mib": 5757.907127380371
+      },
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "1",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "BAAB"
+    },
+    {
+      "label": "a1",
+      "fps": 44.048459351153234,
+      "low1": 33.70732411999808,
+      "p95": 24.45,
+      "draws": 1123.9127450980393,
+      "memory": {
+        "owned_median_mib": 1074.169448852539,
+        "owned_peak_mib": 1138.169448852539,
+        "metal-allocated_median_mib": 5882.0,
+        "metal-allocated_peak_mib": 5946.0,
+        "graphics-ledger_median_mib": 1365.515625,
+        "graphics-ledger_peak_mib": 1429.03125,
+        "renderer_process_footprint_median_mib": 5707.733795166016,
+        "renderer_process_footprint_peak_mib": 5747.667343139648,
+        "process_footprint_accounted_sum_median_mib": 5706.007232666016,
+        "process_footprint_accounted_sum_peak_mib": 5747.585311889648
+      },
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "0",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "BAAB"
+    },
+    {
+      "label": "a2",
+      "fps": 45.32557762338444,
+      "low1": 33.71002953640683,
+      "p95": 23.43,
+      "draws": 1123.3191176470589,
+      "memory": {
+        "owned_median_mib": 1229.550796508789,
+        "owned_peak_mib": 1293.550796508789,
+        "metal-allocated_median_mib": 6037.515625,
+        "metal-allocated_peak_mib": 6101.515625,
+        "graphics-ledger_median_mib": 1520.390625,
+        "graphics-ledger_peak_mib": 1583.140625,
+        "renderer_process_footprint_median_mib": 5845.405738830566,
+        "renderer_process_footprint_peak_mib": 5905.761161804199,
+        "process_footprint_accounted_sum_median_mib": 5855.647926330566,
+        "process_footprint_accounted_sum_peak_mib": 5905.702568054199
+      },
+      "warning_fraction": 1.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "0",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "BAAB"
+    },
+    {
+      "label": "b2",
+      "fps": 49.37192240431096,
+      "low1": 41.88748656868637,
+      "p95": 21.0,
+      "draws": 1123.6459265890778,
+      "memory": {
+        "owned_median_mib": 1073.7994537353516,
+        "owned_peak_mib": 1137.7994537353516,
+        "metal-allocated_median_mib": 5883.625,
+        "metal-allocated_peak_mib": 5947.625,
+        "graphics-ledger_median_mib": 1356.265625,
+        "graphics-ledger_peak_mib": 1421.96875,
+        "renderer_process_footprint_median_mib": 2391.284019470215,
+        "renderer_process_footprint_peak_mib": 2442.549644470215,
+        "process_footprint_accounted_sum_median_mib": 5479.786033630371,
+        "process_footprint_accounted_sum_peak_mib": 5521.5203857421875
+      },
+      "warning_fraction": 0.0,
+      "score_swap_growth_mib": 0.0,
+      "renderer": "4f90fa6293092a68fa3ae2bae0c9e75d2efd57babee495ca8b4858182062fb6b",
+      "probe": "2a0f379f51185d45bdd475d5cb0b7a041c7ba05113cd111bf04bb4a92122761e",
+      "variants": {
+        "BB_METAL_ARM64": "1",
+        "BB_MTL_FRAGMENT_UNIFORMS": "1",
+        "BB_TEXTURE_RELEASED_STORAGE": "0"
+      },
+      "fingerprint": "3fbcf968b72c6111e490762a59ee1977eda47c32a98f6a90e2edd994f0729706",
+      "visual_observation": "unverified",
+      "order": "BAAB"
+    }
+  ],
+  "scope": "Same parent/CPU binaries and isolated save/cache seed. No computer-use capture during scoring; external observation not verified. Post-score startup capability/icon changes are covered by separate boot/restart tests. Accounted footprint includes both processes and is not unique physical RAM."
+}

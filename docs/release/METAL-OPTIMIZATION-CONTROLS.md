@@ -1,6 +1,6 @@
 # Metal optimization controls
 
-The 0.2.49 launcher exposes 34 runtime controls under **Advanced → Metal optimizations**, in English,
+The 0.2.50 launcher exposes up to 35 runtime controls under **Advanced → Metal optimizations**, in English,
 Simplified Chinese and Traditional Chinese. The displayed badges are **Verified**,
 **Experimental**, **Adopted bundle**, and **Higher memory use**; stored/source keys may retain
 older badge wording for localization compatibility. Existing object-motion and occlusion controls stay
@@ -8,7 +8,7 @@ in their current sections. No resolution, effects, save state or cache capacity 
 
 ## Defaults and evidence
 
-The 20 previously adopted controls retain their ON defaults; consumed-clear continuation adds one default-ON control. Six restored alternatives and the heap-history candidate add default-OFF experimental controls (21 ON / 13 OFF total). The depth-layout experiment adds one OFF control in 0.2.49. A missing preference uses
+The previous 34 controls retain their defaults (21 ON / 13 OFF). Supported native-host packages add the default-ON ARM64 renderer control (22 ON / 13 OFF). A missing preference uses
 the current runtime default; existing explicit preferences remain authoritative.
 
 - The two-level address table, direct scene-copy clear and idle/startup object reclamation
@@ -179,3 +179,13 @@ barriers, fences, hoisted work, clears or render tails. Prior and current attach
 exclude continuation. Unknown visibility callbacks and reduced-density production query targets
 retain the original path. No resource allocation or cache budget is added. Native pixel/query
 tests pass, but the M4 A/B does not establish a benefit; see [evidence](METAL-DEPTH-LAYOUT.md).
+
+
+## 0.2.50 native host
+
+Supported macOS 27+ packages add `BB_METAL_ARM64` (default ON), bringing the visible
+controls to 35 (22 ON / 13 OFF). It moves the renderer to a separate ARM64 process;
+the game and networking still use Rosetta. Eight fixed-scene M4 comparisons measured
+about 6% higher FPS without higher memory pressure. Turn it off to retain in-process
+Metal. The option is hidden when the matching native package or OS is unavailable.
+See [architecture and validation](ARM64-METAL-EXPERIMENT.md). No cache capacity changes.

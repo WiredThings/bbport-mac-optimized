@@ -361,6 +361,10 @@ void runtime_restart(void) {
     /* exec replaces the image but keeps its PID alive: AppKit's Dock registration
      * then survives into another Cocoa initialization. Let the waiting shell reap
      * this process first. The status also carries quickload's one-shot flag. */
+    // Optional GPU ABI: a split renderer owns a child device/process. Reap it
+    // before the supervisor starts the next game, preserving F3's memory bound.
+    extern void bbgpu_before_restart(void) __attribute__((weak_import));
+    if (bbgpu_before_restart) bbgpu_before_restart();
     const int restart_status = runtime_supervised_restart_status();
     if (restart_status) _exit(restart_status);
     for (int fd=3, top=getdtablesize(); fd<top; ++fd) close(fd);

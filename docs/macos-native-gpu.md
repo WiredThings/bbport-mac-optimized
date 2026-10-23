@@ -1,5 +1,9 @@
 # Native Apple Silicon GPU process (macOS): design
 
+This document describes the original Vulkan process split and its historical measurements.
+The separate direct-Metal host and its current validation boundaries are documented in
+[ARM64 Metal experiment](release/ARM64-METAL-EXPERIMENT.md).
+
 Status: first working version (branch `macos-native`): `BB_NATIVE_GPU=1` runs the GPU side in a
 native arm64 process. The in-process x86-64 path stays the default until the native one is faster
 and stable.

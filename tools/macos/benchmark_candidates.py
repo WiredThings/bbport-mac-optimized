@@ -39,6 +39,15 @@ def summarize(path):
         if not vals:raise ValueError('Missing accounting: '+field)
         mem[field+'_median_mib']=statistics.median(vals)
         mem[field+'_peak_mib']=max(vals)
+    if 'BB_METAL_ARM64' in r.get('variants',{}):
+        # Renderer ledger excludes the separate Rosetta process in ARM mode.
+        # Keep it labelled; never treat that alone as a whole-game RAM saving.
+        for suffix in ('median_mib','peak_mib'):
+            mem['renderer_process_footprint_'+suffix]=mem.pop('footprint_'+suffix)
+        values=[s.get('process_footprint_accounted_sum_bytes') for s in samples]
+        if any(v is None for v in values):raise ValueError('Missing split-process memory accounting')
+        mem['process_footprint_accounted_sum_median_mib']=statistics.median(values)/1024**2
+        mem['process_footprint_accounted_sum_peak_mib']=max(values)/1024**2
     swaps=[s['pressure']['swap_mib'] for s in r['samples']]
     return dict(result=str(path),fps=r['metrics']['fps'],low1=r['metrics']['one_percent_low_fps'],
                 p95=r['metrics']['frame_ms_p95'],draws=r['metrics']['draws']['mean'],memory=mem,
@@ -56,6 +65,7 @@ def main():
     p.add_argument('--order',choices=('ABBA','BAAB'),default='ABBA')
     p.add_argument('--max-swap-growth-mib',type=int,default=b.DEFAULT_SWAP_GROWTH_MIB)
     p.add_argument('--max-swap-total-mib',type=int,default=b.DEFAULT_SWAP_TOTAL_MIB)
+    p.add_argument('--swap-budget-baseline-mib',type=float,help='Preserve an earlier baseline across related test suites')
     p.add_argument('--swap-rapid-window-seconds',type=int,choices=(6,30),default=6)
     p.add_argument('--stop-at',type=b.authorization_deadline,help='ISO-8601 test authorization deadline with timezone')
     p.add_argument('--visual-observation',choices=('absent','unverified'),default='unverified',help='Operator declaration, forwarded unchanged to all A/B scoring windows; absent requires no visual capture/observation throughout the suite')
@@ -72,12 +82,14 @@ def main():
     out=args.workspace/(args.name+'.json')
     if out.exists():raise ValueError('Refusing to overwrite an existing suite')
     b.check_authorization_deadline(args.stop_at)
-    baseline_swap=b.pressure()['swap_mib']
+    baseline_swap=b.pressure()['swap_mib'] if args.swap_budget_baseline_mib is None else args.swap_budget_baseline_mib
     report=dict(status='running',order=args.order,guard_policy=b.GUARD_POLICY,candidates=list(candidates),fixed_variants=fixed,runs=[],visual_observation=args.visual_observation,visual_observation_source='operator-declaration',max_swap_growth_mib=args.max_swap_growth_mib,max_swap_total_mib=args.max_swap_total_mib,swap_rapid_window_seconds=args.swap_rapid_window_seconds,stop_at=args.stop_at,shared_swap_budget_baseline_mib=baseline_swap,
                 installed_app_changed=False,notes=[f'Same-binary {args.order}; A is selected-OFF, B is selected-ON; all other launch defaults retained.',
                 'Warning pressure is recorded, not excluded. No frames trimmed.',
                 'Visual observation state is an operator declaration; external recorders are not detected. Unverified suites cannot establish capture-free performance.',
                 'When several flags are selected, the combined result cannot attribute gains to each flag.'])
+    if 'BB_METAL_ARM64' in candidates:
+        report['notes'].append('ARM mode: renderer-process footprint excludes the Rosetta game. Accounted footprint sum can include shared accounting; it is not deduplicated physical RAM. Compare system pressure/swap and owned Metal allocations as well.')
     b.write_json(out,report)
     try:
         counts={'a':0,'b':0}

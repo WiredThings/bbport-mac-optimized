@@ -544,3 +544,6 @@
 
 "Continue passes across depth/stencil layout changes" = "延续深度／模板布局切换通道";
 "Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed." = "仅合并兼容的只读转写入通道；保留反馈、遮挡和同步检查，实测收益尚未确认。";
+
+"ARM64 renderer host" = "ARM64 渲染宿主";
+"Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test." = "渲染器在原生进程中运行，游戏仍使用 Rosetta。M4 同场景对照约提升 6%。";

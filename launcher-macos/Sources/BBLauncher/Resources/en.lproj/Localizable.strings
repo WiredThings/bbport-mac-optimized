@@ -544,3 +544,6 @@
 
 "Continue passes across depth/stencil layout changes" = "Continue passes across depth/stencil layout changes";
 "Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed." = "Only merges compatible read-only-to-write transitions. Keeps feedback, query and synchronization guards. Performance benefit is unconfirmed.";
+
+"ARM64 renderer host" = "ARM64 renderer host";
+"Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test." = "Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test.";

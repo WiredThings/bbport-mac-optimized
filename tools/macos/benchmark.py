@@ -57,6 +57,7 @@ OVERRIDES.add('BB_TEXTURE_INVALID_RECLAIM')
 OVERRIDES.add('BB_TEXTURE_RELEASED_STORAGE')
 OVERRIDES.add('BB_LIFETIME_HEAP_HISTORY_PRIORITY')
 OVERRIDES.add('BB_MTL_CONTINUE_CLEARS')
+OVERRIDES.add('BB_METAL_ARM64')
 OVERRIDES.add('BB_MTL_DEPTH_LAYOUT')
 OVERRIDES.add('BB_MTL_QUERY_WRITE_EPOCH')
 OVERRIDES.add('BB_CAPTURE_COPY_SCOPE')
@@ -125,6 +126,31 @@ def validate_development_runtime(engine):
     marker=b'BB_DEVELOPMENT_WORLD_WARPER_V1'
     if not (engine/'DEVELOPMENT-WORLD-WARPER.json').is_file() or marker not in executed_game_probe(engine).read_bytes():
         raise ValueError('World Warper requires the actual executed private development runtime')
+
+
+class ProcessUsageV0(ctypes.Structure):
+    # SDK sys/resource.h rusage_info_v0, fixed macOS ABI (96 bytes).
+    _fields_=[('uuid',ctypes.c_uint8*16)]+[(name,ctypes.c_uint64) for name in
+        ('user','system','idle_wakeups','interrupt_wakeups','pageins','wired','resident','footprint','start','exit')]
+
+
+def owned_game_usage(group):
+    library=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+    library.proc_pid_rusage.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_void_p]
+    library.proc_pid_rusage.restype=ctypes.c_int
+    rows=[]
+    for line in command(['ps','-axo','pid=,ppid=,rss=,comm=']).splitlines():
+        fields=line.strip().split(None,3)
+        if len(fields)!=4 or Path(fields[3]).name not in ('bb-probe-metal','bb-gpu'):continue
+        pid=int(fields[0])
+        try:owned=os.getpgid(pid)==group
+        except ProcessLookupError:owned=False
+        if not owned:continue
+        usage=ProcessUsageV0();valid=library.proc_pid_rusage(pid,0,ctypes.byref(usage))==0
+        rows.append(dict(pid=pid,parent_pid=int(fields[1]),rss_kib=int(fields[2]),name=Path(fields[3]).name,
+                         footprint_bytes=usage.footprint if valid else None,wired_bytes=usage.wired if valid else None,
+                         resident_bytes=usage.resident if valid else None))
+    return rows
 
 
 def game_pids():
@@ -574,6 +600,23 @@ def run(args):
         variants[key] = value
     if any(variants.get(key)=='1' for key in DIAGNOSTIC_OVERRIDES) and not args.capture_native:
         raise ValueError('Audit overhead is diagnostic only; use --capture-native, not a scored FPS run')
+    native_identity=None
+    native_manifest=engine/'NATIVE-METAL.json'
+    if native_manifest.is_file() and 'BB_METAL_ARM64' not in variants:
+        info=json.loads(native_manifest.read_text())
+        major=int(command(['sw_vers','-productVersion']).split('.')[0])
+        variants['BB_METAL_ARM64']='1' if info.get('schema')==1 and info.get('default_enabled') is True and major>=info.get('minimum_os_major',999) else '0'
+    if variants.get('BB_METAL_ARM64')=='1':
+        native=engine/'bin/gpu-metal-arm64'
+        marker=engine/'DEVELOPMENT-ARM64-METAL.json'
+        if not (marker.is_file() or native_manifest.is_file()):raise ValueError('ARM64 Metal components are not included')
+        for binary in (native/'bb-gpu',native/'libbbgpu.dylib'):
+            header=binary.read_bytes()[:8]
+            if header!=bytes.fromhex('cffaedfe0c000001'):
+                raise ValueError('ARM64 Metal backend architecture mismatch')
+        executable=engine/'bin/Bloodborne Metal.app/Contents/MacOS/bb-gpu'
+        if not executable.is_file():executable=native/'bb-gpu'
+        native_identity=dict(executable_sha256=digest(executable),library_sha256=digest(native/'libbbgpu.dylib'),architecture='arm64',mode='separate-process')
     env.update(variants)
     if getattr(args,'watch_buffer',None):
         env['BB_WATCH']=args.watch_buffer
@@ -667,6 +710,15 @@ def run(args):
         if routes:
             sample['log_bytes']=log_path.stat().st_size
             sample['vm']=routes.vm_counters(command(['vm_stat']))
+        if 'BB_METAL_ARM64' in variants:
+            processes=owned_game_usage(process.pid)
+            sample['owned_game_processes']=processes
+            # Ledger sum is accounted usage, not a deduplicated physical total;
+            # shared guest mappings must not be reported as an extra RAM copy.
+            sample['process_footprint_accounted_sum_bytes']=(sum(x['footprint_bytes'] for x in processes)
+                if processes and all(x['footprint_bytes'] is not None for x in processes) else None)
+            if any(row['rss_kib']>9*1024**2 for row in processes):
+                raise RuntimeError('Owned game process RSS exceeded 9 GiB guard')
         sample['sampler_seconds']=time.monotonic()-now
         samples.append(sample)
         write_json(folder/'system-samples.json',samples)
@@ -737,7 +789,7 @@ def run(args):
             for name in ('route.json','route-result.json','control-result.json'):
                 if (folder/name).exists():
                     metadata=json.loads((folder/name).read_text())
-                    metadata.update(renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),
+                    metadata.update(native_backend=native_identity,renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),
                                     probe_sha256=digest(engine/'bin/bb-probe-metal'),executed_probe_sha256=digest(executed_game_probe(engine)),variants=variants,
                                     settings_sha256=manifest['ini_sha256'],guard_policy=GUARD_POLICY,
                                     max_swap_growth_mib=args.max_swap_growth_mib,max_swap_total_mib=total_limit,swap_rapid_window_seconds=rapid_window,stop_at=stop_at,shared_swap_budget_baseline_mib=shared_baseline,telemetry_mode='minimal',
@@ -763,7 +815,7 @@ def run(args):
             check_gpu_faults(log_path.read_text(errors='replace'))
             write_json(folder/'capture.json',dict(valid=False,kind='bounded-command-buffer-timing',trace=str(trace),
                 entries=len(rows),cohort_fingerprint=manifest['cohort_fingerprint'],variants=variants,
-                renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),
+                native_backend=native_identity,renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),
                 notes=['2048 CPU-enqueue/GPU start/end records; <=128 KiB CPU metadata, no GPU readback or counters.',
                        'Intervals include queue dependencies and are not shader execution time or GPU utilization.',
                        'Offline union must sort GPU intervals; callback order need not match timestamp order.',
@@ -809,7 +861,7 @@ def run(args):
                 check_gpu_faults(log_path.read_text(errors="replace"))
                 print(f'Attachment metadata captured: {captured_path}',flush=True)
             snapshot=display_snapshot(folder) if args.capture_display else None
-            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata' if len(members)==1 else 'bounded-native-attachment-series',consecutive=getattr(args,'capture_consecutive',False),watch_buffer=getattr(args,'watch_buffer',None),capture_phase='scene-entry' if args.capture_on_entry else 'warmed',warmup_completed=not args.capture_on_entry,display=snapshot,trace=members[0]['path'],traces=members,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute,notes=['Decoded guest GPU frame(s), not a replayable GPUTools trace.','At most three metadata frames; each bounded to 8192 records / 2 MiB.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
+            write_json(folder/'capture.json',dict(valid=False,kind='single-guest-frame-attachment-metadata' if len(members)==1 else 'bounded-native-attachment-series',consecutive=getattr(args,'capture_consecutive',False),watch_buffer=getattr(args,'watch_buffer',None),capture_phase='scene-entry' if args.capture_on_entry else 'warmed',warmup_completed=not args.capture_on_entry,display=snapshot,trace=members[0]['path'],traces=members,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],native_backend=native_identity,renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute,notes=['Decoded guest GPU frame(s), not a replayable GPUTools trace.','At most three metadata frames; each bounded to 8192 records / 2 MiB.','Attachment metadata has no resource contents; optional adjacent display snapshot is bounded to 32 MiB and only checks the final image.', 'Audio driver: '+env.get('SDL_AUDIO_DRIVER','default'),'Not a performance result.']))
             completed_ok=True
             return
         if args.capture_frame:
@@ -818,7 +870,7 @@ def run(args):
             if args.capture_shared_memory:
                 captured['notes'].append('Forced shared-memory optimization: API/attachment metadata audit only; syscall-written resource contents may be incomplete. Do not treat replay pixels or profiling as validated.')
             captured.update(scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
-                            renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute)
+                            native_backend=native_identity,renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),variants=variants,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_muted=args.mute)
             write_json(folder/'capture.json',captured)
             print(f"Single frame captured: {captured['trace']}",flush=True)
             completed_ok=True
@@ -844,7 +896,7 @@ def run(args):
         result=dict(schema=1,valid=False,name=args.name,scene_profile=manifest['profile'],cohort_fingerprint=manifest['cohort_fingerprint'],
                     visual_observation=visual_observation,visual_observation_source='operator-declaration',
                     profile_gpu=args.profile_gpu,telemetry_mode='minimal' if args.minimal_stats else 'full',audio_driver=env.get('SDL_AUDIO_DRIVER','default'),audio_muted=args.mute,metrics=stats,app_version=plistlib.loads((app/'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'],
-                    renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),executed_probe_sha256=digest(executed_game_probe(engine)),
+                    native_backend=native_identity,renderer_sha256=digest(engine/'bin/gpu-metal/libbbgpu.dylib'),probe_sha256=digest(engine/'bin/bb-probe-metal'),executed_probe_sha256=digest(executed_game_probe(engine)),
                     variants=variants,settings_sha256=manifest['ini_sha256'],camera=camera,samples=samples,guard_policy=GUARD_POLICY,max_swap_growth_mib=args.max_swap_growth_mib,max_swap_total_mib=total_limit,swap_rapid_window_seconds=rapid_window,stop_at=stop_at,shared_swap_budget_baseline_mib=shared_baseline,
                     system=dict(model=command(['sysctl','-n','hw.model']).strip(),os=command(['sw_vers','-productVersion']).strip()),
                     duration=time.monotonic()-started,notes=['Static gameplay benchmark, not whole-game average.','1% low = reciprocal of mean of slowest ceil(1% of frames).','GPU timing is opt-in; compare only matching instrumentation modes.', 'gpu_ms is legacy callback-order interval coverage and may undercount across queues; it is not shader time or GPU utilization. Use bounded submit timing for sorted interval analysis.'])
