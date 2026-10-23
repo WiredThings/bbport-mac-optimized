@@ -15,7 +15,7 @@ from package_optimized import ROOT, SYSTEM, commands, copy, inspect_payload, loa
 from game_app import create_game_app
 from build_identity import source_revision
 
-VERSION = '0.2.50'
+VERSION = '0.2.51'
 UPSTREAM = '11992198df6306dacf6ec37de57ee920db1acc11'
 
 
@@ -63,7 +63,7 @@ def main():
     assert not app.exists(), 'Use a fresh staging app; never overwrite an installed app here'
     old_info = plistlib.loads((baseline / 'Contents/Info.plist').read_bytes())
     assert old_info['CFBundleIdentifier'] == 'io.github.bbport.optimized'
-    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40', '0.2.41', '0.2.42', '0.2.43', '0.2.44', '0.2.45', '0.2.46', '0.2.47', '0.2.48', '0.2.49', '0.2.50'], 'Expected verified mem1 or Metal baseline'
+    assert old_info['CFBundleShortVersionString'] in ['0.1.4', '0.2.0', '0.2.1', '0.2.2', '0.2.3', '0.2.4', '0.2.5', '0.2.6', '0.2.7', '0.2.8', '0.2.9', '0.2.10', '0.2.11', '0.2.12', '0.2.13', '0.2.14', '0.2.15', '0.2.16', '0.2.17', '0.2.18', '0.2.19', '0.2.20', '0.2.21', '0.2.22', '0.2.23', '0.2.24', '0.2.25', '0.2.26', '0.2.27', '0.2.28', '0.2.29', '0.2.30', '0.2.31', '0.2.32', '0.2.33', '0.2.34', '0.2.35', '0.2.36', '0.2.37', '0.2.38', '0.2.39', '0.2.40', '0.2.41', '0.2.42', '0.2.43', '0.2.44', '0.2.45', '0.2.46', '0.2.47', '0.2.48', '0.2.49', '0.2.50', '0.2.51'], 'Expected verified mem1 or Metal baseline'
     assert run('git', '-C', ROOT / 'engines/metal', 'rev-parse', 'HEAD') == UPSTREAM
     cache = (args.gpu_build / 'CMakeCache.txt').read_text()
     assert re.search(r'CMAKE_OSX_ARCHITECTURES:[^=]+=x86_64', cache)
@@ -161,7 +161,11 @@ def main():
     copy(ROOT / 'docs/release/METAL-CROSS-CHUNK-READS.md', engine / 'METAL-CROSS-CHUNK-READS.md')
     copy(ROOT / 'docs/release/METAL-OPTIMIZATION-CONTROLS.md', engine / 'METAL-OPTIMIZATION-CONTROLS.md')
     copy(ROOT / 'docs/release/METAL-DEPTH-LAYOUT.md', engine / 'METAL-DEPTH-LAYOUT.md')
-    copy(ROOT / 'docs/release/0.2.50.md', engine / 'RELEASE-NOTES.md')
+    copy(ROOT / 'docs/release/0.2.51.md', engine / 'RELEASE-NOTES.md')
+    copy(ROOT / 'docs/release/METAL-TESSELLATION-AND-LIBRARY-REUSE.md', engine / 'METAL-TESSELLATION-AND-LIBRARY-REUSE.md')
+    current_report = json.loads((ROOT / 'docs/release/METAL-051-RESULTS.json').read_text())
+    assert current_report['status'] == 'complete'
+    copy(ROOT / 'docs/release/METAL-051-RESULTS.json', engine / 'METAL-051-RESULTS.json')
     copy(ROOT / 'docs/release/METAL-SMALL-TRANSFERS.md', engine / 'METAL-SMALL-TRANSFERS.md')
     copy(ROOT / 'tools/macos/analyze_metal_gpu.py', engine / 'tools/macos/analyze_metal_gpu.py')
     for p in (ROOT / 'engines/metal').glob('*LICENSE*'):
@@ -257,9 +261,13 @@ def main():
                     heap_release_history_priority_default=False,
                     depth_stencil_layout_continuation_default=False,
                     depth_stencil_layout_continuation_scope="read-only-to-write promotions; feedback, query-density and synchronization guards",
-                    launcher_optimization_controls=34,
+                    launcher_optimization_controls=35,
                     launcher_optimization_default_on=21,
-                    launcher_optimization_default_off=13,
+                    launcher_optimization_default_off=14,
+                    current_validation_report='METAL-051-RESULTS.json',
+                    linked_tessellation_patch_layout=True,
+                    module_aware_pso_keys=True,
+                    weak_library_reuse_default=False,
                     offline_library_experiment_removed=True,
                     compile_audit_default=False,compile_audit_enable='BB_MTL_COMPILE_AUDIT=1 (private diagnostic benchmark only)',
                     combined_metal_profile_default={key:'1' for key in (
@@ -279,7 +287,7 @@ def main():
                     prior_profile_gameplay_validation=prior_gameplay_validation,
                     app_icon='Hunter\'s Mark game UI artwork, rounded/padded, fixed across launcher startup',
                     game_dock_icon='Normalized bundled Bloodborne cover as default; matching rounded/padded user game cover at runtime',
-                    update_scope='Guarded depth/stencil pass continuation experiment default OFF, native boundary diagnostics and launcher control; existing optimizations retained; quality/cache capacity unchanged')
+                    update_scope='Tessellation producer/consumer layout linking, module-aware PSO keys and optional weak Metal library reuse (default OFF); quality and cache capacities unchanged')
     (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
     notices = engine / 'THIRD-PARTY-NOTICES.txt'
     notices.write_text(notices.read_text().replace('No Sony/FromSoftware game files, game artwork, or user saves are included.', 'No game executables, large game data, UI packs or user saves are included. Launcher icon artwork is credited separately.') + '\nMetal backend: Huax-1839/bloodborne-macos, revision ' + UPSTREAM +
@@ -311,11 +319,11 @@ def main():
         if not args.arm64_deps: raise ValueError('--arm64-build requires --arm64-deps')
         from native_metal import stage_arm64_metal
         manifest['native_metal'] = stage_arm64_metal(engine, args.arm64_build, args.arm64_deps, args.version)
-        manifest.update(renderer_architecture='ARM64 Metal on supported macOS; x86_64 game under Rosetta; in-process fallback retained', launcher_optimization_controls=35, launcher_optimization_default_on=22, update_scope='Separate native Metal host, synchronized guest lifetimes and restart ownership; quality and cache capacities unchanged')
+        manifest.update(renderer_architecture='ARM64 Metal on supported macOS; x86_64 game under Rosetta; in-process fallback retained', launcher_optimization_controls=36, launcher_optimization_default_on=22, update_scope='Tessellation producer/consumer layout linking, module-aware PSO keys and optional weak Metal library reuse (default OFF); quality and cache capacities unchanged')
         inspect_payload(engine)
         copy(ROOT / 'docs/release/ARM64-METAL-EXPERIMENT.md', engine / 'ARM64-METAL.md')
         copy(ROOT / 'docs/release/ARM64-METAL-RESULTS.json', engine / 'ARM64-METAL-RESULTS.json')
-        manifest['native_metal']['validation'] = dict(report='ARM64-METAL-RESULTS.json', runs=8, fps_delta_percent=5.8751, scene='Central Yharnam fixed camera', recovery_flow_passed=True, consecutive_sethp_respawns=2, physical_f3_delivery_verified=False, live_online_retested=False)
+        manifest['native_metal']['validation'] = dict(report='ARM64-METAL-RESULTS.json', source_release='0.2.50', scope='Historical architecture comparison; current fixes are documented in the release notes', runs=8, fps_delta_percent=5.8751, scene='Central Yharnam fixed camera', recovery_flow_passed=True, consecutive_sethp_respawns=2, physical_f3_delivery_verified=False, live_online_retested=False)
         (engine / 'METAL-BACKEND.json').write_text(json.dumps(manifest, indent=2) + '\n')
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
         subprocess.run(['codesign', '--verify', '--deep', str(app)], check=True)

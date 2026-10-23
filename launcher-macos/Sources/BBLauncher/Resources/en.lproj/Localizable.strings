@@ -547,3 +547,6 @@
 
 "ARM64 renderer host" = "ARM64 renderer host";
 "Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test." = "Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test.";
+
+"Reuse identical Metal libraries" = "Reuse identical Metal libraries";
+"Avoids duplicate compilation; practical benefit is unconfirmed." = "Avoids duplicate compilation; practical benefit is unconfirmed.";

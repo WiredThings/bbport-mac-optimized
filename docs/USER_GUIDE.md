@@ -169,7 +169,9 @@ Unlocked uses a variable-timestep patch; 60/90 use fixed-timestep patches.
 
 ## Metal optimization controls
 
-**Advanced → Metal optimizations** exposes up to 35 controls: **22 ON by default** with the native host (otherwise 21), **13 optional
+The identical Metal library reuse option is experimental and OFF by default. It avoids duplicate library builds; scene-entry and FPS benefit are unconfirmed. Tessellation layout and per-module pipeline-key correctness checks are always enabled.
+
+**Advanced → Metal optimizations** exposes up to 36 controls: **22 ON by default** with the native host (otherwise 21), **14 optional
 experiments OFF**. Saved explicit values override defaults. Hover for technical details.
 
 - **Verified**: adopted after the documented checks/measurements.

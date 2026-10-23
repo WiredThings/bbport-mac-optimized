@@ -229,3 +229,7 @@ Original launcher work adds 3/3/5 automatic history retention, explicit pinning,
 ### 0.2.47 — automatic iCloud save folder
 
 Local launcher work removes the sync directory picker and stored custom-path preference. Enabling normal-save sync automatically creates or opens `iCloud Drive/Blood Echoes Saves`; another Mac uses the same location. Missing Drive and unrelated existing folders fail safely, and isolated QA uses its own fake home. The 3/3/5 retention, verified backups/imports, conflict handling, F3/offline protection, networking and renderer are unchanged.
+
+## 0.2.51 Metal follow-up
+
+Fork-authored patches 0086/0087 link tessellation patch layouts through the existing SPIRV-Cross API and protect per-module bindings when Metal libraries/functions are shared. Optional weak library reuse stays OFF; it uses the system CommonCrypto SHA-256 implementation and adds no bundled dependency. See [validation and limits](release/METAL-TESSELLATION-AND-LIBRARY-REUSE.md). Existing third-party game/language patches and credits are unchanged.

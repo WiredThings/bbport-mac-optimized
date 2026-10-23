@@ -141,3 +141,7 @@ gain or a universal memory reduction. Existing explicit options were retained.
 The machine-readable [results](ARM64-METAL-RESULTS.json) keep it separate from the
 eight-run aggregate. One earlier final-recovery attempt was stopped under critical
 pressure while the browser was open and was excluded; the guarded retry passed.
+
+## 0.2.51 follow-up
+
+See [tessellation, binding ownership and native timing](METAL-TESSELLATION-AND-LIBRARY-REUSE.md). The architecture comparison above remains a 0.2.50 result. Library reuse is a separate default-OFF experiment.

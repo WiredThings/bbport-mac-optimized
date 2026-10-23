@@ -5,7 +5,12 @@
 A standalone macOS launcher and Bloodborne compatibility runtime with **direct Metal rendering**,
 **temporal MetalFX**, and English, Simplified Chinese and Traditional Chinese launcher interfaces.
 This is the **WiredThings fork** of [DiAvisoo/bbport-mac-optimized](https://github.com/DiAvisoo/bbport-mac-optimized).
-The current build is **0.2.50**, with a separate ARM64 Metal renderer, synchronized resource lifetimes and a retained in-process fallback. The game itself still uses Rosetta. Eight matched M4 runs measured about 6% more FPS without lower quality or higher memory pressure. Bounded save history and optional iCloud Drive syncing remain available. About displays the version followed by its source Git short commit; macOS retains a numeric internal build number. Older releases are marked Pre-release; use Latest for the current package.
+The current build is **0.2.51**. It fixes tessellation stage layouts and adds a default-OFF
+identical-library reuse experiment. The renderer can run in a separate ARM64 process;
+the game itself still uses Rosetta. The earlier 0.2.50 eight-run M4 comparison measured
+about 6% more FPS from the native host; this release does not claim another such gain.
+Save history and optional iCloud Drive syncing remain available. About shows the source
+Git short commit; use the Latest release for the current package.
 
 Version 0.2.36 defaults new configurations to the game's original model detail and warns
 about forced low LOD, which can hide walls or floors. If an existing configuration has
@@ -148,7 +153,7 @@ and [patch credits](docs/THIRD_PARTY_CHANGES.md#game-language-and-community-patc
 
 - **Resolution** is the output size. **Advanced → Upscaler → Preset** controls MetalFX input size;
   the launcher displays the actual scene-render resolution. MetalFX is temporal, and Native AA is 1:1.
-- Supported native-host packages have 35 Metal controls: **22 ON / 13 optional experiments OFF** (34 / 21 ON without the native host). Saved explicit
+- Supported native-host packages have 36 Metal controls: **22 ON / 14 optional experiments OFF** (35 / 21 ON without the native host). Saved explicit
   choices are retained. Object-motion vectors and experimental occlusion culling have separate controls.
 - The original five optional experiments are cross-chunk snapshot reuse, fragment-parameter specialization,
   compute-based small writes, relaxed math and binary pipeline-archive persistence. Their benefits
@@ -169,7 +174,7 @@ compilation. The discarded offline-library experiment is not part of this releas
 
 ## Experimental online play
 
-Version 0.2.50 includes an opt-in **Online** section for The Hunter’s Dream, using
+Version 0.2.51 includes an opt-in **Online** section for The Hunter’s Dream, using
 an optional bbnet module on the Metal backend. Website/device sign-in, the in-game server
 announcement and chalice **search → join** were exercised with an isolated client. Message
 write/list/delete was exercised in game; a second client has not verified delivery. Direct
@@ -203,7 +208,7 @@ softwareupdate --install-rosetta --agree-to-license
 git clone --recurse-submodules --branch optimized https://github.com/WiredThings/blood-echoes.git
 cd blood-echoes
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.50-source1
+BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.51-source1
 ```
 
 The script initializes submodules, builds x86-64 and ARM64 Metal dependencies plus the arm64 Vulkan driver,
@@ -217,15 +222,15 @@ space. It never installs into `/Applications`, launches the game or edits saves/
 
 Outputs:
 
-- `out/source-release-0.2.50-source1/Blood Echoes.app`
-- `dist/Blood-Echoes-0.2.50-source1.zip` (complete Metal + Vulkan app)
-- `dist/blood-echoes-0.2.50-source1-source.tar.gz` (corresponding source/dependencies)
+- `out/source-release-0.2.51-source1/Blood Echoes.app`
+- `dist/Blood-Echoes-0.2.51-source1.zip` (complete Metal + Vulkan app)
+- `dist/blood-echoes-0.2.51-source1-source.tar.gz` (corresponding source/dependencies)
 - `dist/source-build-verification.json` (final packaging/signature/link checks)
 - `dist/source-build-SHA256SUMS.txt` (final app ZIP and source archive hashes)
 
 Build from a clean clone: the packager refuses uncommitted project files. Use a new version
 suffix for another final staging directory. With dependencies already prepared by this
-workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.50-source2`.
+workflow, use `BB_SKIP_DEPS=1 BB_BUILD_JOBS=2 bash tools/macos/build_from_source.sh 0.2.51-source2`.
 Keep the `.git` directories: GitHub's automatic source ZIP omits submodules, and the Release
 inspection source archive has no Git metadata required by the revision/patch guards.
 The `optimized` branch includes this build entry point and receives subsequent fixes.
@@ -238,7 +243,7 @@ for individual commands, verification limits and troubleshooting.
 
 - [Source retrieval, pinned dependencies and building](docs/release/SOURCE.md)
 - [Full branch changes and third-party attribution](docs/THIRD_PARTY_CHANGES.md)
-- [0.2.50 release notes](docs/release/0.2.50.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
+- [0.2.51 release notes](docs/release/0.2.51.md) · [Report a problem](https://github.com/WiredThings/blood-echoes/issues)
 
 Built on **DiAvisoo's optimized launcher, bmy/bbport-mac, deadinside28's bbport, shadPS4,
 Huax-1839, IFreemz, Awakenchan, Wooloomooloo2/Mark Hall**, and the component contributors.

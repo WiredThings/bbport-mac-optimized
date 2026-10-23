@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "release": "0.2.51",
+  "status": "complete",
+  "date": "2026-10-23",
+  "platform": "Apple M4",
+  "scope": "Frozen Central Yharnam owner profile, native 1080p; existing selected experimental flags retained; new library reuse OFF. Not factory defaults or a whole-game benchmark.",
+  "comparison": {
+    "order": "ABBA",
+    "baseline": "Installed 0.2.50",
+    "candidate": "Final 0.2.51 source overlay",
+    "runs": [
+      {
+        "fps": 47.866728391108396,
+        "low": 38.7030944883275,
+        "p95": 22.19,
+        "accounted_mib": 5604.946807861328,
+        "swap_delta_mib": 0.0,
+        "pressure_levels": [
+          2
+        ],
+        "draws": 1123.2324074074074,
+        "compiles": 0.0,
+        "label": "a1"
+      },
+      {
+        "fps": 49.22336469043973,
+        "low": 42.57288292457196,
+        "p95": 21.36,
+        "accounted_mib": 5626.567832946777,
+        "swap_delta_mib": 0.0,
+        "pressure_levels": [
+          2
+        ],
+        "draws": 1123.1845804988661,
+        "compiles": 0.0,
+        "label": "b1"
+      },
+      {
+        "fps": 49.90453568754332,
+        "low": 43.8420922208879,
+        "p95": 21.04,
+        "accounted_mib": 5478.00528717041,
+        "swap_delta_mib": 0.0,
+        "pressure_levels": [
+          2
+        ],
+        "draws": 1123.1780701754385,
+        "compiles": 0.0,
+        "label": "b2"
+      },
+      {
+        "fps": 49.49702985257049,
+        "low": 38.74271468517333,
+        "p95": 21.33,
+        "accounted_mib": 5784.767143249512,
+        "swap_delta_mib": 0.0,
+        "pressure_levels": [
+          2
+        ],
+        "draws": 1123.4228070175438,
+        "compiles": 0.0,
+        "label": "a2"
+      }
+    ],
+    "means": {
+      "baseline": {
+        "fps": 48.681879121839444,
+        "low": 38.72290458675042,
+        "accounted_mib": 5694.85697555542
+      },
+      "candidate": {
+        "fps": 49.56395018899153,
+        "low": 43.20748757272993,
+        "accounted_mib": 5552.286560058594
+      }
+    },
+    "repeatable_fps_gain_established": false,
+    "unique_physical_ram_measured": false,
+    "visual_observation": "absent during all scoring windows"
+  },
+  "correctness": {
+    "patch_layout_pixel_cases": 12,
+    "pixels_per_case": 1272,
+    "wrong_or_stray_pixels": 0,
+    "real_tessellation_keys": 21,
+    "compiled_stage_variants": 58,
+    "cold_and_msl_cache_passed": true,
+    "ordinary_graphics_per_pass": 453,
+    "compute_per_pass": 39,
+    "general_pipeline_failures": 0,
+    "geometry_pixels_passed": true,
+    "binding_key_counterexample": {
+      "former_key_rejects_test": true,
+      "protected_key_passes": true
+    }
+  },
+  "recovery": {
+    "arm64_f3_request_flow_passed": true,
+    "old_backend_reaped": true,
+    "auto_continue_passed": true,
+    "chinese_retranslation_files": 6,
+    "physical_key_delivery_tested": false,
+    "death_method": "Private development game-thread SetHp",
+    "consecutive_respawns": 2,
+    "enemy_combat_tested": false,
+    "inprocess_x86_library_reuse_boot_and_submit_trace_passed": true,
+    "live_online_retested": false
+  },
+  "library_experiment": {
+    "default_enabled": false,
+    "weak_library_only": true,
+    "per_module_function_requests": true,
+    "shared_native_function_handles_possible": true,
+    "per_module_metadata_keyed_separately": true,
+    "metadata_capacity": 1024,
+    "owns_gpu_resources": false,
+    "concurrent_identical_modules": {
+      "builds": 1,
+      "reuses": 3,
+      "waits": 3
+    },
+    "practical_performance_benefit_established": false,
+    "earlier_function_sharing_prototype_not_adopted": true
+  },
+  "launcher_tests": {
+    "xctest": 91,
+    "skipped": 1,
+    "failures": 0,
+    "benchmark_tool_tests": 85,
+    "native_package_and_probe_tests": 13,
+    "online_routing_tests": 6,
+    "gui_default_off": true,
+    "gui_choice_persisted_after_relaunch": true,
+    "gui_closed_after_test": true
+  },
+  "preservation": {
+    "resolution_or_effects_reduced": false,
+    "cache_capacities_reduced": false,
+    "formal_files_hashed": 11671,
+    "formal_files_changed": 0,
+    "qa_data_used_for_formal_progress_selection": false
+  },
+  "limitations": [
+    "Static short interleaved comparison; no stable added FPS benefit claimed.",
+    "Process footprint sums can overlap guest mappings and are not unique physical RAM.",
+    "GPU interval spans include dependencies and overlap; stage estimates are not an ALU/bandwidth split.",
+    "Automated recovery is not physical F3 or enemy-combat coverage.",
+    "Existing online code/routing retained; fresh live-server connection not retested."
+  ]
+}

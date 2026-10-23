@@ -3,10 +3,10 @@ import XCTest
 
 final class MetalOptimizationTests: XCTestCase {
     func testDefaultsMatchAcceptedProfileAndExperimentsStayOff() {
-        XCTAssertEqual(MetalOptimizations.all.count, 34)
-        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 34)
+        XCTAssertEqual(MetalOptimizations.all.count, 35)
+        XCTAssertEqual(Set(MetalOptimizations.all.map(\.id)).count, 35)
         XCTAssertEqual(MetalOptimizations.adopted.count, 21)
-        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 13)
+        XCTAssertEqual(MetalOptimizations.optionalExperiments.count, 14)
         let prefs = LauncherPrefs()
         var game = GameSettings(); game.upscaler = "metalfx"
         let env = OptimizedProfile(prefs: prefs, game: game).environment
@@ -159,7 +159,7 @@ final class MetalOptimizationTests: XCTestCase {
 
     func testRestoredCandidatesDefaultOffAndUnsafeAlgorithmsAreNotOptions() {
         for id in ["BB_MTL_NATIVE_CLEAR_BATCH", "BB_MTL_MERGE_OVERLAY", "BB_MTL_FILL_UPDATES",
-                   "BB_LAYER_USE_CACHE", "BB_MTL_COPY_PAIR", "BB_MTL_RENDER_UPDATES"] {
+                   "BB_LAYER_USE_CACHE", "BB_MTL_COPY_PAIR", "BB_MTL_RENDER_UPDATES", "BB_MTL_LIBRARY_REUSE"] {
             XCTAssertEqual(MetalOptimizations.defaults[id], false, id)
         }
         for id in ["BB_COPY_RING_SCOPE", "BB_TEXTURE_RELEASED_STORAGE", "BB_MTL_QUERY_WRITE_EPOCH"] {

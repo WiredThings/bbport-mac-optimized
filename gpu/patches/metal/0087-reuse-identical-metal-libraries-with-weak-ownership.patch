@@ -1,0 +1,777 @@
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_library_memo.h b/gpu/shadps4/video_core/renderer_metal/mtl_library_memo.h
+new file mode 100644
+index 0000000..42c42ba
+--- /dev/null
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_library_memo.h
+@@ -0,0 +1,127 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++
++// Objective-C++ only. A compiler-local, bounded weak memo: it never owns a GPU object or
++// caches shader payloads. Existing shader/PSO caches retain their own ownership and capacities.
++#import <Metal/Metal.h>
++#include <CommonCrypto/CommonDigest.h>
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <condition_variable>
++#include <limits>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <unordered_map>
++#include "video_core/renderer_metal/mtl_shader.h"
++
++namespace Metal {
++struct MetalLibraryObjects {
++    id<MTLLibrary> library{};
++    id<MTLFunction> function{};
++    std::string error;
++    bool reused{};
++};
++
++class LibraryMemo {
++    using Key = std::array<unsigned char, CC_SHA256_DIGEST_LENGTH>;
++    struct KeyHash {
++        size_t operator()(const Key& key) const noexcept {
++            size_t result = 0;
++            for (unsigned char byte : key) result = result * 131 + byte;
++            return result;
++        }
++    };
++    struct Entry {
++        std::condition_variable ready;
++        bool building{true};
++        __weak id<MTLLibrary> library{};
++    };
++    static constexpr size_t Capacity = 1024;
++    mutable std::mutex mutex;
++    std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> entries;
++    std::atomic<uint64_t> builds{}, hits{}, waits{};
++
++    static Key MakeKey(const std::string& source, const std::string& entry, bool relaxed) {
++        CC_SHA256_CTX digest;
++        CC_SHA256_Init(&digest);
++        const auto update = [&](const void* data, size_t size) {
++            const auto* p = static_cast<const unsigned char*>(data);
++            while (size) {
++                const auto n = std::min<size_t>(size, std::numeric_limits<CC_LONG>::max());
++                CC_SHA256_Update(&digest, p, static_cast<CC_LONG>(n));
++                p += n; size -= n;
++            }
++        };
++        // Complete effective source after rewrites, entry point, and every non-default
++        // compiler option used by BuildLibrary. Never guest hash or normalized format alone.
++        const uint64_t options[]{1, 0x030100, relaxed ? 1u : 0u, source.size(), entry.size()};
++        update(options, sizeof(options)); update(source.data(), source.size());
++        update(entry.data(), entry.size());
++        Key key{}; CC_SHA256_Final(key.data(), &digest);
++        return key;
++    }
++public:
++    LibraryReuseStats Stats() const {
++        std::scoped_lock lock{mutex};
++        return {builds.load(), hits.load(), waits.load(), entries.size()};
++    }
++
++    template <typename Build>
++    MetalLibraryObjects Get(const std::string& source, const std::string& entry,
++                            bool relaxed, Build&& build) {
++        const auto key = MakeKey(source, entry, relaxed);
++        std::shared_ptr<Entry> slot;
++        {
++            std::unique_lock lock{mutex};
++            const auto found = entries.find(key);
++            if (found != entries.end()) {
++                slot = found->second;
++                if (slot->building) {
++                    ++waits;
++                    slot->ready.wait(lock, [&] { return !slot->building; });
++                }
++                // A strong ARC local pins the weak reference before dropping the mutex.
++                id<MTLLibrary> library = slot->library;
++                if (library) {
++                    ++hits;
++                    return {library, nil, {}, true};
++                }
++                slot->building = true;
++            } else {
++                if (entries.size() >= Capacity) {
++                    for (auto it = entries.begin(); it != entries.end();) {
++                        if (!it->second->building &&
++                            !it->second->library) it = entries.erase(it);
++                        else ++it;
++                    }
++                }
++                if (entries.size() < Capacity) {
++                    slot = std::make_shared<Entry>();
++                    entries.emplace(key, slot);
++                }
++            }
++        }
++        // No global lock during driver work. A full memo simply keeps the original path;
++        // an expired entry rebuilds, and failure never poisons a future attempt.
++        ++builds;
++        MetalLibraryObjects result;
++        try {
++            result = build();
++        } catch (...) {
++            if (slot) {
++                std::scoped_lock lock{mutex};
++                slot->building = false; slot->ready.notify_all();
++            }
++            throw;
++        }
++        if (slot) {
++            std::scoped_lock lock{mutex};
++            slot->library = result.library;
++            slot->building = false; slot->ready.notify_all();
++        }
++        return result;
++    }
++};
++} // namespace Metal
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+index b53934a..93bb25f 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_pso_cache.mm
+@@ -57,13 +57,14 @@ SerializedGraphicsKey PipelineKeyBytes(const Vulkan::GraphicsPipelineKey& key) {
+     SerializedGraphicsKey key;
+     const void* vs{}; ///< the MTLFunction objects (the entry retains them: no address reuse)
+     const void* fs{};
++    std::array<u64, 2> modules{}; ///< per-module binding/layout identities
+     u64 attributes_hash{};
+     bool rect_list_triangles{};
+     bool tessellation{};
+     bool geometry{};
+ 
+     bool operator==(const RenderMapKey& other) const noexcept {
+-        return vs == other.vs && fs == other.fs && attributes_hash == other.attributes_hash &&
++        return modules == other.modules && vs == other.vs && fs == other.fs && attributes_hash == other.attributes_hash &&
+                rect_list_triangles == other.rect_list_triangles &&
+                tessellation == other.tessellation && geometry == other.geometry &&
+                key == other.key;
+@@ -73,6 +74,7 @@ SerializedGraphicsKey PipelineKeyBytes(const Vulkan::GraphicsPipelineKey& key) {
+ struct RenderMapHash {
+     size_t operator()(const RenderMapKey& k) const noexcept {
+         u64 h = XXH3_64bits(&k.key, sizeof(k.key));
++        h = XXH3_64bits_withSeed(k.modules.data(), sizeof(k.modules), h);
+         const u64 rest[4] = {reinterpret_cast<u64>(k.vs), reinterpret_cast<u64>(k.fs),
+                              k.attributes_hash,
+                              u64(k.rect_list_triangles) | (u64(k.tessellation) << 1) | (u64(k.geometry) << 2)};
+@@ -87,10 +89,11 @@ size_t operator()(const RenderMapKey& k) const noexcept {
+     const void* control{};
+     const void* eval{};
+     const void* fs{};
++    std::array<u64, 4> modules{}; ///< per-module binding/layout identities
+     u64 attributes_hash{};
+ 
+     bool operator==(const TessMapKey& other) const noexcept {
+-        return vertex == other.vertex && control == other.control && eval == other.eval &&
++        return modules == other.modules && vertex == other.vertex && control == other.control && eval == other.eval &&
+                fs == other.fs && attributes_hash == other.attributes_hash && key == other.key;
+     }
+ };
+@@ -98,6 +101,7 @@ size_t operator()(const RenderMapKey& k) const noexcept {
+ struct TessMapHash {
+     size_t operator()(const TessMapKey& k) const noexcept {
+         u64 h = XXH3_64bits(&k.key, sizeof(k.key));
++        h = XXH3_64bits_withSeed(k.modules.data(), sizeof(k.modules), h);
+         const u64 rest[5] = {reinterpret_cast<u64>(k.vertex), reinterpret_cast<u64>(k.control),
+                              reinterpret_cast<u64>(k.eval), reinterpret_cast<u64>(k.fs),
+                              k.attributes_hash};
+@@ -112,10 +116,11 @@ size_t operator()(const TessMapKey& k) const noexcept {
+     const void* gs{};
+     const void* pass_through{};
+     const void* fs{};
++    std::array<u64, 4> modules{}; ///< per-module binding/layout identities
+     u64 attributes_hash{};
+ 
+     bool operator==(const GeometryMapKey& other) const noexcept {
+-        return es == other.es && gs == other.gs && pass_through == other.pass_through &&
++        return modules == other.modules && es == other.es && gs == other.gs && pass_through == other.pass_through &&
+                fs == other.fs && attributes_hash == other.attributes_hash && key == other.key;
+     }
+ };
+@@ -123,6 +128,7 @@ size_t operator()(const TessMapKey& k) const noexcept {
+ struct GeometryMapHash {
+     size_t operator()(const GeometryMapKey& k) const noexcept {
+         u64 h = XXH3_64bits(&k.key, sizeof(k.key));
++        h = XXH3_64bits_withSeed(k.modules.data(), sizeof(k.modules), h);
+         const u64 rest[5] = {reinterpret_cast<u64>(k.es), reinterpret_cast<u64>(k.gs),
+                              reinterpret_cast<u64>(k.pass_through), reinterpret_cast<u64>(k.fs),
+                              k.attributes_hash};
+@@ -133,12 +139,13 @@ size_t operator()(const GeometryMapKey& k) const noexcept {
+ struct ComputeMapKey {
+     size_t value{};
+     const void* function{};
++    u64 module{};
+     bool operator==(const ComputeMapKey&) const = default;
+ };
+ 
+ struct ComputeMapHash {
+     size_t operator()(const ComputeMapKey& k) const noexcept {
+-        const u64 data[2] = {k.value, reinterpret_cast<u64>(k.function)};
++        const u64 data[3] = {k.value, reinterpret_cast<u64>(k.function), k.module};
+         return XXH3_64bits(data, sizeof(data));
+     }
+ };
+@@ -421,6 +428,7 @@ id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* desc
+         .key = PipelineKeyBytes(key),
+         .vs = vs->function,
+         .fs = fs ? fs->function : nullptr,
++        .modules = {vs->cache_identity, fs ? fs->cache_identity : 0},
+         .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
+                                        input.vertex_attributes.size_bytes()),
+         .rect_list_triangles = input.rect_list_triangles,
+@@ -717,7 +725,7 @@ void PrepareCopyWatchPipeline(Device& device,const ComputePipeline& pipeline) {
+ const ComputePipeline* PsoCache::GetComputePipeline(const Vulkan::ComputePipelineKey& key,
+                                                          const CompiledShader* cs) {
+     ASSERT(cs && cs->function);
+-    const ComputeMapKey map_key{key.value, cs->function};
++    const ComputeMapKey map_key{key.value, cs->function, cs->cache_identity};
+     {
+         std::shared_lock lock{impl->mutex};
+         const auto it = impl->compute.find(map_key);
+@@ -908,6 +916,8 @@ bool BuildStageInputs(const Vulkan::GraphicsPipelineKey& key,
+         .control = input.control->function,
+         .eval = input.eval->function,
+         .fs = fs ? fs->function : nullptr,
++        .modules = {input.vertex[0]->cache_identity, input.control->cache_identity,
++                    input.eval->cache_identity, fs ? fs->cache_identity : 0},
+         .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
+                                        input.vertex_attributes.size_bytes()),
+     };
+@@ -1107,6 +1117,8 @@ bool GeometryDebugEnabled() {
+         .gs = input.gs->function,
+         .pass_through = input.pass_through->function,
+         .fs = fs ? fs->function : nullptr,
++        .modules = {input.es[0]->cache_identity, input.gs->cache_identity,
++                    input.pass_through->cache_identity, fs ? fs->cache_identity : 0},
+         .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
+                                        input.vertex_attributes.size_bytes()),
+     };
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_shader.h b/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
+index ba204ed..2d35a86 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.h
+@@ -212,6 +212,10 @@ struct CompiledShader {
+     std::vector<StageInput> stage_inputs;
+     /// GeometryKernel: the shape of the geometry shader and its records.
+     GeometryInfo geometry;
++    // Metal may return the same immutable function for distinct modules. Binding metadata
++    // remains module-owned, so in-memory PSO keys also distinguish this monotonic identity.
++    inline static std::atomic<u64> next_cache_identity{1};
++    const u64 cache_identity = next_cache_identity.fetch_add(1, std::memory_order_relaxed);
+ 
+     /// Only untransformed game compute modules whose memory accesses are all explicit
+     /// Metal bindings. Synthesized stages and physical-address accesses stay broad.
+@@ -245,6 +249,11 @@ struct CompileResult {
+ 
+ /// SPIR-V -> MSL (SPIRV-Cross) -> MTLLibrary/MTLFunction. Thread-safe: Compile may run on several
+ /// threads at once.
++class LibraryMemo;
++struct LibraryReuseStats {
++    u64 builds{}, reuses{}, waits{}, entries{};
++};
++
+ class ShaderCompiler {
+ public:
+     /// `cache_dir` holds the MSL disk cache; empty selects <user>/cache/<title id>/metal, created
+@@ -270,6 +279,7 @@ public:
+         std::atomic<u64> cache_hits{};          ///< MSL taken from the disk cache
+         std::atomic<u64> cache_stores{};        ///< MSL written to the disk cache
+     };
++    LibraryReuseStats GetLibraryReuseStats() const;
+     const Counters& GetCounters() const {
+         return counters;
+     }
+@@ -285,6 +295,7 @@ private:
+     std::filesystem::path cache_dir;
+     FloatRules rules;
+     Counters counters;
++    std::unique_ptr<LibraryMemo> library_memo;
+ };
+ 
+ } // namespace Metal
+diff --git a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+index 36201c5..aea4478 100644
+--- a/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
++++ b/gpu/shadps4/video_core/renderer_metal/mtl_shader.mm
+@@ -31,6 +31,7 @@
+ #include "common/path_util.h"
+ #include "video_core/renderer_metal/mtl_device_impl.h"
+ #include "video_core/renderer_metal/mtl_shader.h"
++#include "video_core/renderer_metal/mtl_library_memo.h"
+ #include "video_core/renderer_metal/mtl_vertex_math.h"
+ #include "video_core/renderer_metal/mtl_spirv_geometry.h"
+ #include "video_core/renderer_metal/mtl_spirv_pervertex.h"
+@@ -895,11 +896,7 @@ bool WriteFileAtomic(const std::filesystem::path& path, const std::string& text)
+ 
+ // ---- Metal ---------------------------------------------------------------------------------
+ 
+-struct MetalObjects {
+-    id<MTLLibrary> library;
+-    id<MTLFunction> function;
+-    std::string error; ///< empty on success
+-};
++using MetalObjects = MetalLibraryObjects;
+ 
+ /// The first "error:" line of a Metal compiler message, without the "program_source:L:C:" prefix.
+ std::string FirstMetalError(const std::string& text) {
+@@ -923,7 +920,7 @@ bool WriteFileAtomic(const std::filesystem::path& path, const std::string& text)
+ /// `relaxed_math`: MTLMathModeRelaxed instead of Safe (macOS 15 and later; below it the library is
+ /// always built without fast math). mathFloatingPointFunctions stays at its default (Fast).
+ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const std::string& entry,
+-                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr, bool copy_pair=false, bool* pair_applied=nullptr) {
++                          std::string_view label, bool relaxed_math, bool inline_vertex=false, unsigned* inlined=nullptr, bool fragment_uniforms=false, unsigned* uniform_buffers=nullptr, bool copy_pair=false, bool* pair_applied=nullptr, LibraryMemo* memo=nullptr) {
+     CompileAudit audit{"library"};
+     MetalObjects objects{};
+     std::string source=msl;
+@@ -943,37 +940,42 @@ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const st
+         } else {
+             options.fastMathEnabled = NO;
+         }
+-        NSError* error = nil;
+-        id<MTLLibrary> library =
+-            [device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()]
+-                                 options:options
+-                                   error:&error];
+-        if (!library && (helpers || uniforms || paired)) {
++        const auto compile = [&](const std::string& text) -> MetalObjects {
++            const auto build = [&]() -> MetalObjects {
++                NSError* error = nil;
++                id<MTLLibrary> library =
++                    [device newLibraryWithSource:[NSString stringWithUTF8String:text.c_str()]
++                                         options:options error:&error];
++                if (!library) {
++                    return {nil, nil, "Metal: " + FirstMetalError(
++                        error ? error.localizedDescription.UTF8String : "unknown error")};
++                }
++                library.label = [[NSString alloc] initWithBytes:label.data() length:label.size()
++                                                      encoding:NSUTF8StringEncoding];
++                return {library, nil, {}};
++            };
++            return memo ? memo->Get(text, entry, relaxed_math, build) : build();
++        };
++        objects = compile(source);
++        if (!objects.library && (helpers || uniforms || paired)) {
+             // Unsupported compiler/source combination keeps the original rendering path.
++            // Fallback has its own effective-source key; never memoize it as the rewrite.
+             std::printf("Metal shader specialization rejected; retaining original source\n");
+-            if(inlined) *inlined=0;
+-            if(uniform_buffers) *uniform_buffers=0;
+-            if(pair_applied) *pair_applied=false;
+-            error=nil;
+-            library=[device newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()]
+-                                        options:options error:&error];
+-        }
+-        if (!library) {
+-            objects.error = "Metal: " + FirstMetalError(error ? error.localizedDescription.UTF8String
+-                                                              : "unknown error");
+-            return objects;
+-        }
+-        library.label = [[NSString alloc] initWithBytes:label.data()
+-                                                 length:label.size()
+-                                               encoding:NSUTF8StringEncoding];
+-        id<MTLFunction> function =
+-            [library newFunctionWithName:[NSString stringWithUTF8String:entry.c_str()]];
+-        if (!function) {
++            if (inlined) *inlined = 0;
++            if (uniform_buffers) *uniform_buffers = 0;
++            if (pair_applied) *pair_applied = false;
++            objects = compile(msl);
++        }
++        if (!objects.error.empty()) return objects;
++        // Keep a distinct function object and independent binding metadata for each module.
++        // Function identity is part of existing PSO cache keys; library reuse must not merge it.
++        objects.function = [objects.library newFunctionWithName:
++            [NSString stringWithUTF8String:entry.c_str()]];
++        if (!objects.function) {
+             objects.error = fmt::format("Metal: function '{}' not found in the library", entry);
+             return objects;
+         }
+-        objects.library = library;
+-        objects.function = function;
++        audit.cached = objects.reused;
+         audit.ok = true;
+     }
+     return objects;
+@@ -1094,6 +1096,12 @@ FloatRules ReadFloatRules() {
+     if (cache_dir.empty()) {
+         cache_dir = DefaultCacheDir();
+     }
++    const char* reuse = std::getenv("BB_MTL_LIBRARY_REUSE");
++    if (reuse && reuse[0] == '1') library_memo = std::make_unique<LibraryMemo>();
++}
++
++LibraryReuseStats ShaderCompiler::GetLibraryReuseStats() const {
++    return library_memo ? library_memo->Stats() : LibraryReuseStats{};
+ }
+ 
+ ShaderCompiler::~ShaderCompiler() = default;
+@@ -1264,7 +1272,7 @@ ShaderStage ReadShaderStage(std::span<const u32> spirv) {
+             CompiledShader parsed;
+             std::string cached_msl;
+             if (ParseCache(text, parsed, cached_msl) && parsed.stage == scan.stage) {
+-                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged);
++                objects = BuildLibrary(mtl_device, cached_msl, parsed.entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged, library_memo.get());
+                 if (objects.error.empty()) {
+                     shader->entry = std::move(parsed.entry);
+                     shader->bindings = std::move(parsed.bindings);
+@@ -1306,7 +1314,7 @@ ShaderStage ReadShaderStage(std::span<const u32> spirv) {
+         } catch (const std::exception& e) {
+             return fail(CompileStatus::Failed, "SPIRV-Cross: " + FirstLine(e.what()));
+         }
+-        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged);
++        objects = BuildLibrary(mtl_device, msl, shader->entry, label, relaxed_math, inline_vertex, &shader->strict_vertex_helpers_inlined, fragment_uniforms, &fragment_uniform_buffers, merge_pair, &shader->copy_pair_merged, library_memo.get());
+         if (!objects.error.empty()) {
+             return fail(CompileStatus::Failed, objects.error);
+         }
+@@ -1358,6 +1366,13 @@ ShaderStage ReadShaderStage(std::span<const u32> spirv) {
+     }
+     ++counters.compiled;
+     audit.ok = true; audit.cached = cached;
++    if (library_memo && CompileAudit::Enabled()) {
++        const auto stats = library_memo->Stats();
++        if (stats.builds + stats.reuses <= 8192)
++            std::printf("Metal library reuse: builds=%llu reused=%llu waits=%llu entries=%llu\n",
++                (unsigned long long)stats.builds, (unsigned long long)stats.reuses,
++                (unsigned long long)stats.waits, (unsigned long long)stats.entries);
++    }
+     result.status = CompileStatus::Ok;
+     result.shader = std::move(shader);
+     return result;
+diff --git a/tests/fixtures/tess_patch_layout/generate.py b/tests/fixtures/tess_patch_layout/generate.py
+index 4f06713..9fdde06 100644
+--- a/tests/fixtures/tess_patch_layout/generate.py
++++ b/tests/fixtures/tess_patch_layout/generate.py
+@@ -18,6 +18,13 @@ layout(location=1) out vec4 info;
+ void main() { result=color; info=vec4(0); }
+ '''),
+ }
++for binding in (0, 1):
++    SOURCES[f'BindingFrag{binding}'] = ('frag', f'''#version 450
++layout(set=0,binding={binding},std430) readonly buffer Payload {{ vec4 value; }} payload;
++layout(location=0) out vec4 color;
++layout(location=1) out vec4 info;
++void main() {{ color=payload.value; info=vec4(0); }}
++''')
+ for count in (14, 16):
+     declarations = '\n'.join(f'layout(location={i}) patch out vec4 p{i};' for i in range(count))
+     stores = '\n'.join(f'p{i}=vec4({(i+1)*.01:.2f}+float(gl_PrimitiveID)*0.2)+vec4(0,0.1,0.2,0.3);' for i in range(count))
+diff --git a/tests/fixtures/tess_patch_layout/shaders.h b/tests/fixtures/tess_patch_layout/shaders.h
+index 02da0d5..1458dd7 100644
+--- a/tests/fixtures/tess_patch_layout/shaders.h
++++ b/tests/fixtures/tess_patch_layout/shaders.h
+@@ -50,6 +50,54 @@ static const uint32_t kPatchFrag[] = {
+     0x0003003e, 0x00000009, 0x0000000c, 0x0003003e, 0x0000000d, 0x0000000f, 0x000100fd, 0x00010038,
+ };
+ 
++static const uint32_t kBindingFrag0[] = {
++    0x07230203, 0x00010500, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
++    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
++    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000c, 0x00000012,
++    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
++    0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f6c6f63, 0x00000072, 0x00040005, 0x0000000a,
++    0x6c796150, 0x0064616f, 0x00050006, 0x0000000a, 0x00000000, 0x756c6176, 0x00000065, 0x00040005,
++    0x0000000c, 0x6c796170, 0x0064616f, 0x00040005, 0x00000012, 0x6f666e69, 0x00000000, 0x00040047,
++    0x00000009, 0x0000001e, 0x00000000, 0x00030047, 0x0000000a, 0x00000002, 0x00040048, 0x0000000a,
++    0x00000000, 0x00000018, 0x00050048, 0x0000000a, 0x00000000, 0x00000023, 0x00000000, 0x00030047,
++    0x0000000c, 0x00000018, 0x00040047, 0x0000000c, 0x00000021, 0x00000000, 0x00040047, 0x0000000c,
++    0x00000022, 0x00000000, 0x00040047, 0x00000012, 0x0000001e, 0x00000001, 0x00020013, 0x00000002,
++    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
++    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
++    0x00000009, 0x00000003, 0x0003001e, 0x0000000a, 0x00000007, 0x00040020, 0x0000000b, 0x0000000c,
++    0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x0000000c, 0x00040015, 0x0000000d, 0x00000020,
++    0x00000001, 0x0004002b, 0x0000000d, 0x0000000e, 0x00000000, 0x00040020, 0x0000000f, 0x0000000c,
++    0x00000007, 0x0004003b, 0x00000008, 0x00000012, 0x00000003, 0x0004002b, 0x00000006, 0x00000013,
++    0x00000000, 0x0007002c, 0x00000007, 0x00000014, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
++    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041,
++    0x0000000f, 0x00000010, 0x0000000c, 0x0000000e, 0x0004003d, 0x00000007, 0x00000011, 0x00000010,
++    0x0003003e, 0x00000009, 0x00000011, 0x0003003e, 0x00000012, 0x00000014, 0x000100fd, 0x00010038,
++};
++
++static const uint32_t kBindingFrag1[] = {
++    0x07230203, 0x00010500, 0x0008000b, 0x00000015, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
++    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
++    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000c, 0x00000012,
++    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005, 0x00000004,
++    0x6e69616d, 0x00000000, 0x00040005, 0x00000009, 0x6f6c6f63, 0x00000072, 0x00040005, 0x0000000a,
++    0x6c796150, 0x0064616f, 0x00050006, 0x0000000a, 0x00000000, 0x756c6176, 0x00000065, 0x00040005,
++    0x0000000c, 0x6c796170, 0x0064616f, 0x00040005, 0x00000012, 0x6f666e69, 0x00000000, 0x00040047,
++    0x00000009, 0x0000001e, 0x00000000, 0x00030047, 0x0000000a, 0x00000002, 0x00040048, 0x0000000a,
++    0x00000000, 0x00000018, 0x00050048, 0x0000000a, 0x00000000, 0x00000023, 0x00000000, 0x00030047,
++    0x0000000c, 0x00000018, 0x00040047, 0x0000000c, 0x00000021, 0x00000001, 0x00040047, 0x0000000c,
++    0x00000022, 0x00000000, 0x00040047, 0x00000012, 0x0000001e, 0x00000001, 0x00020013, 0x00000002,
++    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
++    0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003b, 0x00000008,
++    0x00000009, 0x00000003, 0x0003001e, 0x0000000a, 0x00000007, 0x00040020, 0x0000000b, 0x0000000c,
++    0x0000000a, 0x0004003b, 0x0000000b, 0x0000000c, 0x0000000c, 0x00040015, 0x0000000d, 0x00000020,
++    0x00000001, 0x0004002b, 0x0000000d, 0x0000000e, 0x00000000, 0x00040020, 0x0000000f, 0x0000000c,
++    0x00000007, 0x0004003b, 0x00000008, 0x00000012, 0x00000003, 0x0004002b, 0x00000006, 0x00000013,
++    0x00000000, 0x0007002c, 0x00000007, 0x00000014, 0x00000013, 0x00000013, 0x00000013, 0x00000013,
++    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x00050041,
++    0x0000000f, 0x00000010, 0x0000000c, 0x0000000e, 0x0004003d, 0x00000007, 0x00000011, 0x00000010,
++    0x0003003e, 0x00000009, 0x00000011, 0x0003003e, 0x00000012, 0x00000014, 0x000100fd, 0x00010038,
++};
++
+ static const uint32_t kPatchControl14[] = {
+     0x07230203, 0x00010500, 0x0008000b, 0x000000aa, 0x00000000, 0x00020011, 0x00000003, 0x0006000b,
+     0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+diff --git a/tests/test_mtl_pipeline.mm b/tests/test_mtl_pipeline.mm
+index e589fc6..715267c 100644
+--- a/tests/test_mtl_pipeline.mm
++++ b/tests/test_mtl_pipeline.mm
+@@ -4,7 +4,7 @@
+ // shaders of the same directory compiled by mtl_shader. Needs a Metal device, no window or game.
+ //
+ //   mtl-pipeline-test [<cache dir with g_*.key, c_*.key, *.spv>] [--cache <pipeline cache dir>]
+-//                     [--keep-archive]
++//                     [--keep-archive] [--metal-keys]
+ //
+ // The binary archive goes to --cache (default: a folder in $TMPDIR, never the game's user
+ // directory) and is deleted at the start unless --keep-archive is given. Pass 1 builds everything
+@@ -53,10 +53,11 @@ static double MsSince(Clock::time_point t) {
+     Vulkan::GraphicsPipelineKey key;
+     Vulkan::GraphicsPipeline::SerializationSupport sdata;
+     std::string name;
++    std::vector<Metal::VertexAttribute> metal_attributes;
+ };
+ 
+ // Reads g_*.key: u32 version, u32 kind (0), the raw key, then the raw SerializationSupport.
+-static bool LoadGraphicsKey(const fs::path& path, GraphicsEntry& entry) {
++static bool LoadGraphicsKey(const fs::path& path, GraphicsEntry& entry, bool metal_format) {
+     const std::vector<char> data = ReadAll(path);
+     size_t pos = 0;
+     auto take = [&](void* out, size_t size) {
+@@ -69,6 +70,20 @@ static bool LoadGraphicsKey(const fs::path& path, GraphicsEntry& entry) {
+     };
+     u32 version = 0, kind = 1;
+     auto& s = entry.sdata;
++    if (metal_format) {
++        u32 count=0;
++        if (!take(&version,4) || !take(&kind,4) || kind!=0 ||
++            !take(&entry.key,sizeof(entry.key)) || !take(&count,4) ||
++            count>VideoCore::MaxVertexBufferCount) return false;
++        for(u32 i=0;i<count;++i) {
++            u32 location=0,per_instance=0,divisor=0;
++            if(!take(&location,4) || !take(&per_instance,4) || !take(&divisor,4) ||
++               per_instance>1) return false;
++            entry.metal_attributes.push_back({location,per_instance!=0,divisor});
++        }
++        entry.name=path.stem().string();
++        return true;
++    }
+     if (!take(&version, 4) || !take(&kind, 4) || kind != 0 ||
+         !take(&entry.key, sizeof(entry.key)) ||
+         !take(&s.vertex_attributes, sizeof(s.vertex_attributes)) ||
+@@ -115,15 +130,18 @@ static bool LoadGraphicsKey(const fs::path& path, GraphicsEntry& entry) {
+ int main(int argc, char** argv) {
+     fs::path dir, cache;
+     bool keep_archive = false;
++    bool metal_format = false;
+     for (int i = 1; i < argc; ++i) {
+-        if (!std::strcmp(argv[i], "--cache") && i + 1 < argc) {
++        if (!std::strcmp(argv[i], "--metal-keys")) {
++            metal_format=true;
++        } else if (!std::strcmp(argv[i], "--cache") && i + 1 < argc) {
+             cache = argv[++i];
+         } else if (!std::strcmp(argv[i], "--keep-archive")) {
+             keep_archive = true;
+         } else if (argv[i][0] != '-' && dir.empty()) {
+             dir = argv[i];
+         } else {
+-            std::fprintf(stderr, "usage: %s [<cache dir>] [--cache <dir>] [--keep-archive]\n",
++            std::fprintf(stderr, "usage: %s [<cache dir>] [--cache <dir>] [--keep-archive] [--metal-keys]\n",
+                          argv[0]);
+             return 2;
+         }
+@@ -163,7 +181,7 @@ int main(int argc, char** argv) {
+         const std::string name = p.filename().string();
+         if (name.starts_with("g_")) {
+             GraphicsEntry g;
+-            if (LoadGraphicsKey(p, g)) {
++            if (LoadGraphicsKey(p, g, metal_format)) {
+                 graphics.push_back(std::move(g));
+             } else {
+                 ++bad_keys;
+@@ -225,7 +243,8 @@ int main(int argc, char** argv) {
+         }
+         Job job{&g, vs->shader.get(), fs ? fs->shader.get() : nullptr, {}};
+         const auto& sd = g.sdata;
+-        for (const auto& attr : sd.vertex_attributes) {
++        job.attributes=g.metal_attributes;
++        if (!metal_format) for (const auto& attr : sd.vertex_attributes) {
+             Metal::VertexAttribute a;
+             a.location = attr.location;
+             for (const auto& b : sd.vertex_bindings) {
+diff --git a/tests/test_mtl_tessellation.mm b/tests/test_mtl_tessellation.mm
+index 161403f..417fc30 100644
+--- a/tests/test_mtl_tessellation.mm
++++ b/tests/test_mtl_tessellation.mm
+@@ -28,6 +28,10 @@
+ #import <Metal/Metal.h>
+ 
+ #include <algorithm>
++#include <thread>
++#include <chrono>
++#include <atomic>
++#include <stdexcept>
+ #include <array>
+ #include <cmath>
+ #include <cstdio>
+@@ -52,6 +56,7 @@
+ #include "video_core/renderer_metal/mtl_pso_cache.h"
+ #include "video_core/renderer_metal/mtl_raster_util.h"
+ #include "video_core/renderer_metal/mtl_shader.h"
++#include "video_core/renderer_metal/mtl_library_memo.h"
+ #include "video_core/renderer_metal/mtl_tessellation.h"
+ #include "video_core/renderer_metal/vk_to_mtl.h"
+ #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+@@ -870,6 +875,137 @@ void ReportCheck(const std::string& name, const Check& check) {
+ }
+ 
+ 
++
++void LibraryReuseCases(Metal::Device& device, const fs::path& cache) {
++    std::printf("== bounded weak Metal library reuse\n");
++    const char* prior = std::getenv("BB_MTL_LIBRARY_REUSE");
++    const std::string previous = prior ? prior : "";
++    const bool had_prior = prior != nullptr;
++    setenv("BB_MTL_LIBRARY_REUSE","1",1);
++    {
++        Metal::ShaderCompiler compiler{device,cache};
++        std::array<Metal::CompileResult,4> results;
++        std::array<std::thread,4> workers;
++        std::atomic<unsigned> ready{}; std::atomic<bool> start{};
++        for (unsigned i=0;i<workers.size();++i) workers[i]=std::thread([&,i] {
++            ++ready;
++            while(!start.load()) std::this_thread::yield();
++            results[i]=compiler.Compile(kPatchFrag,0x7e57d000+i,"byte_identical_module");
++        });
++        while(ready.load()!=workers.size()) std::this_thread::yield();
++        start=true;
++        for(auto& worker:workers) worker.join();
++        for(auto& result:results) {
++            if(result.status!=CompileStatus::Ok || results[0].status!=CompileStatus::Ok ||
++                result.shader->library!=results[0].shader->library)
++                Fail("concurrent identical module did not share its Metal library");
++            if (&result != &results[0] && result.status == CompileStatus::Ok &&
++                results[0].status == CompileStatus::Ok &&
++                result.shader->cache_identity == results[0].shader->cache_identity)
++                Fail("library reuse merged module identities");
++            if (&result != &results[0] && result.shader.get() == results[0].shader.get())
++                Fail("library reuse aliased per-module shader metadata");
++        }
++        const auto stats=compiler.GetLibraryReuseStats();
++        std::printf("   concurrent real modules: %llu builds, %llu reuses, %llu waits\n",
++            (unsigned long long)stats.builds,(unsigned long long)stats.reuses,(unsigned long long)stats.waits);
++        if(stats.builds!=1 || stats.reuses!=3) Fail("duplicate Metal driver compilation");
++        auto bound0=compiler.Compile(kBindingFrag0,0x7e57d200,"binding_zero");
++        auto bound1=compiler.Compile(kBindingFrag1,0x7e57d201,"binding_one");
++        if(bound0.status!=CompileStatus::Ok || bound1.status!=CompileStatus::Ok ||
++           bound0.shader->library!=bound1.shader->library ||
++           !bound0.shader->Find(0,0,Metal::ShaderBinding::Kind::Buffer) ||
++           !bound1.shader->Find(0,1,Metal::ShaderBinding::Kind::Buffer))
++            Fail("identical Metal source with distinct SPIR-V binding metadata fixture");
++        auto vertex=compiler.Compile(kPatchVert,0x7e57d100,"module_identity_vs");
++        if(vertex.status!=CompileStatus::Ok) Fail("module identity vertex fixture");
++        else {
++            Metal::PsoCache pso{device,cache/"identities"};
++            auto key=MakeKey(0,0x7e57d100);
++            key.prim_type=AmdGpu::PrimitiveType::TriangleList;
++            key.stage_hashes[u32(Shader::SwStage::TessellationControl)]=0;
++            key.stage_hashes[u32(Shader::SwStage::TessellationEval)]=0;
++            const std::vector<Metal::VertexAttribute> attributes{{0,false,1}};
++            const std::array<const Metal::CompiledShader*,2> bindings{
++                bound0.shader.get(),bound1.shader.get()};
++            for(const auto* shader:bindings) if(shader) {
++                const auto* pipeline=pso.GetRenderPipeline(key,vertex.shader.get(),shader,
++                    {.vertex_attributes=attributes});
++                if(!pipeline || pipeline->fs!=shader)
++                    Fail("shared Metal function aliased distinct global binding numbers");
++                if(pso.GetRenderPipeline(key,vertex.shader.get(),shader,
++                       {.vertex_attributes=attributes})!=pipeline)
++                    Fail("same-module PSO stopped reusing its cache entry");
++            }
++        }
++    }
++    // Test memo ownership independently of any private driver caches. These NSObject tokens
++    // never enter a Metal pipeline; only the real module test above exercises Metal objects.
++    {
++        Metal::LibraryMemo memo;
++        __weak NSObject* observer;
++        @autoreleasepool {
++            NSObject* token=[NSObject new]; observer=token;
++            auto object=memo.Get("lifetime","main",false,[&] {
++                return Metal::MetalLibraryObjects{(id<MTLLibrary>)token,(id<MTLFunction>)token,{}};
++            });
++            if(!object.library) Fail("weak memo ownership fixture");
++        }
++        if(observer) Fail("library memo retained its object after the last owner released it");
++        @autoreleasepool {
++            NSObject* token=[NSObject new];
++            auto object=memo.Get("lifetime","main",false,[&] {
++                return Metal::MetalLibraryObjects{(id<MTLLibrary>)token,(id<MTLFunction>)token,{}};
++            });
++            if(object.reused || memo.Stats().builds!=2) Fail("expired weak entry not rebuilt");
++        }
++    }
++    {
++        Metal::LibraryMemo memo;
++        std::vector<Metal::MetalLibraryObjects> held;
++        const auto build=[] { NSObject* token=[NSObject new];
++            return Metal::MetalLibraryObjects{(id<MTLLibrary>)token,(id<MTLFunction>)token,{}}; };
++        held.push_back(memo.Get("source A","main",false,build));
++        held.push_back(memo.Get("source B","main",false,build));
++        held.push_back(memo.Get("source A","other",false,build));
++        held.push_back(memo.Get("source A","main",true,build));
++        held.push_back(memo.Get("source A","main",false,build));
++        if(memo.Stats().builds!=4 || memo.Stats().reuses!=1 ||
++           held[0].library!=held.back().library) Fail("source/entry/math memo key alias");
++        const auto fail=[] { return Metal::MetalLibraryObjects{nil,nil,"expected failure"}; };
++        memo.Get("failure","main",false,fail); memo.Get("failure","main",false,fail);
++        if(memo.Stats().builds!=6) Fail("failed library poisoned memo");
++        try {
++            memo.Get("exception","main",false,[]()->Metal::MetalLibraryObjects {
++                throw std::runtime_error("expected exception");
++            });
++            Fail("memo swallowed exception");
++        } catch(const std::runtime_error&) {}
++        held.push_back(memo.Get("exception","main",false,build));
++        if(memo.Stats().builds!=8) Fail("exception left a pending memo entry");
++    }
++    {
++        Metal::LibraryMemo memo;
++        std::vector<Metal::MetalLibraryObjects> held;
++        for(unsigned i=0;i<1030;++i) held.push_back(memo.Get(std::to_string(i),"main",false,[] {
++            NSObject* token=[NSObject new];
++            return Metal::MetalLibraryObjects{(id<MTLLibrary>)token,(id<MTLFunction>)token,{}};
++        }));
++        if(memo.Stats().entries!=1024 || memo.Stats().builds!=1030) Fail("weak memo capacity/fallback");
++    }
++    setenv("BB_MTL_LIBRARY_REUSE","0",1);
++    {
++        Metal::ShaderCompiler disabled{device,cache/"disabled"};
++        auto a=disabled.Compile(kPatchFrag,0x7e57e000,"disabled_a");
++        auto b=disabled.Compile(kPatchFrag,0x7e57e001,"disabled_b");
++        if(a.status!=CompileStatus::Ok || b.status!=CompileStatus::Ok ||
++           disabled.GetLibraryReuseStats().builds!=0 || disabled.GetLibraryReuseStats().reuses!=0)
++            Fail("library reuse disabled path changed");
++    }
++    if(had_prior) setenv("BB_MTL_LIBRARY_REUSE",previous.c_str(),1);
++    else unsetenv("BB_MTL_LIBRARY_REUSE");
++}
++
+ void PatchLayoutCases(Metal::Device& device, const fs::path& cache, int pass) {
+     Metal::ShaderCompiler compiler{device, cache};
+     Metal::PsoCache pso{device, cache};
+@@ -1532,6 +1668,7 @@ int main(int argc, char** argv) {
+     }
+     {
+         Metal::Device device;
++        LibraryReuseCases(device,cache/"library-reuse");
+         const auto linked_cache = cache / "linked-patch-layout";
+         PatchLayoutCases(device, linked_cache, 1);
+         PatchLayoutCases(device, linked_cache, 2);

@@ -547,3 +547,6 @@
 
 "ARM64 renderer host" = "ARM64 渲染宿主";
 "Runs the renderer in a native process; the game still uses Rosetta. About 6% faster in the matched M4 test." = "渲染器在原生进程中运行，游戏仍使用 Rosetta。M4 同场景对照约提升 6%。";
+
+"Reuse identical Metal libraries" = "复用相同着色器库";
+"Avoids duplicate compilation; practical benefit is unconfirmed." = "减少重复编译，实际收益待确认。";

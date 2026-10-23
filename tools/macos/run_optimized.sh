@@ -49,6 +49,7 @@ if [[ $renderer == metal ]]; then
     export BB_LAYER_USE_CACHE=${BB_LAYER_USE_CACHE:-0}
     export BB_MTL_COPY_PAIR=${BB_MTL_COPY_PAIR:-0}
     export BB_MTL_RENDER_UPDATES=${BB_MTL_RENDER_UPDATES:-0}
+    export BB_MTL_LIBRARY_REUSE=${BB_MTL_LIBRARY_REUSE:-0}
     # The on-disk compilation archive is useful during prewarm; active PSOs stay cached.
     export BB_MTL_RELEASE_WARM_ARCHIVE=${BB_MTL_RELEASE_WARM_ARCHIVE:-1}
     export BB_MTL_PERSIST_WARM_ARCHIVE=${BB_MTL_PERSIST_WARM_ARCHIVE:-0}
