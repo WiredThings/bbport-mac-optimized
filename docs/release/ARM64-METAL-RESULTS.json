@@ -302,5 +302,71 @@
       "order": "BAAB"
     }
   ],
-  "scope": "Same parent/CPU binaries and isolated save/cache seed. No computer-use capture during scoring; external observation not verified. Post-score startup capability/icon changes are covered by separate boot/restart tests. Accounted footprint includes both processes and is not unique physical RAM."
+  "scope": "Same parent/CPU binaries and isolated save/cache seed. No computer-use capture during scoring; external observation not verified. Post-score startup capability/icon changes are covered by separate boot/restart tests. Accounted footprint includes both processes and is not unique physical RAM.",
+  "current_profile_followup": {
+    "scope": "One additional startup/compatibility pair, not included in eight-run aggregate. Same copied INI, plus the owner-enabled depth layout, fill updates and heap history flags; no GUI capture during scoring.",
+    "warmup_seconds": 30,
+    "score_seconds": 45,
+    "extra_fixed_flags": {
+      "BB_MTL_DEPTH_LAYOUT": "1",
+      "BB_MTL_FILL_UPDATES": "1",
+      "BB_LIFETIME_HEAP_HISTORY_PRIORITY": "1"
+    },
+    "runs": {
+      "default": {
+        "fps": 50.61916589931881,
+        "low1": 43.06091325020185,
+        "p95": 20.67,
+        "memory": {
+          "owned_median_mib": 1243.924331665039,
+          "owned_peak_mib": 1307.924331665039,
+          "metal-allocated_median_mib": 6054.0625,
+          "metal-allocated_peak_mib": 6118.0625,
+          "graphics-ledger_median_mib": 1529.6875,
+          "graphics-ledger_peak_mib": 1593.6875,
+          "renderer_process_footprint_median_mib": 2656.440361022949,
+          "renderer_process_footprint_peak_mib": 2704.065361022949,
+          "process_footprint_accounted_sum_median_mib": 5753.095199584961,
+          "process_footprint_accounted_sum_peak_mib": 5797.067832946777
+        },
+        "warning_fraction": 1.0,
+        "score_swap_growth_mib": -16.0,
+        "variants": {
+          "BB_MTL_FRAGMENT_UNIFORMS": "1",
+          "BB_TEXTURE_RELEASED_STORAGE": "0",
+          "BB_MTL_DEPTH_LAYOUT": "1",
+          "BB_MTL_FILL_UPDATES": "1",
+          "BB_LIFETIME_HEAP_HISTORY_PRIORITY": "1",
+          "BB_METAL_ARM64": "1"
+        }
+      },
+      "fallback": {
+        "fps": 45.93537093029112,
+        "low1": 37.318496403853985,
+        "p95": 23.04,
+        "memory": {
+          "owned_median_mib": 1083.731216430664,
+          "owned_peak_mib": 1147.731216430664,
+          "metal-allocated_median_mib": 5891.5625,
+          "metal-allocated_peak_mib": 5955.5625,
+          "graphics-ledger_median_mib": 1374.84375,
+          "graphics-ledger_peak_mib": 1437.71875,
+          "renderer_process_footprint_median_mib": 5700.249488830566,
+          "renderer_process_footprint_peak_mib": 5762.753395080566,
+          "process_footprint_accounted_sum_median_mib": 5700.976051330566,
+          "process_footprint_accounted_sum_peak_mib": 5763.718238830566
+        },
+        "warning_fraction": 1.0,
+        "score_swap_growth_mib": 0.0,
+        "variants": {
+          "BB_MTL_FRAGMENT_UNIFORMS": "1",
+          "BB_TEXTURE_RELEASED_STORAGE": "0",
+          "BB_MTL_DEPTH_LAYOUT": "1",
+          "BB_MTL_FILL_UPDATES": "1",
+          "BB_LIFETIME_HEAP_HISTORY_PRIORITY": "1",
+          "BB_METAL_ARM64": "0"
+        }
+      }
+    }
+  }
 }

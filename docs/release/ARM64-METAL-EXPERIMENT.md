@@ -127,3 +127,17 @@ the runtime input tokens rather than physical keyboard events; deaths used SetHp
 than enemy combat. These are validation boundaries, not coverage of every gameplay path.
 Networking routing/runtime tests passed; a fresh live-server login or multiplayer session
 was not repeated for this architecture change. Networking remains in the game process.
+
+### Owner's additional experimental combination
+
+A final 30-second warmup / 45-second score pair also retained the owner's explicit
+`BB_MTL_DEPTH_LAYOUT=1`, `BB_MTL_FILL_UPDATES=1` and
+`BB_LIFETIME_HEAP_HISTORY_PRIORITY=1`. Native / fallback measured 50.62 / 45.94 FPS,
+1% low 43.06 / 37.32. Accounted median process footprint was 5753.1 / 5701.0 MiB
+(+52.1 MiB), and owned Metal allocations 1243.9 / 1083.7 MiB. Pressure was at the
+same warning level in both; scored swap changed by -16 / 0 MiB. This pair confirms
+startup and no pressure regression for that combination, not a repeatable percentage
+gain or a universal memory reduction. Existing explicit options were retained.
+The machine-readable [results](ARM64-METAL-RESULTS.json) keep it separate from the
+eight-run aggregate. One earlier final-recovery attempt was stopped under critical
+pressure while the browser was open and was excluded; the guarded retry passed.
