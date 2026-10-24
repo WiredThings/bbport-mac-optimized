@@ -1,4 +1,5 @@
 #include "runtime_exit_codes.h"
+#include "qa_cpu_qos.h"
 #include "bb_cpu_cache_build.h"
 #include "runtime_diagnostic_exit.h"
 #include "bb_cpu_cache_inputs.h"
@@ -324,6 +325,11 @@ int game_main(int argc,char** argv){
   check(!launcher_compat||private_path(session_app0),"launcher base game outside Shared");
   const std::string identity="ARMQA1\n"+fs::canonical(boot).string()+"\n"+session_app0.string()+"\n"+content.string()+"\n"+(session_nonce?session_nonce:"")+"\n";
   BbSession::Prepare(state,fs::path(BB_PROTOTYPE_ROOT)/"state",identity,resume);
+  if(const char* qos=getenv("BB_ARM_QA_CPU_QOS")){
+   check(launcher_compat&&getenv("BB_ARM_QA_CPU_QOS_EXPERIMENT")&&std::string_view(getenv("BB_ARM_QA_CPU_QOS_EXPERIMENT"))=="1","CPU QoS experiment requires explicit private test admission");
+   int mode=0;check(!bb_qa_cpu_qos_parse(qos,&mode)&&!bb_qa_cpu_qos_apply(mode),"CPU QoS experiment admission failed");
+   std::printf("ARM QA CPU QoS=%s; explicit guest-thread admission, native callback pools unchanged\n",qos);
+  }
   if(launcher_compat){
    BbLauncherCpu::ConfigureExecutionDefaults(graphics);
    std::printf("ARM LAUNCHER original online admission=%d; original selection retained\n",BbLauncherCpu::ConfigureNetworkAdmission());

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_ns": 1792873505858690000,
+  "created_ns": 1792876692130562000,
   "scope": "source-only isolated ARM64 development checkpoint",
   "files": [
     {
@@ -121,7 +121,7 @@
     },
     {
       "path": "src/game_runtime.cpp",
-      "sha256": "f13c9f2d598ac6ee083f365332820fa14d7c2dae92077d8d9f49d5d254991408"
+      "sha256": "c256cc975919e70e4bae79cb56059314f245d435b04ffa9c007dde324f76a0d2"
     },
     {
       "path": "src/guest_resource_detours.h",
@@ -178,6 +178,10 @@
     {
       "path": "src/native_stubs.c",
       "sha256": "a8a7c17c0853b587fcb4c9de9b2ae5745870a8aaaf780d33a959ac7a91bbc731"
+    },
+    {
+      "path": "src/qa_cpu_qos.h",
+      "sha256": "11678ddb3e76d706b4d90067ed490a37647d3abb81b377ae7b553994b0a807f7"
     },
     {
       "path": "src/resource_leaf_profile.h",
@@ -269,7 +273,7 @@
     },
     {
       "path": "tools/build_first_upload_test.py",
-      "sha256": "8b2fc69a8be0b30d2796d7d58f7d3cea36c3b00d5ab5ebabcc87b6da85bec229"
+      "sha256": "ef2e13c42e3acc84ea0036e55fdf4b6e9b871f07a2c97410b2d91b9f74a5b83f"
     },
     {
       "path": "tools/build_heap_bridge.py",
@@ -290,6 +294,10 @@
     {
       "path": "tools/build_menu_candidate.py",
       "sha256": "13f04f3104d09d606f946bf91ecde37ffcb1082e7b518d5fd592caeb50f68e8b"
+    },
+    {
+      "path": "tools/build_partial_audit.py",
+      "sha256": "8a9cb45b3eb6c56934837962c956e8ee7282efce05358990e09a9ed52bab0b81"
     },
     {
       "path": "tools/build_partial_range_candidate.py",
@@ -412,6 +420,10 @@
       "sha256": "8e12b7f6c1c373703442f3a8f03cba760363c15374dfbc9f7f6891ccddc0d34b"
     },
     {
+      "path": "tools/process_schedule_audit.py",
+      "sha256": "fad78062f402eb90b29f59b2314d42974c4e9d5cd50181290bcdf714fe698567"
+    },
+    {
       "path": "tools/provision_gui_qa_account.py",
       "sha256": "6bfa31273659b274feb1e3d1af0bfebc22c769cafba4f0e83d6ba6c3dcea5f9c"
     },
@@ -521,7 +533,7 @@
     },
     {
       "path": "tools/run_launcher_engine_abba.py",
-      "sha256": "0fa6c030da89d2a426c4b047c4fb33d534871b99c2b7eaee3041d4c00cf04d11"
+      "sha256": "ebc84d10ff1b79771bc7767374ec30f0fa4d05d7a75cec635e1050b257ea5c9f"
     },
     {
       "path": "tools/run_memory_categories.py",
@@ -581,7 +593,7 @@
     },
     {
       "path": "tools/validate_local_qa_package.py",
-      "sha256": "0c6f97ea734a8cddbcae49adfe7c867d59aeb65ed38c6a141fe0d0e07e91985f"
+      "sha256": "9313cb99900b8e04dca31c71e6d95d3397353518d205065acf7184fcdcc836a8"
     },
     {
       "path": "tools/verify_cpu_usage_units.py",
@@ -646,6 +658,10 @@
     {
       "path": "tests/metal/test_texture_first_upload.mm",
       "sha256": "a702059e67193eba45595e02b4805f7a7fa2f3cd540739490dadb455d9aac646"
+    },
+    {
+      "path": "tests/metal/test_texture_inplace_gpu.mm",
+      "sha256": "481411b370026940a2740dea5285808c2b601f7395f8a3a92baf7e4699119872"
     },
     {
       "path": "tests/metal/test_texture_partial_gpu.mm",
@@ -908,8 +924,16 @@
       "sha256": "f7ccf3c97f325d71aa6c973febcde610ec7a49760aae5bdc01f504b39a5c01e2"
     },
     {
+      "path": "tests/test_process_schedule_audit.py",
+      "sha256": "315c9d13b97d43595fb8983951108382969808086c285d1196edfcb06474c605"
+    },
+    {
       "path": "tests/test_published_ranges.cpp",
       "sha256": "8fee2c61d43469eb90a1d5a98f36871d701ddb9f3a447253c21ecc7469260f5b"
+    },
+    {
+      "path": "tests/test_qa_cpu_qos.py",
+      "sha256": "256d0d05ace9b4d810d66c774a490d84c55ea1470d8a66560e00455008d74c26"
     },
     {
       "path": "tests/test_qa_memory_policy.py",
@@ -29097,7 +29121,7 @@
     },
     {
       "path": "vendor/bb_runtime/src/runtime_thread.c",
-      "sha256": "6ed0be8cfab8cf6735814c4066845ae4e9ce8bed129758c912d5d67a374d43dc"
+      "sha256": "0bb3879f2a8f3dcdb0087ca86a38b752b1632ae9b4016dc6d419267ab7858399"
     },
     {
       "path": "vendor/bb_runtime/src/runtime_time.c",
@@ -38289,11 +38313,11 @@
     },
     {
       "path": "CURRENT-PLAN.zh-CN.md",
-      "sha256": "71e1d5abdc1744e63cae7a8e7df26b16e9c36dc1df97748a6a025c3211bc7594"
+      "sha256": "2ed71bf628bbf4454d5b214951b802661344f30f83eac502ced2e2b14e06f2c2"
     },
     {
       "path": "NIGHT-HANDOFF.zh-CN.md",
-      "sha256": "206699dcf598b2640975e836a6ef6933681ec8ac96472dcc97621eb7dbe4cf15"
+      "sha256": "edb44610e2ecbfa1f15ab7bc47204de8ff60485e235db38adc1b47b6e8de44ab"
     },
     {
       "path": "LAUNCHER-INTEGRATION-AUDIT.zh-CN.md",
@@ -38342,6 +38366,10 @@
     {
       "path": "docs/partial-texture-and-host-stutter.zh-CN.md",
       "sha256": "d1b673a447b33eb61675aa9b169b160b3c2c43530cb3b1635b79c119d6e8eba8"
+    },
+    {
+      "path": "docs/inplace-texture-and-cpu-scheduling.zh-CN.md",
+      "sha256": "d036428e43d4bd7e2c09dfbaa171e6738f64294a6d5e3416755d0ab608e8253a"
     }
   ],
   "excluded": [

@@ -34,3 +34,6 @@
 
 
 最新定向测试：局部GPU写入不能只靠GpuDirty整图刷新，范围校验负控制会漏掉真实局部更新，未启用。完整图覆盖控制正常；实战白模未复现。长帧部分已排除新编译，但宿主Codex Renderer同期出现CPU突发；Cua最小化被自动审批拒绝，未绕过。计时解析与源端均增加时钟异常保护，源端尚未重编进冻结包。详见docs/partial-texture-and-host-stutter.zh-CN.md。
+
+
+2026-10-25新进展：真实Metal导入chunk像素夹具已复现局部数据问题，但原函数可见范围的两轮游戏日志0命中，不能关联实战白模。178ms与95ms长帧均无新编译，生产线程wall/CPU显著分离。新增只读调度计数；QoS显式准入实测生效，静态ABBA 47.50→47.08FPS，无收益，保留默认关闭实验。CPU fbbe通过完整回归，源端时钟保护已编入。详见docs/inplace-texture-and-cpu-scheduling.zh-CN.md。

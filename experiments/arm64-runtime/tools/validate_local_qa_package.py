@@ -1,11 +1,12 @@
 from pathlib import Path
-import hashlib,json,os,plistlib,subprocess,sys,time,zipfile
+import argparse,hashlib,json,os,plistlib,subprocess,sys,time,zipfile
 P=Path('/Users/Shared/BloodEchoesDevelopment/arm64-runtime-prototype');sys.path.insert(0,str(P/'tests'));sys.path.insert(0,str(P/'tools'))
 from game_fixture import make
 from qa_build_guard import require_no_games
 from manual_qa_policy import validate_manual_environment
 require_no_games()
-out=Path('/Users/k.d./Documents/Codex/2026-10-16/https-github-com-loreanxavier-pt-pc/artifacts/arm64-qa-20261025');manifest=json.loads((out/'runtime-manifest.json').read_text());archive=out/'Blood-Echoes-ARM64-Local-QA.zip';expected=(out/'SHA256SUMS').read_text().split()[0]
+parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,default=Path('/Users/k.d./Documents/Codex/2026-10-16/https-github-com-loreanxavier-pt-pc/artifacts/arm64-qa-20261025'));args=parser.parse_args()
+out=args.output.resolve();manifest=json.loads((out/'runtime-manifest.json').read_text());archive=out/'Blood-Echoes-ARM64-Local-QA.zip';expected=(out/'SHA256SUMS').read_text().split()[0]
 assert hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()==expected
 with zipfile.ZipFile(archive)as z:
  assert z.testzip()is None

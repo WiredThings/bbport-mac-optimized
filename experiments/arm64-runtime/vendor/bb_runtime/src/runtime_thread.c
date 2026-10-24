@@ -5,6 +5,8 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "native_net_threads.h"
+#include "qa_cpu_qos.h"
+#include "runtime_exit_codes.h"
 #include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -237,6 +239,11 @@ static void set_host_name(const char *name) {
 }
 static void *host_start(void *p) {
     GuestThread *t=p;
+    const char* qos=getenv("BB_ARM_QA_CPU_QOS");if(qos){int mode=0;
+        if(bb_qa_cpu_qos_parse(qos,&mode)||bb_qa_cpu_qos_apply(mode)){
+            fputs("ARM QA CPU QoS guest-thread admission failed\n",stderr);_Exit(BB_ARM_EXIT_HOST_PROTECTION);
+        }
+    }
     attach(t);
     set_host_name(t->name);
     bb_arm_set_stack_size(t->attr.stack);
