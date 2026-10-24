@@ -12,8 +12,10 @@ Vendored code retains its original licenses. SOURCE.json records upstream proven
 
 ## Current status
 
-See CURRENT-PLAN.zh-CN.md and docs/. Exit-code error/restart separation and DIALOG
-macro bridge coverage have headless regressions. White models and exploration stutters
+See CURRENT-PLAN.zh-CN.md, NIGHT-HANDOFF.zh-CN.md and docs/. Exit-code error/restart separation,
+semantic Clang ABI markers, full libc spans and manual-input packaging have regressions.
+A real Metal first-upload hash bug has old/fixed pixel tests and an isolated QA candidate;
+its relation to the observed combat white models remains unproven. White models and exploration stutters
 remain under investigation; no performance improvement or complete compatibility is claimed.
 Death/respawn, online and menu live retests are deferred for the owner's acceptance.
 Existing AvPlayer implementations still need a proper guest callback/handle bridge.
@@ -33,6 +35,9 @@ python3 tools/generate_native.py
 ninja -C build/fex -j1
 python3 tests/run_prototype.py --packed-veneers --fast-hle-lookup
 python3 tests/test_runtime_exit_contract.py
+python3 tests/test_libc_spans.py
+python3 tests/test_native_abi_declarations.py
+python3 tests/test_manual_qa_policy.py
 ```
 
 All live test helpers are QA tools. Review their explicit private-root checks and

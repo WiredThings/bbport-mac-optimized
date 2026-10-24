@@ -85,7 +85,21 @@ def make(mode=None):
  if mode:
   fix[:]=[(patch,target) for patch,target in fix if not 0x400<=patch<0x800]
   e,r,c,g,z,q,end=function(0x400,40)
-  if mode=='dialogs':
+  if mode and mode.startswith('libc-span:'):
+   _,operation,which=mode.split(':')
+   destination=0x7ff0 if which=='destination' else 0x2000 if which=='readonly' else 0x4504 if which=='overlap' else 0x4400
+   source=0x7ff0 if which=='source' else 0x4500
+   r('48 8d 3d',destination)
+   if operation=='memset':e('be 5a 00 00 00')
+   else:r('48 8d 35',source)
+   if which=='huge':e('48 ba ff ff ff ff ff ff ff ff')
+   else:e('ba 20 00 00 00')
+   c(operation)
+   if which in ['valid','overlap']:
+    if operation=='memcmp':z()
+    else:r('8b 05',destination);q('3d',0x5a5a5a5a)
+   data[0x4400:0x4420]=b'Z'*32;data[0x4500:0x4520]=b'Z'*32
+  elif mode=='dialogs':
    for family in ['sceMsgDialog','sceSaveDataDialog','sceNpProfileDialog','sceNpCommerceDialog']:
     c(family+'Initialize');z()
     c(family+'UpdateStatus');q('3d',1)

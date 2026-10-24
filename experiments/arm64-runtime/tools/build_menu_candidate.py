@@ -1,5 +1,7 @@
 from pathlib import Path
 import json,shlex,subprocess,hashlib,time
+from qa_build_guard import require_no_games
+require_no_games()
 P=Path('/Users/Shared/BloodEchoesDevelopment/arm64-runtime-prototype');B=Path('/private/tmp/blood-echoes-arm64-metal-20261023/build');M=P/'vendor/metal_api'
 source='shim/bbport_game_menu.cpp'
 commands=subprocess.check_output(['ninja','-C',str(B),'-t','commands'],text=True).splitlines()

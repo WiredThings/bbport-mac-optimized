@@ -1,0 +1,7 @@
+{
+  "old": "        if (is_gpu_modified && !is_gpu_dirty) {\n            const u8* addr = std::bit_cast<u8*>(image.info.guest_address);\n            const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);\n            if (image.mip_hashes[m] == hash) {",
+  "new": "        // Record the first upload too. Otherwise an unrelated CPU dirty mark\n        // can upload unchanged old bytes over a subsequent GPU write.\n        if (is_gpu_modified) {\n            const u8* addr = std::bit_cast<u8*>(image.info.guest_address);\n            const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);\n            if (!is_gpu_dirty && image.mip_hashes[m] == hash) {",
+  "baseline": "/Users/Shared/BloodEchoesDevelopment/arm64-runtime-prototype/tests/baselines/texture_cache_first_upload.cpp",
+  "upstream": "https://github.com/deadinside28/bloodborne_pc/blob/8185b88/gpu/textures/texture_cache_upload.cpp#L199",
+  "scope": "mip baseline recording; no eviction, budget, format, shader math or copy ordering change"
+}

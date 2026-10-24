@@ -2,6 +2,7 @@
 """Generate ABI-exact host C shims from Clang's parsed declarations, no size guessing."""
 from pathlib import Path
 import subprocess,json,re
+from native_abi_declarations import is_guest_definition
 P=Path(__file__).resolve().parents[1]
 R=P/'vendor/bb_runtime';G=P/'generated';G.mkdir(exist_ok=True)
 names=['runtime','runtime_thread','runtime_kernel','runtime_memory','runtime_mutex','runtime_sema','runtime_rwlock','runtime_time','runtime_content','runtime_file','runtime_services','runtime_savedata','runtime_rtc','runtime_ajm','runtime_audio','runtime_pad']
@@ -20,6 +21,9 @@ opaque_slots={('runtime_services','http_wait'):{0},
  ('runtime_ajm','job_run'):{3,5,7,9},
  ('runtime_ajm','job_run_split'):{7,9}}
 callback_slots={('runtime_services',n):{0} for n in ['netctl_register','np_register','np_register_void']}
+# These scalar pointer words are proved by explicit count-aware wrapper checks.
+# Avoid repeating the generic one-byte check before proving the full span.
+span_slots={('runtime',n):({0}if n=='guest_memset'else{0,1})for n in ['guest_memcpy','guest_memmove','guest_memset','guest_memcmp']}
 
 def typ(t):
     raw=t.get('desugaredQualType',t['qualType'])
@@ -36,19 +40,15 @@ def typ(t):
     return ('bool' if raw=='_Bool' else raw,kind)
 for name in names:
     source=R/'src'/f'{name}.c';text=source.read_bytes().decode('latin1')
-    cmd=['clang','-arch','arm64','-std=c11','-I/opt/homebrew/include','-Wno-ignored-attributes','-I'+str(R),'-I'+str(R/'src'),'-I'+str(P/'src'),'-Xclang','-ast-dump=json','-fsyntax-only',str(source)]
+    cmd=['clang','-arch','arm64','-std=c11','-DBB_GENERATING_NATIVE_ABI=1','-I/opt/homebrew/include','-Wno-ignored-attributes','-I'+str(R),'-I'+str(R/'src'),'-I'+str(P/'src'),'-Xclang','-ast-dump=json','-fsyntax-only',str(source)]
     result=subprocess.run(cmd,capture_output=True,text=True)
     if result.returncode:raise RuntimeError(name+'\n'+result.stderr[-5000:])
     tree=json.loads(result.stdout);body=['// Generated from Clang AST.','#include <stdbool.h>','#include "runtime_exit_codes.h"',' #include "'+str(source)+'"']
     registered=[]
     for node in tree.get('inner',[]):
-        if node.get('kind')!='FunctionDecl' or not any(x.get('kind')=='CompoundStmt' for x in node.get('inner',[])):continue
-        location=node.get('loc',{});expansion=location.get('expansionLoc',{})
-        macro=expansion.get('file')==str(source) and text[expansion.get('offset',0):].startswith(('PAIR(','DIALOG('))
-        offset=location.get('offset',-1);fname=node.get('name','')
-        if not macro and (offset<0 or text[offset:offset+len(fname)]!=fname):continue
-        start=node.get('range',{}).get('begin',{}).get('offset',offset)
-        if (not macro and 'ABI' not in text[start:offset]) or node.get('variadic'):continue
+        # Compiler-proven ABI declaration, including all current/future macro names.
+        if not is_guest_definition(node) or node.get('variadic'):continue
+        fname=node['name']
         params=[x for x in node.get('inner',[]) if x.get('kind')=='ParmVarDecl']
         q=node['type']['qualType'];ret=q[:q.index('(')].strip()
         # Return typedefs in this runtime are integer typedefs or pointers.
@@ -57,6 +57,7 @@ for name in names:
             rt,rk=typ({'qualType':aliases.get(ret,ret)})
             args=[typ(x['type']) for x in params]
             for i in opaque_slots.get((name,fname),set()):args[i]=('uint64_t','Q')
+            for i in span_slots.get((name,fname),set()):args[i]=('uint64_t','Q')
         except ValueError as e:
             metadata.append(dict(source=name,function=fname,unsupported=str(e)));continue
         wrapper=f'bb_native_{name}_{fname}';signature=rk+''.join(k for _,k in args)
@@ -73,6 +74,12 @@ for name in names:
                 checks.append(f'if(a{i})bb_arm_require_string("{name}.{fname}.arg{i}",(const char*)a{i},{limit});')
             elif raw.replace(' ','') not in ['void*','constvoid*']:
                 checks.append(f'if(a{i})bb_arm_require_range("{name}.{fname}.arg{i}",(uintptr_t)a{i},sizeof(*(({param["type"]["qualType"]})0)),{0 if args[i][1]=="R" else 1});')
+        if name=='runtime' and fname in ['guest_memcpy','guest_memmove','guest_memset','guest_memcmp']:
+            # void* alone conveys only one byte to the generic ABI adapter.
+            # Prove the complete count before the existing host libc/notify path.
+            checks.append(f'if(a2)bb_arm_require_range("{name}.{fname}.span0",(uintptr_t)a0,a2,{0 if fname=="guest_memcmp" else 1});')
+            if fname!='guest_memset':
+                checks.append(f'if(a2)bb_arm_require_range("{name}.{fname}.span1",(uintptr_t)a1,a2,0);')
         if name=='runtime_file' and fname in ['sce_read','posix_read','sce_pread','posix_pread','sce_write','posix_write','sce_pwrite','posix_pwrite','sce_getdents','posix_getdents']:
             checks.append(f'if(a2)bb_arm_require_range("{name}.{fname}.buffer",(uintptr_t)a1,a2,{0 if "write" in fname else 1});')
         if name=='runtime_ajm' and fname in ['job_control','job_run']:
@@ -87,7 +94,7 @@ for name in names:
             checks.append('if(a2>UINT32_MAX-15)bb_arm_require_range("ajm.inline.size",0,1,0);bb_arm_require_range("ajm.inline.builder",(uintptr_t)a0,8+((a2+7)&~UINT64_C(7)),1);if(a2)bb_arm_require_range("ajm.inline.data",(uintptr_t)a1,a2,0);')
         body.append(f'{rt} {wrapper}({declarations})'+' { '+''.join(checks)+('' if rk=='v' else 'return ('+rt+')')+f'{fname}({arguments});'+' }')
         registered.append(f'bb_arm_add_native("{fname}",(void*){fname},(void*){wrapper},"{signature}");')
-        metadata.append(dict(source=name,function=fname,signature=signature,parameters=[x['type']['qualType'] for x in params],returns=ret))
+        metadata.append(dict(source=name,function=fname,signature=signature,parameters=[x['type']['qualType'] for x in params],returns=ret,full_span_pointer_slots=sorted(span_slots.get((name,fname),set()))))
     body.append(f'void bb_arm_register_{name}(void)'+' { '+' '.join(registered)+' }')
     (G/f'{name}_bridge.c').write_text('\n'.join(body)+'\n');calls.append(f'bb_arm_register_{name}')
 (G/'native_registry.c').write_text('#include "arm_bridge.h"\n'+''.join(f'void {c}(void);\n' for c in calls)+'void bb_arm_runtime_register(void) {'+''.join(c+'();' for c in calls)+'}\n')

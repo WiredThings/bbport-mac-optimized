@@ -4,6 +4,7 @@ from pathlib import Path
 import json,shlex,subprocess,hashlib,time,sys
 from native_observer import NativeObserver
 from qa_memory_policy import MemoryPolicy
+from qa_build_guard import require_no_games
 P=Path(__file__).resolve().parents[1];B=Path('/private/tmp/blood-echoes-arm64-metal-20261023/build');M=P/'vendor/metal_api'
 e=Path('/private/tmp/blood-echoes-texture-diag-evidence').read_text().strip();e=Path(e);assert e.parent==P/'evidence'
 base=json.loads((P/'evidence/heap-bridge-build.json').read_text());dest=P/'backend/bbport/bin/gpu-metal-arm64/libbbgpu.dylib'
@@ -12,7 +13,7 @@ assert sha(dest)==base['sha256']
 obs=NativeObserver();before=obs.system();assert not before['locked']and before['pressure']!=4
 policy=MemoryPolicy(before);started=time.monotonic();steps=[]
 def run(cmd,label,cwd=B):
- assert obs.path(12077) is None and obs.path(12080) is None,'do not compile while manual game runs'
+ require_no_games()
  with(e/(label+'.log')).open('w')as log:
   proc=subprocess.Popen(cmd,cwd=cwd,stdout=log,stderr=subprocess.STDOUT)
   try:

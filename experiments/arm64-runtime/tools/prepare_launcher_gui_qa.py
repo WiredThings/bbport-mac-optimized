@@ -3,6 +3,7 @@
 from pathlib import Path
 import sys,time,secrets,shutil,plistlib,json,hashlib,subprocess
 from launcher_environment import load
+from manual_qa_policy import validate_manual_environment
 P=Path(__file__).resolve().parents[1]
 label=str(time.time_ns());e=P/'evidence'/('launcher-gui-run-'+label);e.mkdir()
 root=P/'state'/('gui-root-'+label);data=root/'optimized-launcher';data.mkdir(parents=True)
@@ -12,7 +13,8 @@ for f in list((user/'savedata/1').iterdir()):
  if f.name in ('CUSA03173','CUSA03173.memory'):f.rename(f.with_name('CUSA00207'+f.name[9:]))
 nonce=secrets.token_hex(16);pad=root/'pad.txt';pad.write_text('');game=P.parent/'assets/CUSA03173-1.09';out=data/'out';out.mkdir()
 (user/'.arm-runtime-session').write_text('ARMQA1\n'+str(out/'boot-linked.bin')+'\n'+str(game)+'\n'+str(out/'content.bin')+'\n'+nonce+'\n')
-extra=dict(BB_ARM_LAUNCHER_COMPAT='1',BB_ARM_SESSION_NONCE=nonce,BB_ARM_RESTART_NONCE=secrets.token_hex(16),BB_ARM_QA_PAD_FILE=str(pad),BB_AUDIO='none',BB_ARM_PACKED_VENEERS='1',BB_ARM_RESOURCE_HOOKS='1',BB_GUEST_HOOKS='1',BB_ARM_RESOURCE_FAST='1',BB_ARM_RESOURCE_LEAF='1',BB_ARM_EXTRA_HEAPS='1',BB_MTL_HOT_STAGING_REUSE='1',BB_GPU_USER_DIR=str(P/'state/gpu-stutter-fresh-1792770276384734000'))
+extra=dict(BB_ARM_LAUNCHER_COMPAT='1',BB_ARM_SESSION_NONCE=nonce,BB_ARM_RESTART_NONCE=secrets.token_hex(16),BB_AUDIO='none',BB_ARM_PACKED_VENEERS='1',BB_ARM_RESOURCE_HOOKS='1',BB_GUEST_HOOKS='1',BB_ARM_RESOURCE_FAST='1',BB_ARM_RESOURCE_LEAF='1',BB_ARM_EXTRA_HEAPS='1',BB_MTL_HOT_STAGING_REUSE='1',BB_GPU_USER_DIR=str(P/'state/gpu-stutter-fresh-1792770276384734000'))
+validate_manual_environment(extra)
 prefs=dict(optimizedFoldersImported=True,gameFolder=str(game),repoOverride='',userFolder=str(user),language='11',communityChinese=True,chineseSimplifiedFolder=str(P.parent/'assets/chinese-retranslation-11'),chineseTraditionalFolder='',uiLanguage='zh-Hans',renderer='metal',resolution='1920x1080',ultrawide=False,fullscreen=False,quicksave=True,online=False,cloudSaves=False,fpsMode='uncap',fpsLimit=0,presentMode='Mailbox',gameMenu=True,skipNetworkChoice=True,metalOcclusion=False,metalObjectMotion=False,modsEnabled=True,metalOptimizations={k:v=='1' for k,v in load().items() if v in ('0','1')},extraEnv='\n'.join(k+'='+v for k,v in extra.items()))
 preferences=root/'preferences.plist';preferences.write_bytes(plistlib.dumps(prefs))
 app=P/'apps'/('Blood Echoes ARM64 GUI QA '+label+'.app');mac=app/'Contents/MacOS';resources=app/'Contents/Resources';mac.mkdir(parents=True);resources.mkdir()

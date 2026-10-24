@@ -4,7 +4,8 @@
     "function": "guest_procparam",
     "signature": "P",
     "parameters": [],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -13,7 +14,8 @@
     "parameters": [
       "void **"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -22,14 +24,16 @@
     "parameters": [
       "const uint64_t *"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
     "function": "init_env",
     "signature": "v",
     "parameters": [],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -38,7 +42,8 @@
     "parameters": [
       "GuestCallback"
     ],
-    "returns": "int"
+    "returns": "int",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -49,7 +54,8 @@
       "void *",
       "void *"
     ],
-    "returns": "int"
+    "returns": "int",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -58,7 +64,8 @@
     "parameters": [
       "void *"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -67,7 +74,8 @@
     "parameters": [
       "uint64_t *"
     ],
-    "returns": "int"
+    "returns": "int",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -76,7 +84,8 @@
     "parameters": [
       "uint64_t *"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -85,58 +94,75 @@
     "parameters": [
       "uint64_t *"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
     "function": "stack_fail",
     "signature": "v",
     "parameters": [],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
     "function": "guest_memset",
-    "signature": "PPiL",
+    "signature": "PQiL",
     "parameters": [
       "void *",
       "int",
       "size_t"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": [
+      0
+    ]
   },
   {
     "source": "runtime",
     "function": "guest_memcpy",
-    "signature": "PPRL",
+    "signature": "PQQL",
     "parameters": [
       "void *",
       "const void *",
       "size_t"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": [
+      0,
+      1
+    ]
   },
   {
     "source": "runtime",
     "function": "guest_memmove",
-    "signature": "PPRL",
+    "signature": "PQQL",
     "parameters": [
       "void *",
       "const void *",
       "size_t"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": [
+      0,
+      1
+    ]
   },
   {
     "source": "runtime",
     "function": "guest_memcmp",
-    "signature": "iRRL",
+    "signature": "iQQL",
     "parameters": [
       "const void *",
       "const void *",
       "size_t"
     ],
-    "returns": "int"
+    "returns": "int",
+    "full_span_pointer_slots": [
+      0,
+      1
+    ]
   },
   {
     "source": "runtime",
@@ -145,7 +171,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "size_t"
+    "returns": "size_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime",
@@ -154,21 +181,24 @@
     "parameters": [
       "int"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
     "function": "thread_self",
     "signature": "P",
     "parameters": [],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
     "function": "guest_error",
     "signature": "P",
     "parameters": [],
-    "returns": "int32_t *"
+    "returns": "int32_t *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -177,7 +207,8 @@
     "parameters": [
       "ThreadAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -186,7 +217,8 @@
     "parameters": [
       "ThreadAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -196,7 +228,8 @@
       "void *",
       "ThreadAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -206,7 +239,8 @@
       "ThreadAttr **",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -216,7 +250,8 @@
       "ThreadAttr **",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -226,7 +261,8 @@
       "ThreadAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -236,7 +272,8 @@
       "ThreadAttr **",
       "int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -246,7 +283,8 @@
       "ThreadAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -256,7 +294,8 @@
       "ThreadAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -266,7 +305,8 @@
       "ThreadAttr **",
       "const int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -276,7 +316,8 @@
       "ThreadAttr **",
       "int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -286,7 +327,8 @@
       "ThreadAttr **",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -296,7 +338,8 @@
       "ThreadAttr **",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -306,7 +349,8 @@
       "ThreadAttr **",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -319,7 +363,8 @@
       "void *",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -329,7 +374,8 @@
       "GuestThread *",
       "void **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -338,7 +384,8 @@
     "parameters": [
       "GuestThread *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -347,14 +394,16 @@
     "parameters": [
       "void *"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
     "function": "thread_yield",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -364,7 +413,8 @@
       "GuestThread *",
       "int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -374,7 +424,8 @@
       "GuestThread *",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -384,7 +435,8 @@
       "GuestThread *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -394,7 +446,8 @@
       "GuestThread *",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -404,7 +457,8 @@
       "GuestThread *",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -414,7 +468,8 @@
       "GuestThread *",
       "GuestThread *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -423,7 +478,8 @@
     "parameters": [
       "ThreadAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -432,7 +488,8 @@
     "parameters": [
       "ThreadAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -442,7 +499,8 @@
       "ThreadAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -452,7 +510,8 @@
       "ThreadAttr **",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -462,7 +521,8 @@
       "ThreadAttr **",
       "const int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -474,7 +534,8 @@
       "GuestEntry",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -487,7 +548,8 @@
       "void *",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_thread",
@@ -497,7 +559,8 @@
       "GuestThread *",
       "void **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -507,7 +570,8 @@
       "uint32_t",
       "GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -517,7 +581,8 @@
       "uint32_t",
       "GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -527,42 +592,48 @@
       "uint32_t",
       "GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "process_time",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "process_time_counter",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "process_time_frequency",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "read_tsc",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "tsc_frequency",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -571,7 +642,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -580,7 +652,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -589,7 +662,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "uint32_t"
+    "returns": "uint32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -599,7 +673,8 @@
       "const GuestTimespec *",
       "GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -609,7 +684,8 @@
       "const GuestTimespec *",
       "GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -618,7 +694,8 @@
     "parameters": [
       "GuestTimezone *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -628,7 +705,8 @@
       "GuestTimeval *",
       "GuestTimezone *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -637,7 +715,8 @@
     "parameters": [
       "GuestTimeval *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -646,28 +725,32 @@
     "parameters": [
       "int64_t *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "get_pagesize",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "get_pid",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "yield",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -676,7 +759,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -686,14 +770,16 @@
       "uint32_t",
       "uint64_t"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
     "function": "print_backtrace",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -703,7 +789,8 @@
       "int",
       "uintptr_t"
     ],
-    "returns": "uintptr_t"
+    "returns": "uintptr_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -714,7 +801,8 @@
       "const GuestSigset *",
       "GuestSigset *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -723,7 +811,8 @@
     "parameters": [
       "GuestSigset *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -732,7 +821,8 @@
     "parameters": [
       "GuestSigset *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -742,7 +832,8 @@
       "int",
       "GuestRusage *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -756,7 +847,8 @@
       "const void *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -766,7 +858,8 @@
       "int32_t *",
       "void (*)(void)"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -776,7 +869,8 @@
       "int32_t *",
       "void (*)(void)"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -786,7 +880,8 @@
       "uint32_t *",
       "KeyDestructor"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -795,7 +890,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -805,7 +901,8 @@
       "uint32_t",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -814,7 +911,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -824,7 +922,8 @@
       "uint32_t *",
       "KeyDestructor"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -833,7 +932,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_kernel",
@@ -843,14 +943,16 @@
       "uint32_t",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
     "function": "direct_size",
     "signature": "Q",
     "parameters": [],
-    "returns": "uint64_t"
+    "returns": "uint64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -864,7 +966,8 @@
       "int",
       "int64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -878,7 +981,8 @@
       "int64_t",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -893,7 +997,8 @@
       "uint64_t",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -903,7 +1008,8 @@
       "void *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -913,7 +1019,8 @@
       "uint64_t",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -925,7 +1032,8 @@
       "int",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -938,7 +1046,8 @@
       "int",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -948,7 +1057,8 @@
       "void *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -962,7 +1072,8 @@
       "int",
       "int64_t"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -974,7 +1085,8 @@
       "int",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -985,7 +1097,8 @@
       "uint64_t",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -997,7 +1110,8 @@
       "void **",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -1009,7 +1123,8 @@
       "VirtualQueryInfo *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -1021,7 +1136,8 @@
       "void **",
       "void **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -1033,7 +1149,8 @@
       "int *",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_memory",
@@ -1044,7 +1161,8 @@
       "int",
       "int *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1053,7 +1171,8 @@
     "parameters": [
       "GuestAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1063,7 +1182,8 @@
       "GuestAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1073,7 +1193,8 @@
       "GuestAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1082,7 +1203,8 @@
     "parameters": [
       "GuestAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1093,7 +1215,8 @@
       "GuestAttr **",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1102,7 +1225,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1111,7 +1235,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1120,7 +1245,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1129,7 +1255,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1139,7 +1266,8 @@
       "GuestMutex **",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1150,7 +1278,8 @@
       "void **",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1159,7 +1288,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1169,7 +1299,8 @@
       "GuestCond **",
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1180,7 +1311,8 @@
       "GuestMutex **",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1189,7 +1321,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1198,7 +1331,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1209,7 +1343,8 @@
       "GuestMutex **",
       "const GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1218,7 +1353,8 @@
     "parameters": [
       "GuestAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1228,7 +1364,8 @@
       "GuestAttr **",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1237,7 +1374,8 @@
     "parameters": [
       "GuestAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1247,7 +1385,8 @@
       "GuestMutex **",
       "GuestAttr **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1256,7 +1395,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1265,7 +1405,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1274,7 +1415,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1283,7 +1425,8 @@
     "parameters": [
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1293,7 +1436,8 @@
       "GuestCond **",
       "void **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1302,7 +1446,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1312,7 +1457,8 @@
       "GuestCond **",
       "GuestMutex **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1323,7 +1469,8 @@
       "GuestMutex **",
       "const GuestTimespec *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1332,7 +1479,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_mutex",
@@ -1341,7 +1489,8 @@
     "parameters": [
       "GuestCond **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1355,7 +1504,8 @@
       "int32_t",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1366,7 +1516,8 @@
       "int32_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1376,7 +1527,8 @@
       "uint32_t",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1386,7 +1538,8 @@
       "uint32_t",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1397,7 +1550,8 @@
       "int32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_sema",
@@ -1406,7 +1560,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1417,7 +1572,8 @@
       "void *const *",
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1426,7 +1582,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1435,7 +1592,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1444,7 +1602,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1453,7 +1612,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1463,7 +1623,8 @@
       "Rwlock **",
       "const GuestTime *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1473,7 +1634,8 @@
       "Rwlock **",
       "const GuestTime *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1482,7 +1644,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rwlock",
@@ -1491,7 +1654,8 @@
     "parameters": [
       "Rwlock **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_time",
@@ -1501,7 +1665,8 @@
       "GuestTimeval *",
       "GuestTimezone *"
     ],
-    "returns": "int"
+    "returns": "int",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1510,7 +1675,8 @@
     "parameters": [
       "uint16_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1519,7 +1685,8 @@
     "parameters": [
       "uint16_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1528,7 +1695,8 @@
     "parameters": [
       "uint16_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1538,7 +1706,8 @@
       "const unsigned char *",
       "unsigned char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1548,7 +1717,8 @@
       "uint32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_content",
@@ -1560,7 +1730,8 @@
       "uint32_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1571,7 +1742,8 @@
       "int",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1582,7 +1754,8 @@
       "int",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1591,7 +1764,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1600,7 +1774,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1611,7 +1786,8 @@
       "void *",
       "uint64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1622,7 +1798,8 @@
       "void *",
       "uint64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1634,7 +1811,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1646,7 +1824,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1657,7 +1836,8 @@
       "const void *",
       "uint64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1668,7 +1848,8 @@
       "const void *",
       "uint64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1680,7 +1861,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1692,7 +1874,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1703,7 +1886,8 @@
       "int64_t",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1714,7 +1898,8 @@
       "int64_t",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1724,7 +1909,8 @@
       "int",
       "GuestStat *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1734,7 +1920,8 @@
       "int",
       "GuestStat *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1744,7 +1931,8 @@
       "const char *",
       "GuestStat *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1754,7 +1942,8 @@
       "const char *",
       "GuestStat *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1766,7 +1955,8 @@
       "uint64_t",
       "int64_t *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1778,7 +1968,8 @@
       "uint64_t",
       "int64_t *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1788,7 +1979,8 @@
       "const char *",
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1798,7 +1990,8 @@
       "const char *",
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1808,7 +2001,8 @@
       "int",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1818,7 +2012,8 @@
       "int",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1828,7 +2023,8 @@
       "const char *",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1838,7 +2034,8 @@
       "const char *",
       "int64_t"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1847,7 +2044,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1856,7 +2054,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1866,7 +2065,8 @@
       "const char *",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1876,7 +2076,8 @@
       "const char *",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1886,7 +2087,8 @@
       "const char *",
       "int"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1895,7 +2097,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1904,7 +2107,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1913,7 +2117,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1922,7 +2127,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "int64_t"
+    "returns": "int64_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_file",
@@ -1931,7 +2137,8 @@
     "parameters": [
       "const char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1940,14 +2147,16 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "user_terminate",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1956,7 +2165,8 @@
     "parameters": [
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1965,7 +2175,8 @@
     "parameters": [
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1976,7 +2187,8 @@
       "char *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1985,7 +2197,8 @@
     "parameters": [
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -1995,7 +2208,8 @@
       "int32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2004,7 +2218,8 @@
     "parameters": [
       "unsigned char *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2013,42 +2228,48 @@
     "parameters": [
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "hide_splash",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "launch_browser",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "net_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "net_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "net_errno_loc",
     "signature": "P",
     "parameters": [],
-    "returns": "int32_t *"
+    "returns": "int32_t *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2059,7 +2280,8 @@
       "int",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2068,14 +2290,16 @@
     "parameters": [
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "net_unreachable",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2085,7 +2309,8 @@
       "const char *",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2094,7 +2319,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2105,7 +2331,8 @@
       "int",
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2114,7 +2341,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2123,7 +2351,8 @@
     "parameters": [
       "uint16_t"
     ],
-    "returns": "uint16_t"
+    "returns": "uint16_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2132,7 +2361,8 @@
     "parameters": [
       "uint16_t"
     ],
-    "returns": "uint16_t"
+    "returns": "uint16_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2141,7 +2371,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "uint32_t"
+    "returns": "uint32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2150,7 +2381,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "uint32_t"
+    "returns": "uint32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2161,7 +2393,8 @@
       "const char *",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2173,7 +2406,8 @@
       "char *",
       "uint32_t"
     ],
-    "returns": "const char *"
+    "returns": "const char *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2182,7 +2416,8 @@
     "parameters": [
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2192,7 +2427,8 @@
       "int",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2203,14 +2439,16 @@
       "void *",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "netctl_check",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2219,7 +2457,8 @@
     "parameters": [
       "int"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2228,35 +2467,40 @@
     "parameters": [
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "lib_init_id",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "ok_void",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "http_fail",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "http_object",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2266,7 +2510,8 @@
       "int32_t",
       "void **"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2278,7 +2523,8 @@
       "int32_t",
       "int64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2288,14 +2534,16 @@
       "int32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "np_signed_out",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2305,7 +2553,8 @@
       "void *",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2315,7 +2564,8 @@
       "void *",
       "void *"
     ],
-    "returns": "void"
+    "returns": "void",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2324,7 +2574,8 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2334,7 +2585,8 @@
       "int32_t",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2344,7 +2596,8 @@
       "int32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2354,7 +2607,8 @@
       "const void *",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2364,7 +2618,8 @@
       "void *",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2375,7 +2630,8 @@
       "void *",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2386,7 +2642,8 @@
       "const void *",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2396,21 +2653,24 @@
       "uint32_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "common_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "msg_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2419,28 +2679,32 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "msg_status",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "msg_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "save_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2449,28 +2713,32 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "save_status",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "save_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "profile_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2479,28 +2747,32 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "profile_status",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "profile_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "commerce_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2509,21 +2781,24 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "commerce_status",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "commerce_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2532,7 +2807,8 @@
     "parameters": [
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2542,14 +2818,16 @@
       "const ImeParam *",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "ime_status",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2558,14 +2836,16 @@
     "parameters": [
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "ime_term",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2577,7 +2857,8 @@
       "uint32_t",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2586,7 +2867,8 @@
     "parameters": [
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2597,7 +2879,8 @@
       "int32_t",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2609,7 +2892,8 @@
       "int32_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2621,7 +2905,8 @@
       "void *",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2634,7 +2919,8 @@
       "void *",
       "void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2643,7 +2929,8 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2653,7 +2940,8 @@
       "int32_t *",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2665,7 +2953,8 @@
       "uint32_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2677,7 +2966,8 @@
       "uint32_t",
       "int8_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2687,7 +2977,8 @@
       "int32_t",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2699,7 +2990,8 @@
       "int64_t",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2713,7 +3005,8 @@
       "int32_t *",
       "int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2725,7 +3018,8 @@
       "int32_t",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2736,7 +3030,8 @@
       "unsigned char *",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
@@ -2745,14 +3040,16 @@
     "parameters": [
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_services",
     "function": "audio_in_open",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2761,14 +3058,16 @@
     "parameters": [
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
     "function": "save_terminate",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2778,7 +3077,8 @@
       "const Mount1 *",
       "MountResult *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2788,7 +3088,8 @@
       "const Mount2 *",
       "MountResult *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2797,7 +3098,8 @@
     "parameters": [
       "const MountPoint *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2809,7 +3111,8 @@
       "const void *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2819,7 +3122,8 @@
       "const MountPoint *",
       "const Icon *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2828,7 +3132,8 @@
     "parameters": [
       "const Delete *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2838,7 +3143,8 @@
       "const SearchCond *",
       "SearchResult *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2849,7 +3155,8 @@
       "uint64_t",
       "const Param *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2861,7 +3168,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_savedata",
@@ -2873,7 +3181,8 @@
       "uint64_t",
       "int64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2882,7 +3191,8 @@
     "parameters": [
       "DateTime *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2892,7 +3202,8 @@
       "DateTime *",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2901,7 +3212,8 @@
     "parameters": [
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2911,7 +3223,8 @@
       "const uint64_t *",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2921,7 +3234,8 @@
       "const uint64_t *",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2932,7 +3246,8 @@
       "int32_t",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2942,7 +3257,8 @@
       "const DateTime *",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2952,14 +3268,16 @@
       "DateTime *",
       "const uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
     "function": "rtc_tick_resolution",
     "signature": "I",
     "parameters": [],
-    "returns": "uint32_t"
+    "returns": "uint32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2969,7 +3287,8 @@
       "DateTime *",
       "int64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2979,7 +3298,8 @@
       "const DateTime *",
       "int64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_rtc",
@@ -2989,7 +3309,8 @@
       "char *",
       "const uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3005,7 +3326,8 @@
       "uint64_t",
       "void *"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3023,7 +3345,8 @@
       "uint64_t",
       "void *"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3041,7 +3364,8 @@
       "uint64_t",
       "void *"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3053,7 +3377,8 @@
       "uint64_t",
       "const void **"
     ],
-    "returns": "void *"
+    "returns": "void *",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3063,7 +3388,8 @@
       "int64_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3072,7 +3398,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3083,7 +3410,8 @@
       "uint32_t",
       "int64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3093,7 +3421,8 @@
       "uint32_t",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3105,7 +3434,8 @@
       "uint64_t",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3115,7 +3445,8 @@
       "uint32_t",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3124,7 +3455,8 @@
     "parameters": [
       "uint32_t"
     ],
-    "returns": "uint32_t"
+    "returns": "uint32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3138,7 +3470,8 @@
       "BatchError *",
       "uint32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3150,7 +3483,8 @@
       "uint32_t",
       "BatchError *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3160,14 +3494,16 @@
       "uint32_t",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
     "function": "ajm_error_dump",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_ajm",
@@ -3178,14 +3514,16 @@
       "void *",
       "uint64_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
     "function": "audio_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3199,7 +3537,8 @@
       "uint32_t",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3208,7 +3547,8 @@
     "parameters": [
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3218,7 +3558,8 @@
       "int32_t",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3228,7 +3569,8 @@
       "const OutputParam *",
       "uint32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3239,7 +3581,8 @@
       "int32_t",
       "const int32_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3249,7 +3592,8 @@
       "int32_t",
       "PortState *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_audio",
@@ -3259,14 +3603,16 @@
       "int32_t",
       "uint64_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
     "function": "pad_init",
     "signature": "i",
     "parameters": [],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3278,7 +3624,8 @@
       "int32_t",
       "const void *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3287,7 +3634,8 @@
     "parameters": [
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3297,7 +3645,8 @@
       "int32_t",
       "PadData *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3308,7 +3657,8 @@
       "PadData *",
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3318,7 +3668,8 @@
       "int32_t",
       "ControllerInfo *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3328,7 +3679,8 @@
       "int32_t",
       "const uint8_t *"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3337,7 +3689,8 @@
     "parameters": [
       "int32_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   },
   {
     "source": "runtime_pad",
@@ -3347,6 +3700,7 @@
       "int32_t",
       "uint8_t"
     ],
-    "returns": "int32_t"
+    "returns": "int32_t",
+    "full_span_pointer_slots": []
   }
 ]

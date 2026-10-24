@@ -1584,7 +1584,7 @@ bool RasterizerCore::BindTexturesFromSet(const Shader::Info& stage, const Prepar
             [&](std::size_t i,const auto& entry,const auto& texture) {
                 texture_cache.CaptureTextureBinding(entry.id,texture.view,
                     texture.replacement_view,uintptr_t(this),stage.pgm_hash,u32(stage.sw_stage),
-                    u32(i),0,"set_memo"); // requested address unknown on the memo path
+                    u32(i),prepared->image_sharps[i].Address(),"set_memo"); // owned prepared snapshot; never reread guest memory
             });
         if(!complete)FrameCapture::Native("{\"op\":\"texture_set_incomplete\",\"source\":\"set_memo\"}");
     }

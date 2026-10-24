@@ -25,6 +25,8 @@ The ARM64 Metal host defaults on in supported macOS 27+ packages; macOS 26 retai
 the in-process renderer. Advanced options provide a fallback switch. See the
 [ownership, measurements and build notes](docs/release/ARM64-METAL-EXPERIMENT.md).
 
+The `dev/arm64-runtime-audit` branch also contains an [isolated FEX CPU prototype](experiments/arm64-runtime/README.md). This unstable source checkpoint is separate from the production runtime and Release; see its [validation and remaining gaps](experiments/arm64-runtime/NIGHT-HANDOFF.zh-CN.md). It is not yet a standalone clean-checkout build target.
+
 ## Install and play
 
 Requires **Apple Silicon, macOS 26+, Rosetta 2**, and your own decrypted Bloodborne game files

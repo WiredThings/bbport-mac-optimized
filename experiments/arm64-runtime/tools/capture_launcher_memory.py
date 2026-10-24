@@ -9,7 +9,12 @@ P=Path(__file__).resolve().parents[1]
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('case',type=Path);ap.add_argument('cpu',type=int);ap.add_argument('gpu',type=int);ap.add_argument('--fex-mapping-audit',action='store_true');a=ap.parse_args()
  case=a.case.resolve();cpu=a.cpu;gpu=a.gpu;assert case.is_relative_to(P/'evidence')and case.is_dir()and cpu!=gpu and cpu>0 and gpu>0
- obs=NativeObserver();cpu_path=obs.path(cpu);gpu_path=obs.path(gpu);assert cpu_path in(str(P/'build/fex/Bin/bb-game-arm64'),str(P/'rosetta-reference/bin/bb-probe-metal'));assert gpu_path==str(P/'backend/bbport/bin/Bloodborne Metal.app/Contents/MacOS/bb-gpu')
+ obs=NativeObserver();cpu_path=obs.path(cpu);gpu_path=obs.path(gpu);assert cpu_path in(str(P/'build/fex/Bin/bb-game-arm64'),str(P/'rosetta-reference/bin/bb-probe-metal'));cohort=json.loads((case.parent/'result.json').read_text())
+ expected_gpu=P/'backend/bbport/bin/Bloodborne Metal.app/Contents/MacOS/bb-gpu'
+ if cohort.get('gpu_variant')=='first-upload':
+  candidate=json.loads((P/'evidence/first-upload-gpu-app.json').read_text());expected_gpu=Path(candidate['target'])
+  assert expected_gpu.is_relative_to(P/'backend/bbport/bin')and expected_gpu.name=='bb-gpu'
+ assert gpu_path==str(expected_gpu)
  identities={cpu:cpu_path,gpu:gpu_path};mapping_before=None;runtime=None
  if a.fex_mapping_audit:
   assert cpu_path==str(P/'build/fex/Bin/bb-game-arm64'),'FEX mapping audit requires native CPU'

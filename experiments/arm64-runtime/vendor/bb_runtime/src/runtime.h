@@ -11,7 +11,11 @@ extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
 #endif
+#ifdef BB_GENERATING_NATIVE_ABI
+#define ABI __attribute__((annotate("bb_guest_abi",0x42424755455354ULL)))
+#else
 #define ABI
+#endif
 #include "arm_bridge.h"
 typedef void (ABI *GuestCallback)(void);
 void runtime_start(uint64_t capabilities);

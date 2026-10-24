@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_ns": 1792860734501471000,
+  "created_ns": 1792866178675647000,
   "scope": "source-only isolated ARM64 development checkpoint",
   "files": [
     {
@@ -249,7 +249,7 @@
     },
     {
       "path": "tools/audit_launcher_integration.py",
-      "sha256": "eaf6a250546b9110cf1d04fd0a257ed6646d254cc8e43ead9663e677f304c2df"
+      "sha256": "f45a17ef69fa4449053180c04fadc006910bec8103559dbea9839c87f06802d6"
     },
     {
       "path": "tools/audit_native_boundaries.py",
@@ -258,6 +258,14 @@
     {
       "path": "tools/audit_thd_registrations.py",
       "sha256": "0c87e211fe497654a6d3cb068aed5e0730d60d67ab3d3dc52cd04d76606ed5f7"
+    },
+    {
+      "path": "tools/build_first_upload_candidate.py",
+      "sha256": "7380c6531f0c0cbc2c56ed973cb8a9b91c93c83ba7c54902c106f7ef0e80ab5b"
+    },
+    {
+      "path": "tools/build_first_upload_test.py",
+      "sha256": "373dccc6c9b5700298f0e92db586f68f81c948f626bef8f183b57f83a1b0275d"
     },
     {
       "path": "tools/build_heap_bridge.py",
@@ -277,11 +285,11 @@
     },
     {
       "path": "tools/build_menu_candidate.py",
-      "sha256": "448f22c8d1ae7d08f784c02fcd4532515d518bc756189bb0ebba151379c0ecd5"
+      "sha256": "13f04f3104d09d606f946bf91ecde37ffcb1082e7b518d5fd592caeb50f68e8b"
     },
     {
       "path": "tools/build_texture_candidate.py",
-      "sha256": "e94a8c42be4f3cf39b527e8238a640c794294b702010f7feef9200ae81b104e1"
+      "sha256": "44e9080bce54e5d415a87c0c6eddc275e15a82315c318edef30db5a10ba89c3c"
     },
     {
       "path": "tools/build_texture_test.py",
@@ -289,7 +297,7 @@
     },
     {
       "path": "tools/capture_launcher_memory.py",
-      "sha256": "241081eac7696ce004eca63f5fffbb10676df24e432648d56c8f1fb5377b7c00"
+      "sha256": "b7c06a0efd08fcdf37fbb1f14866b81bf9eefcc366cfa740d64bb6cb02a37563"
     },
     {
       "path": "tools/cpu_code_map.py",
@@ -313,7 +321,7 @@
     },
     {
       "path": "tools/generate_native.py",
-      "sha256": "a5cf2cf63efe6713b6990e782e8f24b7931a1adfe8304f20ce2bc702e37c7d19"
+      "sha256": "5217e9450a6bd50243b712603b94955d79ebbd98b4481c8a56584148902e5c92"
     },
     {
       "path": "tools/guard_launcher_gui.py",
@@ -344,12 +352,24 @@
       "sha256": "ceb08bbd743817facc90c4eb011d6fec83bc014381b496f6a980f97507895331"
     },
     {
+      "path": "tools/manual_qa_policy.py",
+      "sha256": "2c803e44302cbfcdb38782eaaa8bd151c30d77eaaac9657946c487bc9a4cf86d"
+    },
+    {
       "path": "tools/memory_categories.py",
       "sha256": "35bdba8cb3d798c4f19f9ff9170c4d30ecc01d381bbecdf6a158757333fb4d09"
     },
     {
+      "path": "tools/native_abi_declarations.py",
+      "sha256": "18c0d86677b1e9fc44a04f81252d4228d43e10065511817f01a0511f1fea2223"
+    },
+    {
       "path": "tools/native_observer.py",
       "sha256": "b12fbea742708a2100ebae396d310e0e1ce35e1caf72e02dba66b8e44aacc4b2"
+    },
+    {
+      "path": "tools/package_local_arm64_qa.py",
+      "sha256": "fc67ccae9a12d0e4b7746881e7b7adbb43bc55c1c8ffbba4dab7061803ab8563"
     },
     {
       "path": "tools/patch_adapter.py",
@@ -357,7 +377,7 @@
     },
     {
       "path": "tools/prepare_launcher_gui_qa.py",
-      "sha256": "f227c8ec26d71d19d874f71450a69e1b7ad0a02cde082bd2f0affc2c1cfae7b4"
+      "sha256": "a8016156df30af120ffe5cd502c001a9629bb03cbe501de19768ba9d181c995f"
     },
     {
       "path": "tools/prepare_startup.py",
@@ -378,6 +398,10 @@
     {
       "path": "tools/qa_account_status.c",
       "sha256": "e7259d1d87bb13bc9584d640238e5deb408d83e90c30cb345f1fcd020d5f3b62"
+    },
+    {
+      "path": "tools/qa_build_guard.py",
+      "sha256": "5655a5ef8b356b3e564ee31a94ecb019d5c2a611057bcbb5273e165b5ef190de"
     },
     {
       "path": "tools/qa_home_probe.swift",
@@ -473,7 +497,7 @@
     },
     {
       "path": "tools/run_launcher_engine_abba.py",
-      "sha256": "71d019aace8644ad2c8b7826286e4d9fc5b2eb6c0a9fecc846abb7705889c43a"
+      "sha256": "89edc702a4789a197f94702cd8341565a6c433f5f9a8e5d5febc97b6346656e4"
     },
     {
       "path": "tools/run_memory_categories.py",
@@ -532,6 +556,10 @@
       "sha256": "4d05e598a2e4044d3e2bc80a4f53b5a02fdae486c31e6ae2b524defdb96a724e"
     },
     {
+      "path": "tools/validate_local_qa_package.py",
+      "sha256": "0c6f97ea734a8cddbcae49adfe7c867d59aeb65ed38c6a141fe0d0e07e91985f"
+    },
+    {
       "path": "tools/verify_cpu_usage_units.py",
       "sha256": "e2fa4a23199e44c3ba2b4aa453507484a0be2844512883515aa717b21b1cface"
     },
@@ -552,6 +580,10 @@
       "sha256": "c8ea565d0ec341140b06a9fa5f036e45b05967af9698df5db2d36ff005e6c6f8"
     },
     {
+      "path": "tests/baselines/texture_cache_first_upload.cpp",
+      "sha256": "b6779b9a9c5d09ea7805e07bbb0c882d2bcab528fd81aca82d28e25894d26651"
+    },
+    {
       "path": "tests/cpu_cache_fixture_validation.h",
       "sha256": "2e8449fe98154d9bc70e0a2045bb1806db5da1b42b3cebb829397952fb16b37b"
     },
@@ -561,7 +593,7 @@
     },
     {
       "path": "tests/game_fixture.py",
-      "sha256": "bcd4c9bb2c9901c81efd78d7b45e12a5d734b495634952c3f2909f984f0a60ea"
+      "sha256": "e5bfea7d9c2083c8cc265b1f95852f4fbb35f9dbfec37a23ef6e563cd6fee27b"
     },
     {
       "path": "tests/heap_sites_original.cpp",
@@ -586,6 +618,10 @@
     {
       "path": "tests/metal/test_texture_expansion.mm",
       "sha256": "1b78856d919fec3f9ef46d3b32714e974eee7f5909bab0775d54273771519ad7"
+    },
+    {
+      "path": "tests/metal/test_texture_first_upload.mm",
+      "sha256": "a702059e67193eba45595e02b4805f7a7fa2f3cd540739490dadb455d9aac646"
     },
     {
       "path": "tests/metal/texture_cache_before_5444.cpp",
@@ -768,6 +804,10 @@
       "sha256": "64b45b7a0b889d779551d602fd13cec15d53cbb83b53f2e9df00fdb3bd47a66c"
     },
     {
+      "path": "tests/test_libc_spans.py",
+      "sha256": "064f1254b7cad5aa2ddf370b7d16eec6336ca9db6cdfafe3a2cef087d684f532"
+    },
+    {
       "path": "tests/test_lifetime.cpp",
       "sha256": "95cda97d89442d5160f29adbedd0a44d6d5de27aaa705cb7be2efcbaa6bf93d7"
     },
@@ -780,12 +820,20 @@
       "sha256": "633c4a4d4f81e715da4fd380f344f9f0c3aad51d4ea545598c932b283a92f615"
     },
     {
+      "path": "tests/test_manual_qa_policy.py",
+      "sha256": "a47204008e4d5ac3fc73fa81cde51bbe906481d1fa7ac8b826c0f1b55d6c8a49"
+    },
+    {
       "path": "tests/test_memory_categories.py",
       "sha256": "cc68b40c654d3f0c573c845705a2bf729d766f36010729ef553cbcaf7b84428a"
     },
     {
       "path": "tests/test_memory_inspection.c",
       "sha256": "a7f5effdf30dde7857656f62cf8e87d091d36f4e8b9ce96ce3eea550dd9194cd"
+    },
+    {
+      "path": "tests/test_native_abi_declarations.py",
+      "sha256": "955fd101c06e64a065cc5a0646be3a04f6a44e05ff03cec0e51c545430201d36"
     },
     {
       "path": "tests/test_native_net_threads.c",
@@ -917,11 +965,11 @@
     },
     {
       "path": "generated/native-signatures.json",
-      "sha256": "4ffa74c5e5d9b2ccffcaab49f2ad147498ab05f9bb78eb38e3d4d54ff7222cd2"
+      "sha256": "6d741d128992ef0081d4f129188ea69f39bcf4632d3987d503adfc398043e73c"
     },
     {
       "path": "generated/native_adapters.inc",
-      "sha256": "c69b6f30887c7d32c29422b0f2c0673da6e9f72f028838f5d9d96aac9a6d6fd2"
+      "sha256": "0f0c0a21cc05842dc9f061d004bea8b002cc7c65907774c8d5481bb84847726e"
     },
     {
       "path": "generated/native_registry.c",
@@ -937,7 +985,7 @@
     },
     {
       "path": "generated/runtime_bridge.c",
-      "sha256": "c65f3d4479fcb383d605b67e0c2407c224b2cbef9a289ed80299964aca604c63"
+      "sha256": "9f7a50fd45a756b020ae525fcc0fee520c7f329e2ad4bcc4ef388dd593ad7345"
     },
     {
       "path": "generated/runtime_content_bridge.c",
@@ -28917,7 +28965,7 @@
     },
     {
       "path": "vendor/bb_runtime/src/runtime.h",
-      "sha256": "f6a0322997e86363094d5eb6846adf41cf410bea24272409e7b068a4b3f01eb7"
+      "sha256": "6209b4123f3fc6b26c5ef28cb7c0e2ff69c6f601eac7b887a71eaca6dded4c81"
     },
     {
       "path": "vendor/bb_runtime/src/runtime_ajm.c",
@@ -31909,7 +31957,7 @@
     },
     {
       "path": "vendor/metal_api/shadps4/video_core/rasterizer_core.cpp",
-      "sha256": "c098653e6c56b0323d2f9fa393e0354f6bfa4611149c567a7ad33314b20fe521"
+      "sha256": "507817defcb97871a1ab48cd09cbe15b6cd891c6c9da5d11c1eb6db2ef673ea2"
     },
     {
       "path": "vendor/metal_api/shadps4/video_core/rasterizer_core.h",
@@ -32653,7 +32701,7 @@
     },
     {
       "path": "vendor/metal_api/shadps4/video_core/texture_cache/texture_cache.cpp",
-      "sha256": "e6be112a6039f5b8ef9199e2c0e1985268d80177ba1cc6465ce0f4dfd7a2fb50"
+      "sha256": "03c736a9375764b7272d1fd1312e04b17125cca4f3a4d42a659c08f923275bc4"
     },
     {
       "path": "vendor/metal_api/shadps4/video_core/texture_cache/texture_cache.h",
@@ -38185,11 +38233,15 @@
     },
     {
       "path": "CURRENT-PLAN.zh-CN.md",
-      "sha256": "a587c71c93b8241ab06cffda3145a1b83069faba30f9d77c79ffe9a5f1766046"
+      "sha256": "5963fe7353eef8c9378b87fc720d52c39def701cd06b2b1787aa973cd170ac1d"
+    },
+    {
+      "path": "NIGHT-HANDOFF.zh-CN.md",
+      "sha256": "6969fb92109a3eb7d91c1ecd99d88f0d45f0abc391efb7436e17699c50f68406"
     },
     {
       "path": "LAUNCHER-INTEGRATION-AUDIT.zh-CN.md",
-      "sha256": "9d23ee23085cee59347689822378f11ba3185fd9add93ef42ce8888010714b4a"
+      "sha256": "de7f8217cb1ddf88eb9e8282ab9eb6cae13755b8c827d46f49f0b3966fc6ec09"
     },
     {
       "path": "X86-BOUNDARY-AUDIT.zh-CN.md",
@@ -38212,12 +38264,24 @@
       "sha256": "9e03f5cf7d65f9d6155dc209640a1ce012fa20cffe01eaa36672bf3e58af44bc"
     },
     {
+      "path": "evidence/first-upload-source-replacement.json",
+      "sha256": "6c1da4532f6c83b8c1bd8c0ca47c47c2d086eb67287c9ba97a34c8491a627d0e"
+    },
+    {
+      "path": "evidence/heap-bridge-build.json",
+      "sha256": "37cec22ff1ad8b1660c5dd3899559b34da22d0e355ba6068c63115fccff85d77"
+    },
+    {
       "path": "docs/slow-compilation.zh-CN.md",
       "sha256": "38eefca99b4f07470ef9497d430db99f82392a57487c4ab6d05f4a15b94199a3"
     },
     {
       "path": "docs/fex-specialization.zh-CN.md",
       "sha256": "3b3ec49ff96ef0fc2e1349608886cd73e18d0289e83dd550f96010fbf7eac65e"
+    },
+    {
+      "path": "docs/upstream-texture-triage.zh-CN.md",
+      "sha256": "1b33e0476bf66b9d3d6e30be0f8c247116486b82c2bc1432ea5225a5491967f9"
     }
   ],
   "excluded": [

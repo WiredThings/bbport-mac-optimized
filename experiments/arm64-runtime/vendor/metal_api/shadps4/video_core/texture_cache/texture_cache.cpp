@@ -1102,10 +1102,12 @@ void TextureCache::RefreshImage(Image& image) {
         const auto [mip_size, mip_pitch, mip_height, mip_offset] = image.info.mips_layout[m];
 
         // Protect GPU modified resources from accidental CPU reuploads.
-        if (is_gpu_modified && !is_gpu_dirty) {
+        // Record the first upload too. Otherwise an unrelated CPU dirty mark
+        // can upload unchanged old bytes over a subsequent GPU write.
+        if (is_gpu_modified) {
             const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
             const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);
-            if (image.mip_hashes[m] == hash) {
+            if (!is_gpu_dirty && image.mip_hashes[m] == hash) {
                 continue;
             }
             image.mip_hashes[m] = hash;
