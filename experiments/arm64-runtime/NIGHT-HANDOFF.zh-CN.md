@@ -145,3 +145,8 @@ AvPlayer须保留原实现并正确桥接callback、allocator、opaque handle和
 自动审批拒绝了启动临时Cua后台以最小化Codex窗口，理由为与性能测试不用Cua约束冲突。服务未启动、窗口未改。已提出仅测试前使用并停止服务的授权问题，等待答复；没有换AppleScript或其他GUI通道绕过。无窗口源码/Metal测试继续进行。
 
 最新可玩QA仍为1792869948191017000，zip SHA50d4823d60a7c22ef09d6212da52c9436b3835b03e8da51cbfc5671b9079ae8d；范围实验未进入此包。正式应用/存档/设置/缓存不变；Release不更新。死亡、联网、菜单实测继续按用户要求暂缓。当前剩余额度约50%，低于15%停止开发测试并交接。
+
+
+### 受管理缓冲区模型的补充边界
+
+额外尝试把外部shared-buffer写入改为BufferCache::ObtainBuffer返回的真实缓存写绑定。现有夹具固定BB_GUEST_IN_PLACE=0，ObtainBuffer会走Metal不支持的sparse arena：4个非零范围用例在创建buffer时以23拒绝，完整覆盖控制同样未通过，因此这组不是有效的像素对照，不能推导游戏路径内容错误。证据first-upload-regression-1792873420825650000，失败版本留在证据，未作为支持的测试入口导出。前述shared-backing五例只证明特定生命周期模型，不等于实际in-place游戏路径。要关联实战白模，应先在真实隔离游戏记录该类局部重叠是否发生，或补齐真实共享chunk生命周期的夹具，再谈回收/合并修复。

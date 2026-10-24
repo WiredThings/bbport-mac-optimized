@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_ns": 1792873309713901000,
+  "created_ns": 1792873505858690000,
   "scope": "source-only isolated ARM64 development checkpoint",
   "files": [
     {
@@ -38293,7 +38293,7 @@
     },
     {
       "path": "NIGHT-HANDOFF.zh-CN.md",
-      "sha256": "2e8b14a637f2e0c68933aa035c92c12f9f2f1488853e0e3387b1ef08a6e6c13a"
+      "sha256": "206699dcf598b2640975e836a6ef6933681ec8ac96472dcc97621eb7dbe4cf15"
     },
     {
       "path": "LAUNCHER-INTEGRATION-AUDIT.zh-CN.md",
@@ -38341,7 +38341,7 @@
     },
     {
       "path": "docs/partial-texture-and-host-stutter.zh-CN.md",
-      "sha256": "9abce574e7bdcbd3c221374e4783eb51f3905f92d0e0d3d80247521c829d5538"
+      "sha256": "d1b673a447b33eb61675aa9b169b160b3c2c43530cb3b1635b79c119d6e8eba8"
     }
   ],
   "excluded": [
