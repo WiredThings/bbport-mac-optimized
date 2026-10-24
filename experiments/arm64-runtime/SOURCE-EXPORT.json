@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_ns": 1792870268391071000,
+  "created_ns": 1792873309713901000,
   "scope": "source-only isolated ARM64 development checkpoint",
   "files": [
     {
@@ -85,7 +85,7 @@
     },
     {
       "path": "src/bb_stutter_audit.h",
-      "sha256": "c72fb2a2f636a1a506a9a94c71b32b1687a4c02d1d114cc9436607e48c9a9ec5"
+      "sha256": "f39e814259eb2e3f4b016410f6aea6b67cc385c46b0ce1f808e0f0562b43843a"
     },
     {
       "path": "src/boot_image.h",
@@ -241,7 +241,7 @@
     },
     {
       "path": "tools/analyze_stutter.py",
-      "sha256": "20ff41d08d48ad373734fb7a69ce9956b1e9b22461b5ab3d56ef0a83c4436a66"
+      "sha256": "5ad60b98def9efa9b9fe96d2a0dceca80520fcb5d3d79d2e440e4379fa83ec15"
     },
     {
       "path": "tools/analyze_texture_bindings.py",
@@ -269,7 +269,7 @@
     },
     {
       "path": "tools/build_first_upload_test.py",
-      "sha256": "373dccc6c9b5700298f0e92db586f68f81c948f626bef8f183b57f83a1b0275d"
+      "sha256": "8b2fc69a8be0b30d2796d7d58f7d3cea36c3b00d5ab5ebabcc87b6da85bec229"
     },
     {
       "path": "tools/build_heap_bridge.py",
@@ -290,6 +290,14 @@
     {
       "path": "tools/build_menu_candidate.py",
       "sha256": "13f04f3104d09d606f946bf91ecde37ffcb1082e7b518d5fd592caeb50f68e8b"
+    },
+    {
+      "path": "tools/build_partial_range_candidate.py",
+      "sha256": "d376b2965e974258c9b459cce7a821cca4f999084aec4d67a421cbf188c94bef"
+    },
+    {
+      "path": "tools/build_submit_diagnostic.py",
+      "sha256": "1051a858ae5bdcc03d49602b10819966d48a91c18a0a740a0aec42fd4b996679"
     },
     {
       "path": "tools/build_texture_candidate.py",
@@ -338,6 +346,10 @@
     {
       "path": "tools/gui_pad_action.py",
       "sha256": "d9aec49baff80d29ae8c58073f77f775c47a8f85bf2911810d512821c31db46f"
+    },
+    {
+      "path": "tools/host_cpu_audit.py",
+      "sha256": "dc9d28ab8a05f09124477626565ca6576888da84b571dfaca402c65dda109407"
     },
     {
       "path": "tools/launcher_environment.py",
@@ -509,7 +521,7 @@
     },
     {
       "path": "tools/run_launcher_engine_abba.py",
-      "sha256": "1da827de6fac3b572ea7365ee275a18dd65efa45c5f57608935145ccc1717c3b"
+      "sha256": "0fa6c030da89d2a426c4b047c4fb33d534871b99c2b7eaee3041d4c00cf04d11"
     },
     {
       "path": "tools/run_memory_categories.py",
@@ -634,6 +646,10 @@
     {
       "path": "tests/metal/test_texture_first_upload.mm",
       "sha256": "a702059e67193eba45595e02b4805f7a7fa2f3cd540739490dadb455d9aac646"
+    },
+    {
+      "path": "tests/metal/test_texture_partial_gpu.mm",
+      "sha256": "70bc739658042d5daafdd014003470ed334e336e17096072befed4e8d28b95e0"
     },
     {
       "path": "tests/metal/texture_cache_before_5444.cpp",
@@ -798,6 +814,10 @@
     {
       "path": "tests/test_hle_veneer_pages.cpp",
       "sha256": "865218c1033a68b445ed46b70f835182699bb65fe863eab53cffa073173b4443"
+    },
+    {
+      "path": "tests/test_host_cpu_audit.py",
+      "sha256": "ae71d61ae8d0695904ad52ad2f4f0ba43698587ea27b3057cf165373053dc181"
     },
     {
       "path": "tests/test_host_page_protection.c",
@@ -974,6 +994,14 @@
     {
       "path": "tests/test_thread_bootstrap.cpp",
       "sha256": "dd8700e6d17242103636007d0238ea034d14c93a6f7d4d18210257920541eb06"
+    },
+    {
+      "path": "tests/test_trace_clock_rejection.py",
+      "sha256": "765a41dce178f8c499f9fab3a6f1713737c38982c295c49c75a3b0ff12c917c4"
+    },
+    {
+      "path": "tests/test_trace_writer_clock.py",
+      "sha256": "96fea97ceae9e1a0f8df3430d3095419894f1e4d3afdfbd05665451e346d865b"
     },
     {
       "path": "tests/test_writer_handoff.cpp",
@@ -38261,11 +38289,11 @@
     },
     {
       "path": "CURRENT-PLAN.zh-CN.md",
-      "sha256": "00e9218d670bf72c3c04cc00caba5ac6d96555ad151547ddab8c1e1b30b24707"
+      "sha256": "71e1d5abdc1744e63cae7a8e7df26b16e9c36dc1df97748a6a025c3211bc7594"
     },
     {
       "path": "NIGHT-HANDOFF.zh-CN.md",
-      "sha256": "190dae6401e5048505557d7fa6d14e5bc71a634b875714ef32ca1035d7d86472"
+      "sha256": "2e8b14a637f2e0c68933aa035c92c12f9f2f1488853e0e3387b1ef08a6e6c13a"
     },
     {
       "path": "LAUNCHER-INTEGRATION-AUDIT.zh-CN.md",
@@ -38310,6 +38338,10 @@
     {
       "path": "docs/upstream-texture-triage.zh-CN.md",
       "sha256": "1b33e0476bf66b9d3d6e30be0f8c247116486b82c2bc1432ea5225a5491967f9"
+    },
+    {
+      "path": "docs/partial-texture-and-host-stutter.zh-CN.md",
+      "sha256": "9abce574e7bdcbd3c221374e4783eb51f3905f92d0e0d3d80247521c829d5538"
     }
   ],
   "excluded": [

@@ -2,18 +2,22 @@
 """Read bounded diagnostic metadata after the private processes have stopped."""
 import argparse,collections,json,re,struct,csv
 from pathlib import Path
-KINDS={1:'fex_block',2:'fex_invalidation_lock',3:'fex_ir',4:'fex_codegen',5:'fex_publish',6:'fex_code_buffer_lock',7:'fex_mapping_lock',8:'fex_code_pages_lock',10:'metal_library_total',11:'metal_library_build',12:'metal_pso',13:'metal_replay_wait',14:'metal_gpu_wait',15:'metal_submit_wait',16:'metal_spirv_to_msl_total',17:'metal_slow_packet_wall',18:'metal_packet_cpu_window',20:'ipc_total',21:'ipc_send',22:'ipc_reply',23:'ipc_handler',24:'ipc_writer_lock',25:'ipc_space_wait',26:'ipc_queue_write',30:'hle_wait',31:'guest_usleep',32:'hle_registry_lookup',33:'resource_hook',40:'frame_interval',41:'released_image_collection',42:'memory_report',46:'guest_gpu_submit',49:'guest_frame_cpu_window',50:'selected_condition_wait',54:'matching_condition_notification',58:'producer_thread_cpu_window'}
+KINDS={1:'fex_block',2:'fex_invalidation_lock',3:'fex_ir',4:'fex_codegen',5:'fex_publish',6:'fex_code_buffer_lock',7:'fex_mapping_lock',8:'fex_code_pages_lock',10:'metal_library_total',11:'metal_library_build',12:'metal_pso',13:'metal_replay_wait',14:'metal_gpu_wait',15:'metal_submit_wait',16:'metal_spirv_to_msl_total',17:'metal_slow_packet_wall',18:'metal_packet_cpu_window',20:'ipc_total',21:'ipc_send',22:'ipc_reply',23:'ipc_handler',24:'ipc_writer_lock',25:'ipc_space_wait',26:'ipc_queue_write',30:'hle_wait',31:'guest_usleep',32:'hle_registry_lookup',33:'resource_hook',40:'frame_interval',41:'released_image_collection',42:'memory_report',46:'guest_gpu_submit',49:'guest_frame_cpu_window',50:'selected_condition_wait',54:'matching_condition_notification',58:'producer_thread_cpu_window',60:'remote_inline_retention',61:'submission_snapshot',62:'submission_preparation',63:'submission_queue',64:'submission_notify'}
 def read(path):
  data=path.read_bytes()
  if len(data)<64:raise ValueError('short audit header')
  magic,version,pid,mono,utc,cap,issued,dropped=struct.unpack_from('<8s7Q',data)
  if magic!=b'BBAUDIT1' or version!=1 or cap!=16384 or len(data)!=64+cap*64:raise ValueError('unsupported audit format')
- rows=[]
+ rows=[];clock_rejections=[];clock_rejection_count=0
  for i in range(cap):
   seq,busy,kind,tid,start,wall,cpu,arg,epoch=struct.unpack_from('<QII6Q',data,64+i*64)
   if not seq or busy or seq>issued or (seq-1)%cap!=i:continue
+  if wall>((1<<64)-1)-start:
+   clock_rejection_count+=1
+   if len(clock_rejections)<8:clock_rejections.append(dict(seq=seq,kind=kind,start_mono_ns=start,wall_raw=wall,reason='end timestamp overflow; probable unsigned duration underflow'))
+   continue
   rows.append(dict(pid=pid,seq=seq,kind=kind,tid=tid,start=start,end=start+wall,wall=wall,cpu=cpu,arg=arg))
- return dict(pid=pid,issued=issued,dropped=dropped,overwritten=max(0,issued-cap),valid_rows=len(rows),all_published=(issued<=cap and dropped==0 and len(rows)==issued),rows=sorted(rows,key=lambda x:x['start']))
+ return dict(pid=pid,issued=issued,dropped=dropped,overwritten=max(0,issued-cap),valid_rows=len(rows),clock_rejected_rows=clock_rejection_count,clock_rejection_examples=clock_rejections,all_published=(issued<=cap and dropped==0 and clock_rejection_count==0 and len(rows)==issued),rows=sorted(rows,key=lambda x:x['start']))
 def publication_range(trace,first,last):
  """Prove a retained publication interval, never completeness of overwritten history."""
  low=max(1,trace['issued']-16384+1)

@@ -31,3 +31,6 @@
 
 
 最新：数据导入保护与同包联网模块准入已补，最终CPU88da构建回归通过。冻结包已更新且严格签名/数据导入七例通过。长观察抓到162ms非编译尖峰，核心关联是MsgWriteFault回复排队、MsgSubmitGfx wall/CPU显著分离，以及系统压缩/解压活动；下一步拆提交快照、draw-prep和两个锁，未贸然改等待/缓存。见NIGHT-HANDOFF后续检查点。文稿worktree的编号2源码副本全部保留，不上传、不清理。
+
+
+最新定向测试：局部GPU写入不能只靠GpuDirty整图刷新，范围校验负控制会漏掉真实局部更新，未启用。完整图覆盖控制正常；实战白模未复现。长帧部分已排除新编译，但宿主Codex Renderer同期出现CPU突发；Cua最小化被自动审批拒绝，未绕过。计时解析与源端均增加时钟异常保护，源端尚未重编进冻结包。详见docs/partial-texture-and-host-stutter.zh-CN.md。

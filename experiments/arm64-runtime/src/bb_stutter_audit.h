@@ -82,7 +82,14 @@ inline void Record(uint32_t kind,uint64_t start,uint64_t wall,uint64_t cpu,uint6
 struct Scope {
  uint32_t kind;uint64_t arg,start{},cpu{},minimum;
  Scope(uint32_t k,uint64_t a=0,uint64_t min=1000000):kind(k),arg(a),minimum(min){if(EnabledFor(k)){start=Now();cpu=Now(CLOCK_THREAD_CPUTIME_ID);}}
- void End(){if(!start)return;const auto finish=Now(),used=Now(CLOCK_THREAD_CPUTIME_ID);if(finish-start>=minimum)Record(kind,start,finish-start,used>=cpu?used-cpu:0,arg);start=0;}
+ void End(){
+  if(!start)return;
+  const auto finish=Now(),used=Now(CLOCK_THREAD_CPUTIME_ID);
+  // Failed/regressing clocks are incomplete diagnostics, never a huge unsigned wait.
+  if(finish<start){if(auto* b=Get().data)b->h.dropped.fetch_add(1,std::memory_order_relaxed);start=0;return;}
+  if(finish-start>=minimum)Record(kind,start,finish-start,used>=cpu?used-cpu:0,arg);
+  start=0;
+ }
  ~Scope(){End();}
 };
 }
