@@ -3,6 +3,8 @@
 from pathlib import Path
 import argparse,csv,hashlib,json,os,secrets,shutil,signal,statistics,subprocess,sys,time
 from native_observer import NativeObserver
+from native_vm_observer import NativeVMObserver
+from diagnostic_frame_tail import read_tail
 from qa_memory_policy import MemoryPolicy
 from launcher_environment import load as metal_environment
 from launcher_language_policy import load as language_environment
@@ -11,8 +13,10 @@ from run_hle_lookup_abba import complete_rows
 P=Path(__file__).resolve().parents[1]
 def digest(f):return hashlib.sha256(f.read_bytes()).hexdigest()
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--diagnostic-app-cache',type=Path);ap.add_argument('--gpu-variant',choices=['baseline','first-upload'],default='baseline');ap.add_argument('--exploration-diagnostic',action='store_true');ap.add_argument('--texture-action',choices=['none','blood','attack'],default='none');ap.add_argument('--inspection-seconds',type=int,default=0);ap.add_argument('--library-reuse',choices=['0','1']);ap.add_argument('--compile-audit',action='store_true');ap.add_argument('--producer-trace',action='store_true');ap.add_argument('--require-full-trace',action='store_true');ap.add_argument('--action-trace',action='store_true');ap.add_argument('--texture-capture',action='store_true');ap.add_argument('--lifecycle',action='store_true');ap.add_argument('--save-seed',type=Path);ap.add_argument('--order',default='arm64,rosetta,rosetta,arm64');ap.add_argument('--memory-snapshot',action='store_true');ap.add_argument('--fex-mapping-audit',action='store_true');ap.add_argument('--seconds',type=int,default=120);a=ap.parse_args();order=a.order.split(',');assert 90<=a.seconds<=(600 if a.lifecycle else 180) and order and len(order)<=4 and set(order)<={'arm64','rosetta'}
+ ap=argparse.ArgumentParser();ap.add_argument('--component-stage',type=Path);ap.add_argument('--post-action-hold',type=int,default=0);ap.add_argument('--diagnostic-app-cache',type=Path);ap.add_argument('--gpu-variant',choices=['baseline','first-upload'],default='baseline');ap.add_argument('--exploration-diagnostic',action='store_true');ap.add_argument('--texture-action',choices=['none','blood','attack'],default='none');ap.add_argument('--inspection-seconds',type=int,default=0);ap.add_argument('--library-reuse',choices=['0','1']);ap.add_argument('--compile-audit',action='store_true');ap.add_argument('--producer-trace',action='store_true');ap.add_argument('--require-full-trace',action='store_true');ap.add_argument('--action-trace',action='store_true');ap.add_argument('--texture-capture',action='store_true');ap.add_argument('--lifecycle',action='store_true');ap.add_argument('--save-seed',type=Path);ap.add_argument('--order',default='arm64,rosetta,rosetta,arm64');ap.add_argument('--memory-snapshot',action='store_true');ap.add_argument('--fex-mapping-audit',action='store_true');ap.add_argument('--seconds',type=int,default=120);a=ap.parse_args();order=a.order.split(',');assert 90<=a.seconds<=(600 if a.lifecycle else 180) and order and len(order)<=4 and set(order)<={'arm64','rosetta'}
+ assert 0<=a.post_action_hold<=90 and (not a.post_action_hold or (a.action_trace and a.producer_trace)),'extended observation requires a producer diagnostic'
  assert not (a.texture_capture and a.gpu_variant!='baseline'),'capture and pure GPU candidate are separate cohorts'
+ assert a.component_stage is None or (order==['arm64']and a.gpu_variant=='baseline'and not a.texture_capture and not a.memory_snapshot and not a.lifecycle),'frozen component smoke requires standalone ARM64 cohort'
  assert not a.exploration_diagnostic or (a.action_trace and order==['arm64']),'exploration is isolated ARM diagnostic only'
  assert a.texture_action=='none' or a.texture_capture,'texture action requires diagnostic capture'
  assert 0<=a.inspection_seconds<=60 and (not a.inspection_seconds or a.texture_capture),'window inspection is diagnostic-only'
@@ -35,11 +39,18 @@ def main():
  save_seed=(a.save_seed or(P/'state/qa-launcher-community-seed')).resolve()
  assert save_seed.is_relative_to(P/'state')and save_seed.is_dir()and not(a.save_seed and a.save_seed.is_symlink())and(save_seed/'savedata').is_dir(),'private existing QA save required'
  source_saves={str(f.relative_to(save_seed/'savedata')):digest(f)for f in(save_seed/'savedata').rglob('*')if f.is_file()}
- observer=NativeObserver();s=observer.system();assert not s['locked']and s['pressure']!=4
+ observer=NativeObserver();vm_observer=NativeVMObserver()if a.producer_trace else None;s=observer.system();assert not s['locked']and s['pressure']!=4
  table=subprocess.check_output(['/bin/ps','-axo','pid,comm'],text=True);assert not any(l.rstrip().endswith(('/bb-game-arm64','/bb-gpu','/bb-probe-metal','/bb-probe'))for l in table.splitlines())
  cua=subprocess.run(['/Users/k.d./.local/bin/cua-driver','status'],capture_output=True,text=True);assert a.texture_capture or a.action_trace or 'daemon is running'not in cua.stdout.lower(),'visual service must be stopped'
- e=P/'evidence'/('launcher-engine-abba-'+str(time.time_ns()));e.mkdir();report=dict(passed=False,runs=[],seconds=a.seconds,order=order,original_benchmark_entry=True,screen_capture=False,profiler=False,silent=True,formal_data_modified=False,memory_snapshot=a.memory_snapshot,performance_evidence=not(a.memory_snapshot or a.lifecycle or a.texture_capture or a.action_trace),action_trace=a.action_trace,texture_capture=a.texture_capture,lifecycle=a.lifecycle,CPU_time_schema=2,memory_policy=MemoryPolicy.MANIFEST,fex_mapping_audit=a.fex_mapping_audit,library_reuse=a.library_reuse,compile_audit=a.compile_audit,exploration_diagnostic=a.exploration_diagnostic,gpu_variant=a.gpu_variant,application_cache=dict(path=str(cache),initial=cache_before,separate=a.diagnostic_app_cache is not None,OS_driver_cache_unchanged=True))
- stage=P/'launcher-component-stage';source=json.loads((stage/'SOURCE-PARITY.json').read_text())['original_sources'];assert all(digest(stage/f)==h for f,h in source.items())
+ e=P/'evidence'/('launcher-engine-abba-'+str(time.time_ns()));e.mkdir();report=dict(post_action_hold=a.post_action_hold,system_VM_counters=a.producer_trace,passed=False,runs=[],seconds=a.seconds,order=order,original_benchmark_entry=True,screen_capture=False,profiler=False,silent=True,formal_data_modified=False,memory_snapshot=a.memory_snapshot,performance_evidence=not(a.memory_snapshot or a.lifecycle or a.texture_capture or a.action_trace),action_trace=a.action_trace,texture_capture=a.texture_capture,lifecycle=a.lifecycle,CPU_time_schema=2,memory_policy=MemoryPolicy.MANIFEST,fex_mapping_audit=a.fex_mapping_audit,library_reuse=a.library_reuse,compile_audit=a.compile_audit,exploration_diagnostic=a.exploration_diagnostic,gpu_variant=('frozen-component'if a.component_stage is not None else a.gpu_variant),application_cache=dict(path=str(cache),initial=cache_before,separate=a.diagnostic_app_cache is not None,OS_driver_cache_unchanged=True))
+ stage=P/'launcher-component-stage';source=json.loads((stage/'SOURCE-PARITY.json').read_text())['original_sources']
+ if a.component_stage is not None:
+  stage=a.component_stage.absolute();assert stage==stage.resolve()and stage.is_relative_to(P/'apps')and stage.parts[-2:]==('Resources','bbport'),'frozen QA component root required'
+  frozen=json.loads((stage.parent/'ARM64-QA-MANIFEST.json').read_text())
+  assert frozen['host_local_only']and frozen['formal_data_modified']is False and frozen['original_scripts']==source
+  assert all(digest(stage/f)==h for f,h in frozen['frozen_runtime'].items()),'frozen QA binary identity mismatch'
+  report['frozen_component']=dict(stage=str(stage),runtime=frozen['frozen_runtime'],upstream_inputs=frozen['upstream_inputs'])
+ assert all(digest(stage/f)==h for f,h in source.items())
  # Copy only original script bytes; x86 reference is used solely in the Rosetta control.
  ref=e/'rosetta-stage';ref.mkdir()
  for rel,h in source.items():
@@ -50,6 +61,7 @@ def main():
  artifacts=[P/'build/fex/Bin/bb-game-arm64',P/'rosetta-reference/bin/bb-probe-metal',P/'backend/bbport/bin/gpu-metal-arm64/libbbgpu.dylib']
  if a.gpu_variant=='first-upload':artifacts.append(P/'backend/bbport/bin/gpu-metal-arm64/libbbgpu.first-upload-candidate.dylib')
  if a.texture_capture:artifacts.append(P/'backend/bbport/bin/gpu-metal-arm64/libbbgpu.texture-candidate.dylib')
+ if a.component_stage is not None:artifacts=[stage/f for f in frozen['frozen_runtime']]
  hashes={str(f):digest(f)for f in artifacts};report['artifacts']=hashes;report['script_hashes']=source
  def save(): (e/'result.json').write_text(json.dumps(report,indent=2)+'\n')
  save();print('Evidence:',e,flush=True)
@@ -81,7 +93,7 @@ def main():
   if a.compile_audit:env['BB_MTL_COMPILE_AUDIT']='1'
   if engine=='arm64':env.update(BB_ARM_LAUNCHER_COMPAT='1',BB_ARM_SESSION_NONCE=nonce,BB_ARM_RESTART_NONCE=secrets.token_hex(16),BB_ARM_QA_PAD_FILE=str(pad))
   root=stage if engine=='arm64'else ref;command=['/bin/bash',str(root/'tools/macos/run_optimized.sh'),'--benchmark'];(case/'conditions.json').write_text(json.dumps(dict(engine=engine,command=command,env=env,user=str(user),data=str(data),settings_sha256=digest(data/'bbport.ini'),save_source=str(save_seed),seed_files=source_saves),indent=2)+'\n')
-  tracked={};samples=[];started=time.monotonic();policy=MemoryPolicy(before);stop=None;ready=None;pressed=False;last_press=-100;proc=None;memory_child=None;memory_log=None;capture_requested=False;capture_file=None;capture_closed=None;action_step=0;action_next=None;action_cycle=0;gate_open=False;gate_closed=False;action_end=None;texture_action_sent=False;inspection_deadline=None
+  tracked={};samples=[];started=time.monotonic();policy=MemoryPolicy(before);stop=None;ready=None;pressed=False;last_press=-100;proc=None;memory_child=None;memory_log=None;capture_requested=False;capture_file=None;capture_closed=None;action_step=0;action_next=None;action_cycle=0;gate_open=False;gate_closed=False;action_end=None;texture_action_sent=False;inspection_deadline=None;last_frame_t=-1;next_frame_check=0;spike_seen=None
   def input_(token):
    t=pad.with_suffix('.next');t.write_text(token);os.replace(t,pad)
   def event(name,**kw):
@@ -113,6 +125,7 @@ def main():
    try:
     while proc.poll()is None:
      now=time.monotonic();elapsed=now-started;rows=descendants();sample=observer.system();sample.update(seconds=elapsed,processes=rows,usage=usage([f'{i} {j} 0 {path}'for i,j,path in rows]));samples.append(sample)
+     if vm_observer is not None:sample['system_vm']=vm_observer.system()
      stop=policy.observe(elapsed,sample)
      frames=out/'frames.csv';parsed=complete_rows(frames)if ready is None and frames.exists()else[]
      if ready is None and any(f.get('cam_x')and int(f['draws'])>100 for f in parsed[-30:]):
@@ -126,6 +139,8 @@ def main():
       if not gate_open and elapsed-ready>=8:
        with audit_gate.open('r+b')as file:file.write(b'\x01\x00\x00\x00')
        gate_open=True;event('audit_gate_open')
+       if a.post_action_hold:
+        recent=read_tail(frames);last_frame_t=float(recent[-1]['t_s'])if recent else -1;next_frame_check=now+1
       if action_next is not None and now>=action_next:
        steps=[('l2',.18),('',2.0),('up',.18),('',2.5),('triangle',.18),('',0)]
        if a.exploration_diagnostic:steps=[('rx=64',.7),('',.3),('lx=128 ly=0',3.0),('r1',.18),('',1.2),('r2',.18),('',.8),('lx=128 ly=0',2.0),('r1',.18),('',0)]
@@ -136,7 +151,15 @@ def main():
         action_next=started+ready+25 if action_cycle<2 else None
         if action_cycle==2:action_end=now
        else:action_next=now+delay
-      if action_end is not None and now-action_end>=7 and not gate_closed:
+      if a.post_action_hold and gate_open and not gate_closed and now>=next_frame_check:
+       recent=read_tail(frames);new=[r for r in recent if float(r['t_s'])>last_frame_t]
+       if new:last_frame_t=max(float(r['t_s'])for r in new)
+       slow=next((r for r in new if float(r['frame_ms'])>=80),None)
+       if slow is not None and spike_seen is None:
+        spike_seen=dict(frame_ms=float(slow['frame_ms']),csv_t_s=float(slow['t_s']),observed_seconds=elapsed)
+        event('long_frame_trigger',**spike_seen)
+       next_frame_check=now+1
+      if action_end is not None and now-action_end>=(2 if spike_seen is not None else 7+a.post_action_hold)and not gate_closed:
        with audit_gate.open('r+b')as file:file.write(bytes(4))
        gate_closed=True;event('audit_gate_close')
       if gate_closed and elapsed-ready>=45:stop=stop or 'private action trace completed'
@@ -194,7 +217,7 @@ def main():
     analysis=subprocess.run([sys.executable,str(P/'tools/analyze_stutter.py'),str(case)],capture_output=True,text=True)
     (case/'analysis-console.log').write_text(analysis.stdout+analysis.stderr);assert analysis.returncode==0,'trace analysis failed'
     summary=json.loads((case/'stutter-summary.json').read_text());assert len(summary['windows'])==2 and summary['traces'],'missing action windows or traces'
-    report['runs'].append(dict(engine=engine,case=str(case),requested_action_cycles=action_cycle,actual_guest_action_acceptance='not instrumented; requested file inputs only',source_save_unchanged=True,trace_processes=len(summary['traces']),trace_overflow=any(t['overwritten']or t['dropped']for t in summary['traces']),performance_evidence=False));save();continue
+    report['runs'].append(dict(engine=engine,case=str(case),requested_action_cycles=action_cycle,long_frame_trigger=spike_seen,actual_guest_action_acceptance='not instrumented; requested file inputs only',source_save_unchanged=True,trace_processes=len(summary['traces']),trace_overflow=any(t['overwritten']or t['dropped']for t in summary['traces']),performance_evidence=False));save();continue
    if a.texture_capture:
     from analyze_texture_bindings import analyze
     assert capture_file and capture_file.stat().st_size<=3*1024*1024,'missing or oversized capture'
@@ -216,6 +239,7 @@ def main():
    cpus={}
    for(role,pid),v in roles.items():
     if len(v)<2:continue
+    role='bb-game-arm64'if a.component_stage is not None and role=='bb-probe-metal'else role
     at,x=v[0];bt,y=v[-1];cpus[role]=100*(y['cpu_user_ns']+y['cpu_system_ns']-x['cpu_user_ns']-x['cpu_system_ns'])/1e9/(bt-at)
    times=sorted(float(f['frame_ms'])for f in tail)
    row=dict(engine=engine,case=str(case),fps=1000/statistics.mean(times),p95_ms=times[int((len(times)-1)*.95)],p99_ms=times[int((len(times)-1)*.99)],gpu_ms=statistics.mean(float(f['gpu_ms'])for f in tail),draws_median=statistics.median(int(f['draws'])for f in tail),camera=cameras,cpu_percent=cpus,combined_footprint_mib=statistics.median(sum(u['footprint_bytes']for u in s['usage'])/2**20 for s in selected),max_pressure=max(s['pressure']for s in samples),swap_change_mib=result['after']['swap_mib']-before['swap_mib'],boot_sha256=digest(out/'boot-linked.bin'),content_sha256=digest(out/'content.bin'),patch_sha256=digest(out/'patches.bin'),settings_sha256=digest(data/'bbport.ini'))

@@ -75,7 +75,7 @@ size_t prototype_round_page(size_t n){return (n+Page-1)&~(Page-1);}
 void check(bool b,const char* m){if(!b)throw std::runtime_error(m);}
 struct Mapping {
  void* ptr{};size_t size{};
- explicit Mapping(size_t bytes):size(prototype_round_page(bytes)) {ptr=runtime_low_map(size,PROT_READ|PROT_WRITE);check(ptr,"low mapping failed");}
+ explicit Mapping(size_t bytes,int protections=PROT_READ|PROT_WRITE):size(prototype_round_page(bytes)) {ptr=runtime_low_map(size,protections);check(ptr,"low mapping failed");}
  ~Mapping(){if(ptr)runtime_low_release(ptr,size);}
  Mapping(const Mapping&)=delete;
  uintptr_t at()const{return reinterpret_cast<uintptr_t>(ptr);}
@@ -86,6 +86,8 @@ struct CodeMapOutput final:FEXCore::CodeMapOpener {
 };
 struct State {
  HleCallRegistry registry;HleVeneerAllocator veneers;
+ // Published once, before guest entry; fault handling only reads this immutable list.
+ std::vector<std::pair<uintptr_t,size_t>> missing_data_ranges;std::atomic<bool> missing_data_ready{false};
  std::map<uintptr_t,std::shared_ptr<HleCallAdapter>> native;
  std::unique_ptr<BbStaticCode::Files> code_files;std::unique_ptr<CodeMapOutput> code_output;
  std::unique_ptr<HleGuestBridge> bridge;std::unique_ptr<Core::FexGuestCpuBackend> cpu;
@@ -200,6 +202,16 @@ struct Driver {
 #include "game_menu_runtime.h"
 void footprints(){task_vm_info_data_t t{};mach_msg_type_number_t n=TASK_VM_INFO_COUNT;if(task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&t,&n)==KERN_SUCCESS)std::printf("ARM MEM footprint=%llu resident=%llu virtual=%llu\n",t.phys_footprint,t.resident_size,t.virtual_size);}
 void fault(int sig,siginfo_t* info,void* context){
+ // Match the original probe's PROT_NONE data traps, never executable HLE bytes.
+ // Keep an explicitly admitted native recovery scope's existing EFAULT behavior.
+ if((sig==SIGBUS||sig==SIGSEGV)&&info&&active&&!runtime_fault_recover&&active->missing_data_ready.load(std::memory_order_acquire)){
+  const auto address=reinterpret_cast<uintptr_t>(info->si_addr);
+  for(const auto& range:active->missing_data_ranges)if(address>=range.first&&address-range.first<range.second){
+   constexpr char message[]="ARM UNIMPLEMENTED DATA IMPORT: protected unresolved data access\n";
+   write(2,message,sizeof(message)-1);_Exit(BB_ARM_EXIT_UNSUPPORTED_IMPORT);
+  }
+ }
+
  if(AetherPS4::Fex::HandleGuestSignal(sig,info,context))return;
  const auto esr=static_cast<ucontext_t*>(context)->uc_mcontext->__es.__esr;
  const bool alignment=sig==SIGBUS&&AetherPS4::Fex::IsDarwinDataAlignmentEsr(esr);
@@ -349,6 +361,7 @@ int game_main(int argc,char** argv){
   else {const char* enabled=getenv("BB_QUICKSAVE");if(!enabled||strcmp(enabled,"1")){setenv("BB_QUICKSAVE","0",1);unsetenv("BB_QUICKLOAD_PENDING");}}setenv("BB_NATIVE_GPU",graphics?"1":"0",1);setenv("BB_TEXTURE_RELEASED_STORAGE","0",1);
   if(launcher_compat)std::printf("ARM LAUNCHER HLE published lookup=%d; explicit legacy override retained\n",BbLauncherCpu::ConfigurePublishedLookup());
   Boot b(boot);check(b.format=="BBPROBE5"&&b.caps==1,"require linked BBPROBE5");
+  std::vector<std::unique_ptr<Mapping>> missing_data_storage; // outlives the FEX State
   State s;active=&s;
   protect_host(s);
   // Process-lifetime VA reservation. No resident pages or backing is touched.
@@ -390,6 +403,12 @@ int game_main(int argc,char** argv){
     if(getenv("BB_ARM_STOP_AT_SUBMIT")&&(name=="sceGnmSubmitCommandBuffers"||name=="sceGnmSubmitAndFlipCommandBuffers"||name=="sceGnmDingDong"||name=="sceVideoOutSubmitFlip"))gpu_adapter=std::make_shared<StopBeforeSubmit>();
     auto a=s.registry.Register(gpu_adapter,std::string("gpu.")+std::string(name));imported[i]=veneer(s,a);++native;route="native-gpu";}
    else if(auto it=b.bindings.find(i);it!=b.bindings.end()){check(it->second.second==kinds[i],"linked kind mismatch");imported[i]=image.at()+it->second.first;++linked;route="guest-linked";}
+   else if(kinds[i]==2){
+    auto guard=std::make_unique<Mapping>(Page,PROT_NONE);imported[i]=guard->at();
+    s.missing_data_ranges.emplace_back(guard->at(),guard->size);missing_data_storage.push_back(std::move(guard));
+    ++missing;route="missing-data";
+    std::printf("ARM IMPORT protected-data index=%zu address=%#lx virtual_bytes=%zu resident_payload=0\n",i,imported[i],Page);
+   }
    else {auto a=s.registry.Register(std::make_shared<Missing>(),std::string("missing:")+runtime_import_name(b.names[i].c_str())+":"+b.names[i]);imported[i]=veneer(s,a);++missing;route="missing";}
    imports<<i<<'\t'<<runtime_import_name(b.names[i].c_str())<<'\t'<<route<<'\t'<<b.names[i]<<'\n';
   }
@@ -511,6 +530,7 @@ int game_main(int argc,char** argv){
   }); // Owned/joined before FEX state and static diagnostic counters can be destroyed.
   if(getenv("BB_ARM_MEM_DIAG"))std::thread([]{for(;;){usleep(250000);footprints();}}).detach();
   if(launcher_timeout){signal(SIGALRM,[](int){const char msg[]="ARM LAUNCHER watchdog timeout\n";write(2,msg,sizeof(msg)-1);_Exit(BB_ARM_EXIT_WATCHDOG);});alarm(launcher_timeout);}
+  s.missing_data_ready.store(true,std::memory_order_release);
   footprints();auto result=bb_arm_call(driver.at(),nullptr,0);std::printf("ARM DRIVER returned=%llu modules_only=%d\n",result,modules_only);footprints();active=nullptr;return result==0?0:2;
  }catch(const std::exception& e){std::fprintf(stderr,"ARM GAME STOP: %s\n",e.what());return 1;}
 }

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_ns": 1792866178675647000,
+  "created_ns": 1792870268391071000,
   "scope": "source-only isolated ARM64 development checkpoint",
   "files": [
     {
@@ -68,6 +68,10 @@
       "sha256": "87440696ea6165d3f2f124f3046b4f81c3471f70db2ecf734153c93d9d5dba00"
     },
     {
+      "path": "src/bb_private_net_module_path.h",
+      "sha256": "a9e36d675211ff617bbdce084a52ef9da4a7edae4d4dfafa1a5482bb16f6a9ba"
+    },
+    {
       "path": "src/bb_sparse_packet.h",
       "sha256": "6fce56111a1bc5bc812ced455584b777f376521e5d385fe1a6629e0654746994"
     },
@@ -117,7 +121,7 @@
     },
     {
       "path": "src/game_runtime.cpp",
-      "sha256": "a965d45ef973d76889e3d072f6a35f4fac28e4090ecef17503089a02d929ad8f"
+      "sha256": "f13c9f2d598ac6ee083f365332820fa14d7c2dae92077d8d9f49d5d254991408"
     },
     {
       "path": "src/guest_resource_detours.h",
@@ -165,7 +169,7 @@
     },
     {
       "path": "src/native_network.c",
-      "sha256": "de2b1e0810f937709c2da5be73095b87c98e577813ebfa00ab8a5c2fff8b9543"
+      "sha256": "c446381d6be4c7e05e56b09a92c2ad43c1c9ce09e5da9a09fa562d808d5cc171"
     },
     {
       "path": "src/native_restart.c",
@@ -249,7 +253,7 @@
     },
     {
       "path": "tools/audit_launcher_integration.py",
-      "sha256": "f45a17ef69fa4449053180c04fadc006910bec8103559dbea9839c87f06802d6"
+      "sha256": "bd76204fe2e7999b6abe1072e1c6341a986af9edee5a8abc1ea96193a50999ad"
     },
     {
       "path": "tools/audit_native_boundaries.py",
@@ -306,6 +310,10 @@
     {
       "path": "tools/death_pad_action.py",
       "sha256": "d05609b1a614ebb8e632cf8b987df99b78156d19a0c6b57cf2040fc666dd0054"
+    },
+    {
+      "path": "tools/diagnostic_frame_tail.py",
+      "sha256": "63fd40ef49d48e55b137ce554d924c8860f85892cca8351e04b72d380c223366"
     },
     {
       "path": "tools/dyld_report.c",
@@ -368,8 +376,12 @@
       "sha256": "b12fbea742708a2100ebae396d310e0e1ce35e1caf72e02dba66b8e44aacc4b2"
     },
     {
+      "path": "tools/native_vm_observer.py",
+      "sha256": "18b7808f790f03826ca88b200d48b378399ed87b42d183cd8a060322483c34aa"
+    },
+    {
       "path": "tools/package_local_arm64_qa.py",
-      "sha256": "fc67ccae9a12d0e4b7746881e7b7adbb43bc55c1c8ffbba4dab7061803ab8563"
+      "sha256": "68db85fd9aa0e4e9e61775d4bfd67585446820b29b3545acd4cbbd26847985cb"
     },
     {
       "path": "tools/patch_adapter.py",
@@ -497,7 +509,7 @@
     },
     {
       "path": "tools/run_launcher_engine_abba.py",
-      "sha256": "89edc702a4789a197f94702cd8341565a6c433f5f9a8e5d5febc97b6346656e4"
+      "sha256": "1da827de6fac3b572ea7365ee275a18dd65efa45c5f57608935145ccc1717c3b"
     },
     {
       "path": "tools/run_memory_categories.py",
@@ -728,6 +740,10 @@
       "sha256": "bae8d65f3bc2c64787a1786d378f2847e0621718a955174329a5828b64b33f34"
     },
     {
+      "path": "tests/test_diagnostic_frame_tail.py",
+      "sha256": "7c895c75cf33d58c995b2c57327d7dc61531f53c1df81fd318549a77365eea85"
+    },
+    {
       "path": "tests/test_extra_heaps.cpp",
       "sha256": "a25f92462e499f177a042c88dac45c44309783f602c9ac98b113fd7454449e1d"
     },
@@ -832,6 +848,10 @@
       "sha256": "a7f5effdf30dde7857656f62cf8e87d091d36f4e8b9ce96ce3eea550dd9194cd"
     },
     {
+      "path": "tests/test_missing_data_imports.py",
+      "sha256": "248dc4992e5798a53a66c49da9b1c60dbe0dc698f2ce5a4c27e4d95649606c4c"
+    },
+    {
       "path": "tests/test_native_abi_declarations.py",
       "sha256": "955fd101c06e64a065cc5a0646be3a04f6a44e05ff03cec0e51c545430201d36"
     },
@@ -848,6 +868,10 @@
       "sha256": "92f24a16d45ad6eb03c0606a773c11ab07372f92782adb97c4d9bd20da3ab1f3"
     },
     {
+      "path": "tests/test_native_vm_observer.py",
+      "sha256": "6648fd941569f45e728bd8a93145d7e3205d8b1e73366c50c561f24d8fd15436"
+    },
+    {
       "path": "tests/test_packet_metadata.cpp",
       "sha256": "97594672038141dad179a2d5100794a1689eeaf7f447dd6316e976c13f118ee3"
     },
@@ -858,6 +882,10 @@
     {
       "path": "tests/test_pmr_lifetime.cpp",
       "sha256": "12bdfea7385673d520b37b7850691b21d9ca4f99aedfdbe8ec65b71b6d074e1e"
+    },
+    {
+      "path": "tests/test_private_net_module_path.py",
+      "sha256": "f7ccf3c97f325d71aa6c973febcde610ec7a49760aae5bdc01f504b39a5c01e2"
     },
     {
       "path": "tests/test_published_ranges.cpp",
@@ -38233,11 +38261,11 @@
     },
     {
       "path": "CURRENT-PLAN.zh-CN.md",
-      "sha256": "5963fe7353eef8c9378b87fc720d52c39def701cd06b2b1787aa973cd170ac1d"
+      "sha256": "00e9218d670bf72c3c04cc00caba5ac6d96555ad151547ddab8c1e1b30b24707"
     },
     {
       "path": "NIGHT-HANDOFF.zh-CN.md",
-      "sha256": "6969fb92109a3eb7d91c1ecd99d88f0d45f0abc391efb7436e17699c50f68406"
+      "sha256": "190dae6401e5048505557d7fa6d14e5bc71a634b875714ef32ca1035d7d86472"
     },
     {
       "path": "LAUNCHER-INTEGRATION-AUDIT.zh-CN.md",

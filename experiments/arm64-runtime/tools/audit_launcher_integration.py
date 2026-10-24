@@ -54,7 +54,7 @@ if required.exists():
  for line in required.read_text().splitlines():
   row=line.split('\t')
   if len(row)>=4:imports.append(dict(index=int(row[0]),name=row[1],route=row[2],nid=row[3]))
-unresolved=[x for x in imports if x['route']=='missing']
+unresolved=[x for x in imports if x['route'].startswith('missing')]
 av_impl=(P/'vendor/metal_api/shadps4/core/libraries/avplayer/avplayer.cpp').read_text()
 host_functions=set(re.findall(r'LIB_FUNCTION\([^;]*,\s*(sceAvPlayer\w+)\);',av_impl))
 for item in unresolved:item['original_AV_implementation_present']=item['name']in host_functions

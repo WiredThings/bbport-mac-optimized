@@ -60,7 +60,8 @@ def main():
     # CPU and renderer must load one copied dependency closure, not both the
     # new SDL and its old absolute/rpath location (duplicate Objective-C classes).
     closure={f.name:f for f in (stage/'deps-metal-arm64/lib').glob('*.dylib')}
-    for binary in [cpu,cpu_lib,gpu,gpu_lib,*closure.values()]:
+    net_lib=stage/'bin/gpu-net/libbbnet.dylib'
+    for binary in [cpu,cpu_lib,gpu,gpu_lib,net_lib,*closure.values()]:
         changed=False
         links=deps(binary)
         if binary.suffix=='.dylib':links=links[1:] # first otool row is LC_ID_DYLIB
@@ -78,23 +79,23 @@ def main():
     native=dict(schema=1,default_enabled=True,minimum_os_major=27,
         renderer_architecture='arm64 CPU via FEX and independent arm64 Metal GPU; isolated prototype',
         production=False,baseline_revision=json.loads((P/'SOURCE.json').read_text())['blood_echoes_commit'],
-        frozen_runtime={str(f.relative_to(stage)):sha(f)for f in [cpu,cpu_lib,gpu,gpu_lib]})
+        frozen_runtime={str(f.relative_to(stage)):sha(f)for f in [cpu,cpu_lib,gpu,gpu_lib,net_lib]})
     (stage/'NATIVE-METAL.json').write_text(json.dumps(native,indent=2)+'\n')
     manifest=dict(schema=2,created_ns=time.time_ns(),app=str(app),private_case=case,
         host_local_only=True,portable_installer=False,formal_data_modified=False,
-        frozen_runtime=native['frozen_runtime'],upstream_inputs=dict(cpu=sha(P/'build/fex/Bin/bb-game-arm64'),cpu_library=sha(cpu_source),gpu_library=sha(gpu_source)),
+        frozen_runtime=native['frozen_runtime'],upstream_inputs=dict(cpu=sha(P/'build/fex/Bin/bb-game-arm64'),cpu_library=sha(cpu_source),gpu_library=sha(gpu_source),net_library=sha(original/'bin/gpu-net/libbbnet.dylib')),
         original_scripts=source,manual_physical_input=True,silent=True,
         diagnostic_capture=False,performance_logging=False,
         external_dependencies=['prepared Shared dependency tree','private Shared QA paths','locally dumped game and Chinese assets','existing QA GPU cache'],
         known_limits=['combat white models not yet reproduced','25 imports remain unresolved, including AvPlayer','death, online and menu live retests deferred'])
     for rel,digest in source.items():assert sha(stage/rel)==digest
-    for binary in [cpu,cpu_lib,gpu,gpu_lib]:
+    for binary in [cpu,cpu_lib,gpu,gpu_lib,net_lib]:
         arch=subprocess.check_output(['/usr/bin/lipo','-archs',str(binary)],text=True).strip()
         assert arch=='arm64',(binary,arch)
     (resources/'ARM64-QA-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n')
     subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(app)],check=True)
     subprocess.run(['/usr/bin/codesign','--verify','--strict',str(app)],check=True)
-    for f in [cpu,cpu_lib,gpu,gpu_lib]:subprocess.run(['/usr/bin/codesign','--verify','--strict',str(f)],check=True)
+    for f in [cpu,cpu_lib,gpu,gpu_lib,net_lib]:subprocess.run(['/usr/bin/codesign','--verify','--strict',str(f)],check=True)
     instructions='''Blood Echoes ARM64 本机隔离测试包（2026-10-25）
 
 这是本机 QA 入口，不能在其它 Mac 独立运行，不是正式安装包。
@@ -105,7 +106,7 @@ CPU、CPU 侧宿主库和纹理修复 GPU 已冻结在包内；依赖、游戏�
 F2 若被系统拦截，请用 Fn+F2。F3 仍按原协议以离线模式恢复。
 本轮不要求死亡、联网和菜单验收。正式应用、正式存档、设置和缓存未改。
 
-已确认并修复：错误退出码与 75/76 重启协议冲突；ABI 宏漏接；完整 libc 访问范围校验；GpuModified 首次上传未记 hash 导致旧 CPU 数据覆盖 GPU 内容的定向错误。
+已确认并修复：错误退出码与 75/76 重启协议冲突；ABI 宏漏接；未实现数据导入保护页；完整 libc 访问范围校验；GpuModified 首次上传未记 hash 导致旧 CPU 数据覆盖 GPU 内容的定向错误。
 未宣称战斗白模已解决。仍有 25 项未解析导入，含 16 项 AvPlayer；长编译和探索长帧继续调查。
 纹理修复匹配 ABBA 约 +1.1%，处于波动范围；去重内存快照约 +12.5 MiB。最新整合版单轮约 49 FPS，不能当作严格改动收益。
 

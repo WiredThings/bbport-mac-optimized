@@ -4,6 +4,8 @@
 #define BB_LOW_HEAP_IMPL
 #include "runtime.h"
 #include "bbnet.h"
+#include "bb_private_net_module_path.h"
+#include <mach-o/dyld.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,8 +37,9 @@ void runtime_net_configure(const char*app0,const char*serial,const char*title,co
 }
 static void load(void) {
  const char*path=getenv("BB_NET_MODULE");const char*backend=getenv("BB_NET_BACKEND");
- char canonical[PATH_MAX];const char*root=BB_PROTOTYPE_ROOT "/build/";
- if(!path||!realpath(path,canonical)||strncmp(canonical,root,strlen(root))||!backend||strcmp(backend,"thd")){fputs("ARM NET refused non-private module or unsupported backend\n",stderr);_Exit(BB_ARM_EXIT_NETWORK_INIT);}
+ char canonical[PATH_MAX],raw_executable[PATH_MAX],executable[PATH_MAX];uint32_t executable_bytes=sizeof(raw_executable);
+ const int have_executable=_NSGetExecutablePath(raw_executable,&executable_bytes)==0&&realpath(raw_executable,executable)!=NULL;
+ if(!path||!realpath(path,canonical)||!have_executable||!bb_arm_private_net_module_path(canonical,executable)||!backend||strcmp(backend,"thd")){fputs("ARM NET refused non-private module or unsupported backend\n",stderr);_Exit(BB_ARM_EXIT_NETWORK_INIT);}
  void*module=dlopen(canonical,RTLD_NOW|RTLD_LOCAL);if(!module){fprintf(stderr,"ARM NET module unavailable: %s\n",dlerror());_Exit(BB_ARM_EXIT_NETWORK_INIT);}
  BbNetInitFn init=(BbNetInitFn)dlsym(module,"bbnet_init");
  BbNetResolveFn found=(BbNetResolveFn)dlsym(module,"bbnet_resolve");
