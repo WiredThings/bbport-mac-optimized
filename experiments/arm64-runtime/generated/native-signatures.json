@@ -1,0 +1,3352 @@
+[
+  {
+    "source": "runtime",
+    "function": "guest_procparam",
+    "signature": "P",
+    "parameters": [],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_set_heap_api",
+    "signature": "vP",
+    "parameters": [
+      "void **"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_tls_get_addr",
+    "signature": "PR",
+    "parameters": [
+      "const uint64_t *"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime",
+    "function": "init_env",
+    "signature": "v",
+    "parameters": [],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_atexit",
+    "signature": "iQ",
+    "parameters": [
+      "GuestCallback"
+    ],
+    "returns": "int"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_cxa_atexit",
+    "signature": "iQPP",
+    "parameters": [
+      "void (*)(void *)",
+      "void *",
+      "void *"
+    ],
+    "returns": "int"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_finalize",
+    "signature": "vP",
+    "parameters": [
+      "void *"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "guard_acquire",
+    "signature": "iP",
+    "parameters": [
+      "uint64_t *"
+    ],
+    "returns": "int"
+  },
+  {
+    "source": "runtime",
+    "function": "guard_release",
+    "signature": "vP",
+    "parameters": [
+      "uint64_t *"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "guard_abort",
+    "signature": "vP",
+    "parameters": [
+      "uint64_t *"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "stack_fail",
+    "signature": "v",
+    "parameters": [],
+    "returns": "void"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_memset",
+    "signature": "PPiL",
+    "parameters": [
+      "void *",
+      "int",
+      "size_t"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_memcpy",
+    "signature": "PPRL",
+    "parameters": [
+      "void *",
+      "const void *",
+      "size_t"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_memmove",
+    "signature": "PPRL",
+    "parameters": [
+      "void *",
+      "const void *",
+      "size_t"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_memcmp",
+    "signature": "iRRL",
+    "parameters": [
+      "const void *",
+      "const void *",
+      "size_t"
+    ],
+    "returns": "int"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_strlen",
+    "signature": "LR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "size_t"
+  },
+  {
+    "source": "runtime",
+    "function": "guest_libc_exit",
+    "signature": "vi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_self",
+    "signature": "P",
+    "parameters": [],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "guest_error",
+    "signature": "P",
+    "parameters": [],
+    "returns": "int32_t *"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_init",
+    "signature": "iP",
+    "parameters": [
+      "ThreadAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_destroy",
+    "signature": "iP",
+    "parameters": [
+      "ThreadAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_get",
+    "signature": "iPP",
+    "parameters": [
+      "void *",
+      "ThreadAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_stack",
+    "signature": "iPQ",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_get_stack",
+    "signature": "iPP",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_detach",
+    "signature": "iPi",
+    "parameters": [
+      "ThreadAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_get_detach",
+    "signature": "iPP",
+    "parameters": [
+      "ThreadAttr **",
+      "int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_policy",
+    "signature": "iPi",
+    "parameters": [
+      "ThreadAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_inherit",
+    "signature": "iPi",
+    "parameters": [
+      "ThreadAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_param",
+    "signature": "iPR",
+    "parameters": [
+      "ThreadAttr **",
+      "const int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_get_param",
+    "signature": "iPP",
+    "parameters": [
+      "ThreadAttr **",
+      "int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_affinity",
+    "signature": "iPQ",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_affinity",
+    "signature": "iPP",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "attr_set_guard",
+    "signature": "iPQ",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_create",
+    "signature": "iPPQQR",
+    "parameters": [
+      "GuestThread **",
+      "ThreadAttr **",
+      "GuestEntry",
+      "void *",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_join",
+    "signature": "iPP",
+    "parameters": [
+      "GuestThread *",
+      "void **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_detach",
+    "signature": "iP",
+    "parameters": [
+      "GuestThread *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_exit",
+    "signature": "vQ",
+    "parameters": [
+      "void *"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_yield",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_get_prio",
+    "signature": "iPP",
+    "parameters": [
+      "GuestThread *",
+      "int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_set_prio",
+    "signature": "iPi",
+    "parameters": [
+      "GuestThread *",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_set_affinity",
+    "signature": "iPQ",
+    "parameters": [
+      "GuestThread *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_get_affinity",
+    "signature": "iPP",
+    "parameters": [
+      "GuestThread *",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_rename",
+    "signature": "iPR",
+    "parameters": [
+      "GuestThread *",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "thread_equal",
+    "signature": "iPP",
+    "parameters": [
+      "GuestThread *",
+      "GuestThread *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_attr_init",
+    "signature": "iP",
+    "parameters": [
+      "ThreadAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_attr_destroy",
+    "signature": "iP",
+    "parameters": [
+      "ThreadAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_attr_set_detach",
+    "signature": "iPi",
+    "parameters": [
+      "ThreadAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_attr_set_stack",
+    "signature": "iPQ",
+    "parameters": [
+      "ThreadAttr **",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_attr_set_param",
+    "signature": "iPR",
+    "parameters": [
+      "ThreadAttr **",
+      "const int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_create",
+    "signature": "iPPQQ",
+    "parameters": [
+      "GuestThread **",
+      "ThreadAttr **",
+      "GuestEntry",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_create_name",
+    "signature": "iPPQQR",
+    "parameters": [
+      "GuestThread **",
+      "ThreadAttr **",
+      "GuestEntry",
+      "void *",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_thread",
+    "function": "posix_join",
+    "signature": "iPP",
+    "parameters": [
+      "GuestThread *",
+      "void **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "kernel_clock_gettime",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_clock_gettime",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_clock_getres",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "process_time",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "process_time_counter",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "process_time_frequency",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "read_tsc",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "tsc_frequency",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "kernel_usleep",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_usleep",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_sleep",
+    "signature": "II",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "uint32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_nanosleep",
+    "signature": "iRP",
+    "parameters": [
+      "const GuestTimespec *",
+      "GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "kernel_nanosleep",
+    "signature": "iRP",
+    "parameters": [
+      "const GuestTimespec *",
+      "GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "kernel_gettimezone",
+    "signature": "iP",
+    "parameters": [
+      "GuestTimezone *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_gettimeofday",
+    "signature": "iPP",
+    "parameters": [
+      "GuestTimeval *",
+      "GuestTimezone *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "kernel_gettimeofday",
+    "signature": "iP",
+    "parameters": [
+      "GuestTimeval *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_time",
+    "signature": "qP",
+    "parameters": [
+      "int64_t *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "get_pagesize",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "get_pid",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "yield",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "hard_exit",
+    "signature": "vi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "raise_exception",
+    "signature": "vIQ",
+    "parameters": [
+      "uint32_t",
+      "uint64_t"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "print_backtrace",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_signal",
+    "signature": "LiL",
+    "parameters": [
+      "int",
+      "uintptr_t"
+    ],
+    "returns": "uintptr_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_sigprocmask",
+    "signature": "iiRP",
+    "parameters": [
+      "int",
+      "const GuestSigset *",
+      "GuestSigset *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_sigfillset",
+    "signature": "iP",
+    "parameters": [
+      "GuestSigset *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_sigemptyset",
+    "signature": "iP",
+    "parameters": [
+      "GuestSigset *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_getrusage",
+    "signature": "iiP",
+    "parameters": [
+      "int",
+      "GuestRusage *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "guest_sysctl",
+    "signature": "iRIPPRQ",
+    "parameters": [
+      "const int32_t *",
+      "uint32_t",
+      "void *",
+      "uint64_t *",
+      "const void *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "thread_once",
+    "signature": "iPQ",
+    "parameters": [
+      "int32_t *",
+      "void (*)(void)"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_once",
+    "signature": "iPQ",
+    "parameters": [
+      "int32_t *",
+      "void (*)(void)"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "key_create",
+    "signature": "iPQ",
+    "parameters": [
+      "uint32_t *",
+      "KeyDestructor"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "key_delete",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "key_set",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "key_get",
+    "signature": "PI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_key_create",
+    "signature": "iPQ",
+    "parameters": [
+      "uint32_t *",
+      "KeyDestructor"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_key_delete",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_kernel",
+    "function": "posix_key_set",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_size",
+    "signature": "Q",
+    "parameters": [],
+    "returns": "uint64_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_allocate",
+    "signature": "iqqQQiP",
+    "parameters": [
+      "int64_t",
+      "int64_t",
+      "uint64_t",
+      "uint64_t",
+      "int",
+      "int64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_map",
+    "signature": "iPQiiqQ",
+    "parameters": [
+      "void **",
+      "uint64_t",
+      "int",
+      "int",
+      "int64_t",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_map_named",
+    "signature": "iPQiiqQR",
+    "parameters": [
+      "void **",
+      "uint64_t",
+      "int",
+      "int",
+      "int64_t",
+      "uint64_t",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_unmap",
+    "signature": "iPQ",
+    "parameters": [
+      "void *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_release",
+    "signature": "iQQ",
+    "parameters": [
+      "uint64_t",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "map_flexible",
+    "signature": "iPQii",
+    "parameters": [
+      "void **",
+      "uint64_t",
+      "int",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "map_flexible_named",
+    "signature": "iPQiiR",
+    "parameters": [
+      "void **",
+      "uint64_t",
+      "int",
+      "int",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "release_flexible",
+    "signature": "iPQ",
+    "parameters": [
+      "void *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "posix_mmap",
+    "signature": "PPQiiiq",
+    "parameters": [
+      "void *",
+      "uint64_t",
+      "int",
+      "int",
+      "int",
+      "int64_t"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "reserve_range",
+    "signature": "iPQiQ",
+    "parameters": [
+      "void **",
+      "uint64_t",
+      "int",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "kernel_mprotect",
+    "signature": "iRQi",
+    "parameters": [
+      "const void *",
+      "uint64_t",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "query_protection",
+    "signature": "iPPPP",
+    "parameters": [
+      "void *",
+      "void **",
+      "void **",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "virtual_query",
+    "signature": "iRiPQ",
+    "parameters": [
+      "const void *",
+      "int",
+      "VirtualQueryInfo *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "direct_memory_type",
+    "signature": "iQPPP",
+    "parameters": [
+      "uint64_t",
+      "int *",
+      "void **",
+      "void **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "batch_map2",
+    "signature": "iPiPi",
+    "parameters": [
+      "BatchEntry *",
+      "int",
+      "int *",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_memory",
+    "function": "batch_map",
+    "signature": "iPiP",
+    "parameters": [
+      "BatchEntry *",
+      "int",
+      "int *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "attr_init",
+    "signature": "iP",
+    "parameters": [
+      "GuestAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "attr_type",
+    "signature": "iPi",
+    "parameters": [
+      "GuestAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "attr_protocol",
+    "signature": "iPi",
+    "parameters": [
+      "GuestAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "attr_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_init",
+    "signature": "iPPR",
+    "parameters": [
+      "GuestMutex **",
+      "GuestAttr **",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_lock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_trylock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_unlock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "mutex_timedlock",
+    "signature": "iPI",
+    "parameters": [
+      "GuestMutex **",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_init",
+    "signature": "iPPR",
+    "parameters": [
+      "GuestCond **",
+      "void **",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_wait",
+    "signature": "iPP",
+    "parameters": [
+      "GuestCond **",
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_timedwait",
+    "signature": "iPPI",
+    "parameters": [
+      "GuestCond **",
+      "GuestMutex **",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_signal",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_broadcast",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "cond_abs_timedwait",
+    "signature": "iPPR",
+    "parameters": [
+      "GuestCond **",
+      "GuestMutex **",
+      "const GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_attr_init",
+    "signature": "iP",
+    "parameters": [
+      "GuestAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_attr_type",
+    "signature": "iPi",
+    "parameters": [
+      "GuestAttr **",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_attr_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_mutex_init",
+    "signature": "iPP",
+    "parameters": [
+      "GuestMutex **",
+      "GuestAttr **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_mutex_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_mutex_lock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_mutex_trylock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_mutex_unlock",
+    "signature": "iP",
+    "parameters": [
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_init",
+    "signature": "iPP",
+    "parameters": [
+      "GuestCond **",
+      "void **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_destroy",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_wait",
+    "signature": "iPP",
+    "parameters": [
+      "GuestCond **",
+      "GuestMutex **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_timedwait",
+    "signature": "iPPR",
+    "parameters": [
+      "GuestCond **",
+      "GuestMutex **",
+      "const GuestTimespec *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_signal",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_mutex",
+    "function": "posix_cond_broadcast",
+    "signature": "iP",
+    "parameters": [
+      "GuestCond **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_create",
+    "signature": "iPRIiiR",
+    "parameters": [
+      "uint32_t *",
+      "const char *",
+      "uint32_t",
+      "int32_t",
+      "int32_t",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_wait",
+    "signature": "iIiP",
+    "parameters": [
+      "uint32_t",
+      "int32_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_poll",
+    "signature": "iIi",
+    "parameters": [
+      "uint32_t",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_signal",
+    "signature": "iIi",
+    "parameters": [
+      "uint32_t",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_cancel",
+    "signature": "iIiP",
+    "parameters": [
+      "uint32_t",
+      "int32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_sema",
+    "function": "sem_delete",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_init",
+    "signature": "iPRR",
+    "parameters": [
+      "Rwlock **",
+      "void *const *",
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_read",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_write",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_tryread",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_trywrite",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_timedread",
+    "signature": "iPR",
+    "parameters": [
+      "Rwlock **",
+      "const GuestTime *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_timedwrite",
+    "signature": "iPR",
+    "parameters": [
+      "Rwlock **",
+      "const GuestTime *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_unlock",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rwlock",
+    "function": "rw_destroy",
+    "signature": "iP",
+    "parameters": [
+      "Rwlock **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_time",
+    "function": "guest_gettimeofday",
+    "signature": "iPP",
+    "parameters": [
+      "GuestTimeval *",
+      "GuestTimezone *"
+    ],
+    "returns": "int"
+  },
+  {
+    "source": "runtime_content",
+    "function": "module_load",
+    "signature": "iS",
+    "parameters": [
+      "uint16_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_content",
+    "function": "module_loaded",
+    "signature": "iS",
+    "parameters": [
+      "uint16_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_content",
+    "function": "module_unload",
+    "signature": "iS",
+    "parameters": [
+      "uint16_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_content",
+    "function": "content_init",
+    "signature": "iRP",
+    "parameters": [
+      "const unsigned char *",
+      "unsigned char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_content",
+    "function": "param_int",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_content",
+    "function": "addon_list",
+    "signature": "iIPIP",
+    "parameters": [
+      "uint32_t",
+      "void *",
+      "uint32_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_open",
+    "signature": "qRii",
+    "parameters": [
+      "const char *",
+      "int",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_open",
+    "signature": "qRii",
+    "parameters": [
+      "const char *",
+      "int",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_close",
+    "signature": "qi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_close",
+    "signature": "qi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_read",
+    "signature": "qiPQ",
+    "parameters": [
+      "int",
+      "void *",
+      "uint64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_read",
+    "signature": "qiPQ",
+    "parameters": [
+      "int",
+      "void *",
+      "uint64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_pread",
+    "signature": "qiPQq",
+    "parameters": [
+      "int",
+      "void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_pread",
+    "signature": "qiPQq",
+    "parameters": [
+      "int",
+      "void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_write",
+    "signature": "qiRQ",
+    "parameters": [
+      "int",
+      "const void *",
+      "uint64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_write",
+    "signature": "qiRQ",
+    "parameters": [
+      "int",
+      "const void *",
+      "uint64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_pwrite",
+    "signature": "qiRQq",
+    "parameters": [
+      "int",
+      "const void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_pwrite",
+    "signature": "qiRQq",
+    "parameters": [
+      "int",
+      "const void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_lseek",
+    "signature": "qiqi",
+    "parameters": [
+      "int",
+      "int64_t",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_lseek",
+    "signature": "qiqi",
+    "parameters": [
+      "int",
+      "int64_t",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_fstat",
+    "signature": "qiP",
+    "parameters": [
+      "int",
+      "GuestStat *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_fstat",
+    "signature": "qiP",
+    "parameters": [
+      "int",
+      "GuestStat *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_stat",
+    "signature": "qRP",
+    "parameters": [
+      "const char *",
+      "GuestStat *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_stat",
+    "signature": "qRP",
+    "parameters": [
+      "const char *",
+      "GuestStat *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_getdents",
+    "signature": "qiPQP",
+    "parameters": [
+      "int",
+      "char *",
+      "uint64_t",
+      "int64_t *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_getdents",
+    "signature": "qiPQP",
+    "parameters": [
+      "int",
+      "char *",
+      "uint64_t",
+      "int64_t *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_rename",
+    "signature": "qRR",
+    "parameters": [
+      "const char *",
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_rename",
+    "signature": "qRR",
+    "parameters": [
+      "const char *",
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_ftruncate",
+    "signature": "qiq",
+    "parameters": [
+      "int",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_ftruncate",
+    "signature": "qiq",
+    "parameters": [
+      "int",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_truncate",
+    "signature": "qRq",
+    "parameters": [
+      "const char *",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_truncate",
+    "signature": "qRq",
+    "parameters": [
+      "const char *",
+      "int64_t"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_fsync",
+    "signature": "qi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_fsync",
+    "signature": "qi",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_access",
+    "signature": "qRi",
+    "parameters": [
+      "const char *",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_mkdir",
+    "signature": "qRi",
+    "parameters": [
+      "const char *",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_mkdir",
+    "signature": "qRi",
+    "parameters": [
+      "const char *",
+      "int"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_rmdir",
+    "signature": "qR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_rmdir",
+    "signature": "qR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_unlink",
+    "signature": "qR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "posix_unlink",
+    "signature": "qR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "int64_t"
+  },
+  {
+    "source": "runtime_file",
+    "function": "sce_check_reachability",
+    "signature": "iR",
+    "parameters": [
+      "const char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_initialize",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_terminate",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_initial",
+    "signature": "iP",
+    "parameters": [
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_list",
+    "signature": "iP",
+    "parameters": [
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_name",
+    "signature": "iiPQ",
+    "parameters": [
+      "int32_t",
+      "char *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "user_event",
+    "signature": "iP",
+    "parameters": [
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "system_param",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "system_status",
+    "signature": "iP",
+    "parameters": [
+      "unsigned char *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "system_event",
+    "signature": "iP",
+    "parameters": [
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "hide_splash",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "launch_browser",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_errno_loc",
+    "signature": "P",
+    "parameters": [],
+    "returns": "int32_t *"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_pool_create",
+    "signature": "iRii",
+    "parameters": [
+      "const char *",
+      "int",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_pool_destroy",
+    "signature": "ii",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_unreachable",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_epoll_create",
+    "signature": "iRi",
+    "parameters": [
+      "const char *",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_epoll_destroy",
+    "signature": "ii",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_resolver_create",
+    "signature": "iRii",
+    "parameters": [
+      "const char *",
+      "int",
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_resolver_destroy",
+    "signature": "ii",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_htons",
+    "signature": "SS",
+    "parameters": [
+      "uint16_t"
+    ],
+    "returns": "uint16_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_ntohs",
+    "signature": "SS",
+    "parameters": [
+      "uint16_t"
+    ],
+    "returns": "uint16_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_htonl",
+    "signature": "II",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "uint32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_ntohl",
+    "signature": "II",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "uint32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_pton",
+    "signature": "iiRP",
+    "parameters": [
+      "int",
+      "const char *",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "net_ntop",
+    "signature": "RiRPI",
+    "parameters": [
+      "int",
+      "const void *",
+      "char *",
+      "uint32_t"
+    ],
+    "returns": "const char *"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_state",
+    "signature": "iP",
+    "parameters": [
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_info",
+    "signature": "iiP",
+    "parameters": [
+      "int",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_register",
+    "signature": "iQQP",
+    "parameters": [
+      "void *",
+      "void *",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_check",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_unregister",
+    "signature": "ii",
+    "parameters": [
+      "int"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "netctl_nat",
+    "signature": "iP",
+    "parameters": [
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "lib_init_id",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "ok_void",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "http_fail",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "http_object",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "http_epoll",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "void **"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "http_wait",
+    "signature": "iQPiq",
+    "parameters": [
+      "void *",
+      "void *",
+      "int32_t",
+      "int64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_state",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_signed_out",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_register",
+    "signature": "iQQ",
+    "parameters": [
+      "void *",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_register_void",
+    "signature": "vQQ",
+    "parameters": [
+      "void *",
+      "void *"
+    ],
+    "returns": "void"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_request",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_request_ctx",
+    "signature": "iiR",
+    "parameters": [
+      "int32_t",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_poll",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "np_compare",
+    "signature": "iRR",
+    "parameters": [
+      "const void *",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "voice_port",
+    "signature": "iPP",
+    "parameters": [
+      "void *",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "voice_read",
+    "signature": "iIPP",
+    "parameters": [
+      "uint32_t",
+      "void *",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "voice_write",
+    "signature": "iIRP",
+    "parameters": [
+      "uint32_t",
+      "const void *",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "voice_info",
+    "signature": "iIP",
+    "parameters": [
+      "uint32_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "common_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "msg_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "msg_open",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "msg_status",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "msg_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "save_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "save_open",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "save_status",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "save_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "profile_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "profile_open",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "profile_status",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "profile_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "commerce_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "commerce_open",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "commerce_status",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "commerce_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "profile_result",
+    "signature": "iP",
+    "parameters": [
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "ime_init",
+    "signature": "iRR",
+    "parameters": [
+      "const ImeParam *",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "ime_status",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "ime_result",
+    "signature": "iP",
+    "parameters": [
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "ime_term",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_context",
+    "signature": "iPiIQ",
+    "parameters": [
+      "int32_t *",
+      "int32_t",
+      "uint32_t",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_handle",
+    "signature": "iP",
+    "parameters": [
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_register",
+    "signature": "iiiQ",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_unlock",
+    "signature": "iiiiP",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_game_info",
+    "signature": "iiiPP",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "void *",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "trophy_info",
+    "signature": "iiiiPP",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t",
+      "void *",
+      "void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "playgo_init",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "playgo_open",
+    "signature": "iPR",
+    "parameters": [
+      "int32_t *",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "playgo_chunk_ids",
+    "signature": "iiPIP",
+    "parameters": [
+      "int32_t",
+      "uint16_t *",
+      "uint32_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "playgo_locus",
+    "signature": "iiRIP",
+    "parameters": [
+      "int32_t",
+      "const uint16_t *",
+      "uint32_t",
+      "int8_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "playgo_speed",
+    "signature": "iii",
+    "parameters": [
+      "int32_t",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "discmap_on_hdd",
+    "signature": "iRqqP",
+    "parameters": [
+      "const char *",
+      "int64_t",
+      "int64_t",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "discmap_8a82",
+    "signature": "iRqqPPP",
+    "parameters": [
+      "const char *",
+      "int64_t",
+      "int64_t",
+      "int32_t *",
+      "int32_t *",
+      "int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "mouse_open",
+    "signature": "iiiiR",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "mouse_read",
+    "signature": "iiPi",
+    "parameters": [
+      "int32_t",
+      "unsigned char *",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "mouse_close",
+    "signature": "ii",
+    "parameters": [
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_services",
+    "function": "audio_in_open",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_initialize",
+    "signature": "iR",
+    "parameters": [
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_terminate",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_mount",
+    "signature": "iRP",
+    "parameters": [
+      "const Mount1 *",
+      "MountResult *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_mount2",
+    "signature": "iRP",
+    "parameters": [
+      "const Mount2 *",
+      "MountResult *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_umount",
+    "signature": "iR",
+    "parameters": [
+      "const MountPoint *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_set_param",
+    "signature": "iRIRQ",
+    "parameters": [
+      "const MountPoint *",
+      "uint32_t",
+      "const void *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_icon",
+    "signature": "iRR",
+    "parameters": [
+      "const MountPoint *",
+      "const Icon *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_delete",
+    "signature": "iR",
+    "parameters": [
+      "const Delete *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "save_search",
+    "signature": "iRP",
+    "parameters": [
+      "const SearchCond *",
+      "SearchResult *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "memory_setup",
+    "signature": "iiQR",
+    "parameters": [
+      "int32_t",
+      "uint64_t",
+      "const Param *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "memory_get",
+    "signature": "iiPQq",
+    "parameters": [
+      "int32_t",
+      "void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_savedata",
+    "function": "memory_set",
+    "signature": "iiPQq",
+    "parameters": [
+      "int32_t",
+      "void *",
+      "uint64_t",
+      "int64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_current_local",
+    "signature": "iP",
+    "parameters": [
+      "DateTime *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_current_clock",
+    "signature": "iPi",
+    "parameters": [
+      "DateTime *",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_current_tick",
+    "signature": "iP",
+    "parameters": [
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_utc_to_local",
+    "signature": "iRP",
+    "parameters": [
+      "const uint64_t *",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_local_to_utc",
+    "signature": "iRP",
+    "parameters": [
+      "const uint64_t *",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_day_of_week",
+    "signature": "iiii",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_get_tick",
+    "signature": "iRP",
+    "parameters": [
+      "const DateTime *",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_set_tick",
+    "signature": "iPR",
+    "parameters": [
+      "DateTime *",
+      "const uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_tick_resolution",
+    "signature": "I",
+    "parameters": [],
+    "returns": "uint32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_set_time_t",
+    "signature": "iPq",
+    "parameters": [
+      "DateTime *",
+      "int64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_get_time_t",
+    "signature": "iRP",
+    "parameters": [
+      "const DateTime *",
+      "int64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_rtc",
+    "function": "rtc_rfc2822_local",
+    "signature": "iPR",
+    "parameters": [
+      "char *",
+      "const uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "job_control",
+    "signature": "PPIQQQQQQ",
+    "parameters": [
+      "void *",
+      "uint32_t",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "job_run",
+    "signature": "PPIQQQQQQQQ",
+    "parameters": [
+      "void *",
+      "uint32_t",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "job_run_split",
+    "signature": "PPIQRQRQQQQ",
+    "parameters": [
+      "void *",
+      "uint32_t",
+      "uint64_t",
+      "const AjmBuffer *",
+      "uint64_t",
+      "const AjmBuffer *",
+      "uint64_t",
+      "void *",
+      "uint64_t",
+      "void *"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "job_inline",
+    "signature": "PPRQP",
+    "parameters": [
+      "void *",
+      "const void *",
+      "uint64_t",
+      "const void **"
+    ],
+    "returns": "void *"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_initialize",
+    "signature": "iqP",
+    "parameters": [
+      "int64_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_finalize",
+    "signature": "iI",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_module_register",
+    "signature": "iIIq",
+    "parameters": [
+      "uint32_t",
+      "uint32_t",
+      "int64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_module_unregister",
+    "signature": "iII",
+    "parameters": [
+      "uint32_t",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_instance_create",
+    "signature": "iIIQP",
+    "parameters": [
+      "uint32_t",
+      "uint32_t",
+      "uint64_t",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_instance_destroy",
+    "signature": "iII",
+    "parameters": [
+      "uint32_t",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_instance_codec",
+    "signature": "II",
+    "parameters": [
+      "uint32_t"
+    ],
+    "returns": "uint32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_batch_start",
+    "signature": "iIPIiPP",
+    "parameters": [
+      "uint32_t",
+      "unsigned char *",
+      "uint32_t",
+      "int",
+      "BatchError *",
+      "uint32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_batch_wait",
+    "signature": "iIIIP",
+    "parameters": [
+      "uint32_t",
+      "uint32_t",
+      "uint32_t",
+      "BatchError *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_batch_cancel",
+    "signature": "iII",
+    "parameters": [
+      "uint32_t",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_error_dump",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_ajm",
+    "function": "ajm_memory_register",
+    "signature": "iIPQ",
+    "parameters": [
+      "uint32_t",
+      "void *",
+      "uint64_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_open",
+    "signature": "iiiiIII",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t",
+      "uint32_t",
+      "uint32_t",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_close",
+    "signature": "ii",
+    "parameters": [
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_output",
+    "signature": "iiR",
+    "parameters": [
+      "int32_t",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_outputs",
+    "signature": "iRI",
+    "parameters": [
+      "const OutputParam *",
+      "uint32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_volume",
+    "signature": "iiiR",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "const int32_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_state",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "PortState *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_audio",
+    "function": "audio_last_time",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "uint64_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_init",
+    "signature": "i",
+    "parameters": [],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_open",
+    "signature": "iiiiR",
+    "parameters": [
+      "int32_t",
+      "int32_t",
+      "int32_t",
+      "const void *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_close",
+    "signature": "ii",
+    "parameters": [
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_read_state",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "PadData *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_read",
+    "signature": "iiPi",
+    "parameters": [
+      "int32_t",
+      "PadData *",
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_info",
+    "signature": "iiP",
+    "parameters": [
+      "int32_t",
+      "ControllerInfo *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_vibration",
+    "signature": "iiR",
+    "parameters": [
+      "int32_t",
+      "const uint8_t *"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_ok_handle",
+    "signature": "ii",
+    "parameters": [
+      "int32_t"
+    ],
+    "returns": "int32_t"
+  },
+  {
+    "source": "runtime_pad",
+    "function": "pad_ok_handle_flag",
+    "signature": "iiC",
+    "parameters": [
+      "int32_t",
+      "uint8_t"
+    ],
+    "returns": "int32_t"
+  }
+]

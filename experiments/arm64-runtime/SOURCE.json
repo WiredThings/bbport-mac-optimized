@@ -1,0 +1,15 @@
+{
+  "aether_commit": "3347fc13f19860855ce91b66356940989ea6b6a6",
+  "fex_revision_string": "f2b679f6028ce1c38875233aecfcf5d3f8ebecec",
+  "blood_echoes_commit": "3e2419b5f1b1f291521d0b61ffcd99d3fcaf881a",
+  "scope": "isolated native runtime prototype; never install over formal app",
+  "launcher_configuration_policy": {
+    "source_repository": "WiredThings/blood-echoes",
+    "revision": "3e2419b5f1b1f291521d0b61ffcd99d3fcaf881a",
+    "files": {
+      "scripts/patches.py": "1f59d8cfb556ed28b8124bb16f41cebaef9a50a02b9a8e55dd8425d4543f66e1",
+      "patches/Bloodborne.xml": "7d4175cedda53859384eaf4c054462afc6bc4eb4dc6d66e026b13b6e732e5ebe"
+    },
+    "scope": "private unchanged source snapshots; no formal repository edits"
+  }
+}

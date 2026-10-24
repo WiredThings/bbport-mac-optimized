@@ -1,0 +1,7 @@
+/build/
+/backend/
+/state/
+/fixtures/
+/apps/
+__pycache__/
+*.pyc

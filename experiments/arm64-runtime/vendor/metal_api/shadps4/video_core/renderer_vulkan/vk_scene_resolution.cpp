@@ -1,0 +1,411 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include "video_core/renderer_vulkan/vk_scene_resolution.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "video_core/texture_cache/texture_cache.h"
+#include "video_core/host_shaders/depth_resample_frag.h"
+#include "video_core/host_shaders/depth_stencil_resample_frag.h"
+#include "video_core/host_shaders/depth_stencil_bits_frag.h"
+#include "video_core/host_shaders/fs_tri_vert.h"
+#include <cstdio>
+#include <cstdlib>
+
+namespace Vulkan {
+SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r,
+                           VideoCore::TextureCache& t)
+    : SceneTargets(i, s, r, [&t](VideoCore::ImageId id, u64 uid) {
+        return t.TryGetImage(id, uid);
+    }) {}
+SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r, Lookup get)
+    : SceneTargetsCore{std::move(get)}, instance{i}, scheduler{s}, runtime{r} {
+    runtime.scene_targets = this;
+    const char* force = std::getenv("BB_SCENE_STENCIL_BITS");
+    force_stencil_bits = force && force[0] == '1';
+    CreateResampleResources();
+}
+SceneTargets::~SceneTargets() {
+    scheduler.Finish();
+    runtime.scene_targets = nullptr;
+}
+vk::FormatFeatureFlags SceneTargets::Features(vk::Format format) const {
+    // Called for every attachment of every draw: the driver query was ~5% of the GPU thread.
+    // Core formats index a flat table; extension formats (large enum values) use the map.
+    const auto index = u32(format);
+    if (index < format_table.size() && format_known[index]) return format_table[index];
+    if (index >= format_table.size()) {
+        if (const auto it = format_features.find(format); it != format_features.end()) {
+            return it->second;
+        }
+    }
+    const auto features =
+        instance.GetPhysicalDevice().getFormatProperties(format).optimalTilingFeatures;
+    if (index < format_table.size()) {
+        format_table[index] = features;
+        format_known[index] = true;
+    } else {
+        format_features.emplace(format, features);
+    }
+    return features;
+}
+bool SceneTargets::Blittable(vk::Format format) const {
+    const auto features = Features(format);
+    const auto required = vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst;
+    return (features & required) == required;
+}
+bool SceneTargets::ShaderResampled(const VideoCore::Image& image) const {
+    const auto format = image.backing->image.image_ci.format;
+    if (!image.info.props.is_depth || (Blittable(format) && !force_stencil_bits)) return false;
+    const auto features = Features(format);
+    const auto required = vk::FormatFeatureFlagBits::eSampledImage |
+                          vk::FormatFeatureFlagBits::eDepthStencilAttachment;
+    // Without shader stencil export (e.g. Pascal) depth/stencil stays native: the eight-draw
+    // stencil resampler costs too much on such GPUs. BB_SCENE_STENCIL_BITS=1 forces it (tests).
+    return (features & required) == required &&
+           (!(image.aspect_mask & vk::ImageAspectFlagBits::eStencil) ||
+            instance.IsShaderStencilExportSupported() || force_stencil_bits);
+}
+bool SceneTargets::ProxyFormatSupported(const VideoCore::Image& image) const {
+    return Blittable(image.backing->image.image_ci.format) || ShaderResampled(image);
+}
+bool SceneTargets::MipChainFormatSupported(const VideoCore::Image& image) const {
+    return Blittable(image.backing->image.image_ci.format);
+}
+std::unique_ptr<VideoCore::SceneTargetsCore::ProxyData> SceneTargets::CreateProxy(
+    const VideoCore::Image& original, SceneResolution::Size proxy) {
+    auto data = std::make_unique<Proxy>();
+    data->image = VideoCore::UniqueImage(instance.GetDevice(), instance.GetAllocator());
+    auto ci = original.backing->image.image_ci;
+    ci.pNext = nullptr;
+    ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
+    ci.mipLevels = 1;
+    data->image.Create(ci);
+    return data;
+}
+void SceneTargets::Finish() {
+    scheduler.Finish();
+}
+vk::ImageLayout SceneTargets::Prepare(Entry& e, const VideoCore::Image& original, Use use) {
+    if (use == Use::Sample) {
+        constexpr auto layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        if (Of(e).layout != layout) {
+            Transition(e, original.aspect_mask, layout,
+                       vk::PipelineStageFlagBits2::eVertexShader |
+                           vk::PipelineStageFlagBits2::eFragmentShader |
+                           vk::PipelineStageFlagBits2::eComputeShader,
+                       vk::AccessFlagBits2::eShaderSampledRead);
+        }
+        return layout;
+    }
+    const bool depth = original.info.props.is_depth;
+    const auto layout = depth ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+                              : vk::ImageLayout::eColorAttachmentOptimal;
+    // Consecutive draws can stay in the same render pass.
+    if (Of(e).layout != layout) {
+        Transition(e, original.aspect_mask, layout,
+            depth ? vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests
+                  : vk::PipelineStageFlags2(vk::PipelineStageFlagBits2::eColorAttachmentOutput),
+            depth ? vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite
+                  : vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite);
+    }
+    return Of(e).layout;
+}
+void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access) {
+    constexpr auto writes = vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eTransferWrite |
+        vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
+        vk::AccessFlagBits2::eMemoryWrite;
+    SceneTargetsCore::NativeAccess(image, bool(access & writes));
+}
+void SceneTargets::Transition(Entry& e, vk::ImageAspectFlags aspect, vk::ImageLayout layout,
+                               vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
+    auto& proxy = Of(e);
+    scheduler.EndRendering();
+    const vk::ImageMemoryBarrier2 barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = stages, .dstAccessMask = access,
+        .oldLayout = proxy.layout, .newLayout = layout,
+        .image = proxy.image, .subresourceRange = {aspect, 0, 1, 0, 1},
+    };
+    scheduler.Record([barrier](vk::CommandBuffer cmd) {
+        cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
+    });
+    proxy.layout = layout;
+}
+void SceneTargets::CopyProxy(Entry& e, VideoCore::Image& original, bool to_native) {
+    auto& data = Of(e);
+    scheduler.EndRendering();
+    const Runtime::TransferMark mark{runtime, to_native ? "scene proxy resolve" : "scene proxy fill",
+                                     original};
+    if (debug) {
+        std::printf("Scene %s: %s %ux%u level %u\n", to_native ? "resolve" : "fill",
+                    vk::to_string(original.info.pixel_format).c_str(), original.info.size.width,
+                    original.info.size.height, e.level);
+    }
+    const vk::Image src = to_native ? vk::Image(data.image) : original.GetImage();
+    const vk::Image dst = to_native ? original.GetImage() : vk::Image(data.image);
+    if (ShaderResampled(original)) {
+        constexpr auto read_layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        constexpr auto write_layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+        constexpr auto read_stage = vk::PipelineStageFlagBits2::eFragmentShader;
+        constexpr auto write_stage = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                     vk::PipelineStageFlagBits2::eLateFragmentTests;
+        constexpr auto read_access = vk::AccessFlagBits2::eShaderSampledRead;
+        constexpr auto write_access = vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                      vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
+        runtime.Transit(&original, to_native ? write_layout : read_layout,
+                        to_native ? write_stage : read_stage,
+                        to_native ? write_access : read_access);
+        runtime.FlushBarriers();
+        Transition(e, original.aspect_mask, to_native ? read_layout : write_layout,
+                   to_native ? read_stage : write_stage, to_native ? read_access : write_access);
+        const auto& proxy = data.image.image_ci.extent;
+        Resample(src, dst, original,
+                 to_native ? vk::Extent2D{original.info.size.width, original.info.size.height}
+                           : vk::Extent2D{proxy.width, proxy.height});
+        // (Depth proxies are single-level: Eligible.)
+        return;
+    }
+    const VideoCore::SubresourceRange level_range{.base = {e.level, 0}, .extent = {1, 1}};
+    runtime.Transit(&original, to_native ? vk::ImageLayout::eTransferDstOptimal
+                                       : vk::ImageLayout::eTransferSrcOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    to_native ? vk::AccessFlagBits2::eTransferWrite : vk::AccessFlagBits2::eTransferRead,
+                    level_range);
+    runtime.FlushBarriers();
+    Transition(e, original.aspect_mask,
+               to_native ? vk::ImageLayout::eTransferSrcOptimal : vk::ImageLayout::eTransferDstOptimal,
+               vk::PipelineStageFlagBits2::eTransfer,
+               to_native ? vk::AccessFlagBits2::eTransferRead : vk::AccessFlagBits2::eTransferWrite);
+    const vk::Offset3D native{s32(std::max(1u, original.info.size.width >> e.level)),
+                              s32(std::max(1u, original.info.size.height >> e.level)), 1};
+    const vk::Offset3D reduced{s32(data.image.image_ci.extent.width),
+                               s32(data.image.image_ci.extent.height), 1};
+    for (auto aspect : {vk::ImageAspectFlagBits::eColor, vk::ImageAspectFlagBits::eDepth,
+                        vk::ImageAspectFlagBits::eStencil}) {
+        if (!(original.aspect_mask & aspect)) continue;
+        const vk::ImageBlit region{
+            .srcSubresource = {aspect, to_native ? 0u : e.level, 0, 1},
+            .srcOffsets = std::array{vk::Offset3D{}, to_native ? reduced : native},
+            .dstSubresource = {aspect, to_native ? e.level : 0u, 0, 1},
+            .dstOffsets = std::array{vk::Offset3D{}, to_native ? native : reduced},
+        };
+        // Nearest preserves depth/stencil and avoids assuming linear blit support for
+        // integer G-buffer formats. FSR reconstructs color at the HDR scene boundary.
+        scheduler.Record([src,dst,region](vk::CommandBuffer cmd) {
+            cmd.blitImage(src, vk::ImageLayout::eTransferSrcOptimal, dst,
+                          vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
+        });
+    }
+}
+void SceneTargets::Resample(vk::Image src, vk::Image dst, const VideoCore::Image& original,
+                            vk::Extent2D dst_size) {
+    const auto device = instance.GetDevice();
+    const auto format = original.backing->image.image_ci.format;
+    const bool stencil = bool(original.aspect_mask & vk::ImageAspectFlagBits::eStencil);
+    const bool stencil_bits = stencil && !depth_stencil_frag;
+    const auto make_view = [&](vk::Image image, vk::ImageAspectFlags aspect,
+                               vk::ImageUsageFlags usage) {
+        const vk::ImageViewUsageCreateInfo usage_ci{.usage = usage};
+        return Check(device.createImageView({
+            .pNext = &usage_ci, .image = image, .viewType = vk::ImageViewType::e2D,
+            .format = format, .subresourceRange = {aspect, 0, 1, 0, 1},
+        }));
+    };
+    const auto depth_view = make_view(src, vk::ImageAspectFlagBits::eDepth,
+                                      vk::ImageUsageFlagBits::eSampled);
+    const auto stencil_view = stencil ? make_view(src, vk::ImageAspectFlagBits::eStencil,
+                                                  vk::ImageUsageFlagBits::eSampled)
+                                      : vk::ImageView{};
+    const auto target_view = make_view(dst, original.aspect_mask,
+                                       vk::ImageUsageFlagBits::eDepthStencilAttachment);
+    scheduler.DeferOperation([device, depth_view, stencil_view, target_view] {
+        device.destroyImageView(depth_view);
+        if (stencil_view) device.destroyImageView(stencil_view);
+        device.destroyImageView(target_view);
+    });
+    const auto pipeline = ResamplePipeline(format, stencil);
+    const auto layout = *resample_layout;
+    scheduler.RecordCrumb({.name = "scene resample"}, [=](vk::CommandBuffer cmd) {
+        const vk::RenderingAttachmentInfo attachment{
+            .imageView = target_view,
+            .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eDontCare,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+        };
+        auto stencil_attachment = attachment;
+        if (stencil_bits) {
+            stencil_attachment.loadOp = vk::AttachmentLoadOp::eClear;
+            stencil_attachment.clearValue.depthStencil = vk::ClearDepthStencilValue{0.f, 0};
+        }
+        cmd.beginRendering({
+            .renderArea = {{0, 0}, dst_size}, .layerCount = 1,
+            .pDepthAttachment = &attachment,
+            .pStencilAttachment = stencil ? &stencil_attachment : nullptr,
+        });
+        const std::array infos{
+            vk::DescriptorImageInfo{{}, depth_view, vk::ImageLayout::eShaderReadOnlyOptimal},
+            vk::DescriptorImageInfo{{}, stencil_view, vk::ImageLayout::eShaderReadOnlyOptimal},
+        };
+        const std::array writes{
+            vk::WriteDescriptorSet{.dstBinding = 0, .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eSampledImage,
+                                   .pImageInfo = &infos[0]},
+            vk::WriteDescriptorSet{.dstBinding = 1, .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eSampledImage,
+                                   .pImageInfo = &infos[1]},
+        };
+        cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, layout, 0,
+                                 vk::ArrayProxy<const vk::WriteDescriptorSet>(
+                                     stencil ? 2u : 1u, writes.data()));
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+        cmd.setViewportWithCount(vk::Viewport{0.f, 0.f, float(dst_size.width),
+                                              float(dst_size.height), 0.f, 1.f});
+        cmd.setScissorWithCount(vk::Rect2D{{0, 0}, dst_size});
+        if (stencil_bits) {
+            // Copy depth first, then reconstruct all eight stencil bits without needing
+            // VK_EXT_shader_stencil_export (e.g. Pascal). Discard keeps unset bits clear.
+            for (u32 bit : {0u, 1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u}) {
+                cmd.pushConstants(layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(bit), &bit);
+                cmd.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, bit);
+                cmd.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, bit);
+                cmd.draw(3, 1, 0, 0);
+            }
+        } else {
+            cmd.draw(3, 1, 0, 0);
+        }
+        cmd.endRendering();
+    });
+    // The guest pipelines' dynamic state must be emitted again after this pipeline.
+    scheduler.GetDynamicState().Invalidate();
+}
+void SceneTargets::CreateResampleResources() {
+    const auto device = instance.GetDevice();
+    fs_tri_vert = vk::UniqueShaderModule(CompileSPV(FS_TRI_VERT, device), device);
+    depth_frag = vk::UniqueShaderModule(CompileSPV(DEPTH_RESAMPLE_FRAG, device), device);
+    if (instance.IsShaderStencilExportSupported() && !force_stencil_bits) {
+        depth_stencil_frag =
+            vk::UniqueShaderModule(CompileSPV(DEPTH_STENCIL_RESAMPLE_FRAG, device), device);
+    }
+    if (!depth_stencil_frag) {
+        stencil_bits_frag =
+            vk::UniqueShaderModule(CompileSPV(DEPTH_STENCIL_BITS_FRAG, device), device);
+    }
+    const std::array bindings{
+        vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eSampledImage, 1,
+                                       vk::ShaderStageFlagBits::eFragment},
+        vk::DescriptorSetLayoutBinding{1, vk::DescriptorType::eSampledImage, 1,
+                                       vk::ShaderStageFlagBits::eFragment},
+    };
+    resample_set_layout = Check(device.createDescriptorSetLayoutUnique({
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .bindingCount = u32(bindings.size()), .pBindings = bindings.data(),
+    }));
+    const auto set_layout = *resample_set_layout;
+    const vk::PushConstantRange push{vk::ShaderStageFlagBits::eFragment, 0, sizeof(u32)};
+    resample_layout = Check(device.createPipelineLayoutUnique({
+        .setLayoutCount = 1, .pSetLayouts = &set_layout,
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &push,
+    }));
+}
+vk::Pipeline SceneTargets::ResamplePipeline(vk::Format format, bool stencil) {
+    const bool stencil_bits = stencil && !depth_stencil_frag;
+    const std::pair key{format, stencil};
+    for (const auto& [k, pipeline] : resample_pipelines) if (k == key) return *pipeline;
+    const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
+        .topology = vk::PrimitiveTopology::eTriangleList,
+    };
+    const vk::PipelineMultisampleStateCreateInfo multisampling{
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+    };
+    // Reference, compare and write masks are static; the exported value replaces the reference.
+    const vk::StencilOpState stencil_op{
+        .failOp = vk::StencilOp::eReplace, .passOp = vk::StencilOp::eReplace,
+        .depthFailOp = vk::StencilOp::eReplace, .compareOp = vk::CompareOp::eAlways,
+        .compareMask = 0xff, .writeMask = 0xff, .reference = 0,
+    };
+    const vk::PipelineDepthStencilStateCreateInfo depth_state{
+        .depthTestEnable = true, .depthWriteEnable = true,
+        .depthCompareOp = vk::CompareOp::eAlways,
+        .stencilTestEnable = stencil, .front = stencil_op, .back = stencil_op,
+    };
+    const std::array dynamic_states{vk::DynamicState::eViewportWithCount,
+                                    vk::DynamicState::eScissorWithCount,
+                                    vk::DynamicState::eStencilWriteMask,
+                                    vk::DynamicState::eStencilReference};
+    const vk::PipelineDynamicStateCreateInfo dynamic_info{
+        .dynamicStateCount = stencil_bits ? 4u : 2u, .pDynamicStates = dynamic_states.data(),
+    };
+    const std::array stages{
+        vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eVertex,
+                                          .module = *fs_tri_vert, .pName = "main"},
+        vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eFragment,
+                                          .module = stencil ? (stencil_bits ? *stencil_bits_frag :
+                                                             *depth_stencil_frag) : *depth_frag,
+                                          .pName = "main"},
+    };
+    const vk::PipelineRenderingCreateInfo rendering{
+        .depthAttachmentFormat = format,
+        .stencilAttachmentFormat = stencil ? format : vk::Format::eUndefined,
+    };
+    const vk::PipelineColorBlendStateCreateInfo color_blending{};
+    const vk::PipelineViewportStateCreateInfo viewport_info{};
+    const vk::PipelineVertexInputStateCreateInfo vertex_input{};
+    const vk::PipelineRasterizationStateCreateInfo raster{.lineWidth = 1.f};
+    auto pipeline = Check(instance.GetDevice().createGraphicsPipelineUnique(VK_NULL_HANDLE, {
+        .pNext = &rendering, .stageCount = u32(stages.size()), .pStages = stages.data(),
+        .pVertexInputState = &vertex_input, .pInputAssemblyState = &input_assembly,
+        .pViewportState = &viewport_info, .pRasterizationState = &raster,
+        .pMultisampleState = &multisampling, .pDepthStencilState = &depth_state,
+        .pColorBlendState = &color_blending, .pDynamicState = &dynamic_info,
+        .layout = *resample_layout,
+    }));
+    const auto result = *pipeline;
+    resample_pipelines.emplace_back(key, std::move(pipeline));
+    return result;
+}
+vk::ImageView SceneTargets::View(Entry& e, const VideoCore::Image& original,
+                                 const VideoCore::ImageViewInfo& info) {
+    auto& proxy = Of(e);
+    for (const auto& [key,view] : proxy.views) if (key == info) return *view;
+    const auto aspect = original.info.props.is_depth
+        ? (info.is_storage ? original.aspect_mask : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth))
+        : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
+    const auto format = original.info.props.is_depth ? original.backing->image.image_ci.format : info.format;
+    auto view = Check(instance.GetDevice().createImageViewUnique({
+        .image = proxy.image, .viewType = vk::ImageViewType::e2D, .format = format,
+        .components = info.mapping, .subresourceRange = {aspect,0,1,0,1},
+    }));
+    const auto result = *view;
+    proxy.views.emplace_back(info, std::move(view));
+    return result;
+}
+SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
+                                               const VideoCore::ImageViewInfo& info) {
+    auto& original = Original(id);
+    vk::ImageLayout layout;
+    auto& e = BeginAttachment(id, info, layout);
+    auto& proxy = Of(e);
+    auto attachment_info = info;
+    attachment_info.is_storage = true; // include stencil in attachment views
+    return {proxy.image, View(e, original, attachment_info), proxy.layout, proxy.image.image_ci.usage};
+}
+std::optional<SceneTargets::Target> SceneTargets::SampleProxy(
+    const VideoCore::Image& image, const VideoCore::ImageViewInfo& info) {
+    vk::ImageLayout layout;
+    auto* e = BeginSample(image, info, layout);
+    if (!e) return std::nullopt;
+    auto& proxy = Of(*e);
+    return Target{proxy.image, View(*e, image, info), layout, proxy.image.image_ci.usage};
+}
+SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
+                                       const VideoCore::ImageViewInfo& info,
+                                       vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
+    auto& original = Original(id);
+    auto& e = Get(id);
+    Transition(e, original.aspect_mask, vk::ImageLayout::eGeneral, stages, access);
+    auto& proxy = Of(e);
+    return {proxy.image, View(e, original, info), proxy.layout, proxy.image.image_ci.usage};
+}
+} // namespace Vulkan

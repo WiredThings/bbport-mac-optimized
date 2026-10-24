@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+#include <stdint.h>
+#include <stddef.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint64_t bb_arm_call(uintptr_t entry,const uint64_t* arguments,size_t count);
+void *bb_arm_tcb(void);
+void bb_arm_guest_sites(uint64_t out[3]);
+void bb_arm_set_stack_size(uint64_t);
+void runtime_thread_tls_cleanup(void);
+int bb_arm_range(uintptr_t,size_t,int);
+void bb_arm_require_callback(const char*,uintptr_t);
+void bb_arm_require_range(const char*,uintptr_t,size_t,int);
+void bb_arm_require_string(const char*,const char*,size_t);
+void bb_arm_image_info(uintptr_t*,uintptr_t*,uintptr_t*,uint64_t*);
+void bb_arm_runtime_register(void);
+void bb_arm_add_native(const char* name,void* original,void* wrapper,const char* signature);
+void bb_arm_low_heap_range(uintptr_t* begin,uint64_t* size);
+int bb_arm_host_owned(uintptr_t address,uint64_t size);
+#ifdef __cplusplus
+}
+#endif
